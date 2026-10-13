@@ -459,6 +459,7 @@ function host(
   const clock = { now: new Date("2026-10-09T12:00:00Z") };
   // Sandbox removals and issue edits, in order.
   const events: string[] = [];
+  const starts: (() => void)[] = [];
   const ports: HostPorts = {
     async gh(token, args) {
       if (args[0] === "issue" && args[1] === "edit")
@@ -481,8 +482,11 @@ function host(
       return `factory-sandbox:${builds.length}`;
     },
     readUsage: async (provider) => usage[provider] ?? null,
-    launch: (provider, request) =>
-      registry.providers.get(provider)!.launch(request),
+    async launch(provider, request) {
+      // No provider starts until the real pass has returned.
+      await new Promise<void>((resolve) => starts.push(resolve));
+      return registry.providers.get(provider)!.launch(request);
+    },
     // The sandboxes are the launches whose agents have not finished; a
     // removed one never finishes.
     stopSandboxes() {
@@ -492,12 +496,29 @@ function host(
     now: () => clock.now,
     report: (line) => reports.push(line),
   };
-  const instance = createHost(resolved, registry, ports);
+  function process() {
+    const instance = createHost(resolved, registry, ports);
+    return {
+      ...instance,
+      async tick() {
+        const decisions = await instance.tick();
+        // The production pass returns before Sandcastle records a launch.
+        // Fixtures wait here for every launch it requested, including retries
+        // and relaunches, without waiting for the agents to finish.
+        const pending = starts.splice(0);
+        const count = launched.length + pending.length;
+        for (const start of pending) start();
+        await until(() => launched.length === count);
+        return decisions;
+      },
+    };
+  }
+  const instance = process();
   const state = resolved.stateDirectory;
   return {
     ...instance,
     // A new process on the same host, state directory and GitHub.
-    restart: () => createHost(resolved, registry, ports),
+    restart: process,
     events,
     github,
     launched,
