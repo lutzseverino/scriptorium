@@ -2,6 +2,13 @@
 // repositories and runs to the decisions the host carries out.
 import type { FactoryConfiguration } from "./factory-configuration.ts";
 import type { Model, Registry } from "./providers.ts";
+import {
+  closes,
+  readinessExclusion,
+  references,
+  type Policy,
+  type Readiness,
+} from "./readiness.ts";
 
 // An issue's number in its own repository, or `<owner>/<name>#<n>` in another.
 export type IssueId = number | string;
@@ -10,8 +17,12 @@ export type Issue = {
   number: number;
   createdAt: string;
   labels: string[];
-  // When the ready label was last applied, or null when it is unknown.
-  readyAt: string | null;
+  // The latest application of the ready label while the issue carries it, or
+  // null when it doesn't or no event applying it was found.
+  ready: Readiness | null;
+  // When the body was last edited, or null when it never was. Title and
+  // comment changes don't count.
+  editedAt: string | null;
   // Its native parent, or null when it has none.
   nativeParent: IssueId | null;
   // When a native sub-issue was last added, and which, or null when none was.
@@ -71,6 +82,8 @@ export type Settings = {
   caps: Record<string, number>;
   usageThreshold: number;
   timeLimitMinutes: number;
+  // The repository roles whose readiness the factory accepts.
+  authorizedRoles: string[];
 };
 
 // Runs of a repository this pass could not read are present only while their
@@ -128,12 +141,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   const closing = new Set(
     snapshot.repositories.flatMap((repository) =>
       repository.issues
-        .filter(
-          (issue) =>
-            issue.labels.includes(repository.configuration.labels.ready) &&
-            issue.subIssues.length > 0 &&
-            issue.subIssues.every((ticket) => ticket.state === "closed"),
-        )
+        .filter((issue) => closes(issue, policy(repository, snapshot.settings)))
         .map((issue) => key(repository.name, issue.number)),
     ),
   );
@@ -179,7 +187,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       (issue.labels.includes(labels.running)
         ? "claimed by a running factory run"
         : null) ??
-      exclusion(issue, repository.issues, labels) ??
+      exclusion(issue, repository, snapshot.settings) ??
       (snapshot.runs.some(
         (run) =>
           run.repository === repository.name && run.issue === issue.number,
@@ -226,6 +234,13 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
 
 function key(repository: string, issue: number): string {
   return `${repository}#${issue}`;
+}
+
+function policy(repository: Repository, settings: Settings): Policy {
+  return {
+    ready: repository.configuration.labels.ready,
+    authorizedRoles: settings.authorizedRoles,
+  };
 }
 
 // Caps count running sandboxes across every repository; a claim whose pull
@@ -301,7 +316,7 @@ function relaunch(
   const at = { repository: repository.name, issue: issue.number };
   const { labels } = repository.configuration;
   const reason = issue.labels.includes(labels.ready)
-    ? exclusion(issue, repository.issues, labels)
+    ? exclusion(issue, repository, snapshot.settings)
     : `it no longer carries ${labels.ready}`;
   if (reason) return [unretried(retry, reason)];
   const { provider } = retry.model;
@@ -460,18 +475,21 @@ function oldestFirst(
     );
 }
 
-// An issue's exclusion from pickup, given its repository's open issues, which
-// may hold it.
+// A ready-labelled issue's exclusion from pickup, given its repository, whose
+// open issues may hold it.
 function exclusion(
   issue: Issue,
-  openIssues: Issue[],
-  labels: FactoryConfiguration["labels"],
+  repository: Repository,
+  settings: Settings,
 ): string | null {
+  const { labels } = repository.configuration;
   const needsInput = needsInputExclusion(issue, labels);
   if (needsInput) return needsInput;
-  if (issue.subIssues.length > 0)
-    return "an issue with sub-issues never runs; its readiness releases its tickets";
-  const held = parentExclusion(issue, openIssues, labels);
+  const held = readinessExclusion(
+    issue,
+    repository.issues,
+    policy(repository, settings),
+  );
   if (held) return held;
   if (issue.labels.includes(labels.failed))
     return `labelled ${labels.failed}; remove the label to run it again`;
@@ -489,51 +507,4 @@ function needsInputExclusion(
   return issue.labels.includes(labels.needsInput)
     ? `labelled ${labels.needsInput}; answer the question and remove the label to run it again`
     : null;
-}
-
-// A sub-issue waits on its native parent while that parent is open in its
-// repository. A closed parent or one in another repository holds nothing.
-function parentExclusion(
-  issue: Issue,
-  openIssues: Issue[],
-  labels: FactoryConfiguration["labels"],
-): string | null {
-  const parent = openIssues.find(
-    (other) => other.number === issue.nativeParent,
-  );
-  if (!parent) return null;
-  const held = parentHold(parent, labels);
-  return held ? `sub-issue of ${reference(parent.number)}, ${held}` : null;
-}
-
-// A parent's readiness releases its sub-issues once it was applied after its
-// latest ticket link, while no open blocker holds it.
-function parentHold(
-  parent: Issue,
-  labels: FactoryConfiguration["labels"],
-): string | null {
-  const name = reference(parent.number);
-  if (!parent.labels.includes(labels.ready))
-    return `which is not ready; apply ${labels.ready} to ${name} once its tickets are published`;
-  const link = parent.latestLink;
-  if (
-    link &&
-    (parent.readyAt === null ||
-      Date.parse(parent.readyAt) <= Date.parse(link.at))
-  )
-    return `whose readiness predates its latest ticket${link.ticket === null ? "" : ` ${reference(link.ticket)}`}; remove and re-apply ${labels.ready} on ${name} once its tickets are published`;
-  const blockers = parent.blockedBy.filter(
-    (blocker) => blocker.state === "open",
-  );
-  if (blockers.length > 0)
-    return `which is blocked by ${references(blockers)}; it waits until ${name}'s blockers close`;
-  return null;
-}
-
-function references(issues: { number: IssueId }[]): string {
-  return issues.map((issue) => reference(issue.number)).join(", ");
-}
-
-export function reference(id: IssueId): string {
-  return typeof id === "number" ? `#${id}` : id;
 }

@@ -131,6 +131,7 @@ export function createHost(
     ),
     usageThreshold: configuration.usageThreshold,
     timeLimitMinutes: configuration.timeLimitMinutes,
+    authorizedRoles: configuration.readiness.authorizedRoles,
   };
 
   // Everything the process owns for a repository lives under its directory.

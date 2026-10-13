@@ -1,12 +1,8 @@
 // One repository's GitHub reads and writes, through the GitHub CLI with that
 // repository's token.
 import type { FactoryConfiguration } from "./factory-configuration.ts";
-import {
-  reference,
-  type Issue,
-  type IssueId,
-  type PullRequestState,
-} from "./factory.ts";
+import type { Issue, IssueId, PullRequestState } from "./factory.ts";
+import { reference, type Actor } from "./readiness.ts";
 
 // Runs the GitHub CLI and resolves its standard output.
 export type GitHubCli = (args: string[]) => Promise<string>;
@@ -20,11 +16,12 @@ export const issuesQuery = `query($owner: String!, $name: String!, $endCursor: S
       nodes {
         number
         createdAt
+        lastEditedAt
         labels(first: 100) { nodes { name } }
         parent { number repository { nameWithOwner } }
         subIssues(first: 100) { nodes { number repository { nameWithOwner } state } }
         blockedBy(first: 100) { nodes { number state } }
-        labelEvents: timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        labelEvents: timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } actor { __typename login } } } }
         linkEvents: timelineItems(itemTypes: [SUB_ISSUE_ADDED_EVENT], last: 1) { nodes { ... on SubIssueAddedEvent { createdAt subIssue { number repository { nameWithOwner } } } } }
       }
     }
@@ -87,6 +84,8 @@ export function repositoryGitHub(
         ]);
     },
 
+    // The repository's open issues. The role of each ready label's latest
+    // actor is read once per call, which a pass makes once.
     async readIssues(): Promise<Issue[]> {
       const pages = JSON.parse(
         await gh([
@@ -102,18 +101,45 @@ export function repositoryGitHub(
       const names = (connection: { nodes: { name: string }[] }) =>
         connection.nodes.map((label) => label.name);
       const state = (value: string) => (value === "OPEN" ? "open" : "closed");
-      return pages.flatMap((page: any) =>
-        page.data.repository.issues.nodes.map((node: any): Issue => {
+      const roles = new Map<string, Promise<string | null>>();
+      const role = (login: string) => {
+        if (!roles.has(login))
+          roles.set(
+            login,
+            gh(["api", `repos/${repository}/collaborators/${login}/permission`])
+              // An account without access has an empty role name.
+              .then((response) => JSON.parse(response).role_name || "none")
+              .catch(() => null),
+          );
+        return roles.get(login)!;
+      };
+      const actor = async (node: any): Promise<Actor> =>
+        node?.__typename === "User"
+          ? { kind: "user", login: node.login, role: await role(node.login) }
+          : node?.__typename === "Bot"
+            ? { kind: "bot", login: node.login }
+            : { kind: "unknown" };
+      const nodes = pages.flatMap(
+        (page: any) => page.data.repository.issues.nodes,
+      );
+      return Promise.all(
+        nodes.map(async (node: any): Promise<Issue> => {
           const link = node.linkEvents.nodes.at(-1);
+          const issueLabels = names(node.labels);
+          // Events arrive oldest first, so the last match is the latest.
+          const ready = issueLabels.includes(labels.ready)
+            ? node.labelEvents.nodes.findLast(
+                (event: any) => event.label?.name === labels.ready,
+              )
+            : undefined;
           return {
             number: node.number,
             createdAt: node.createdAt,
-            labels: names(node.labels),
-            // Events arrive oldest first, so the last match is the latest.
-            readyAt:
-              node.labelEvents.nodes.findLast(
-                (event: any) => event.label?.name === labels.ready,
-              )?.createdAt ?? null,
+            labels: issueLabels,
+            ready: ready
+              ? { at: ready.createdAt, actor: await actor(ready.actor) }
+              : null,
+            editedAt: node.lastEditedAt ?? null,
             nativeParent: node.parent ? id(node.parent) : null,
             latestLink: link
               ? {

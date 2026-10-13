@@ -35,6 +35,11 @@ the fixtures in `test/fixtures/factory-configuration/`; run it alone with
 `node --test test/factory-configuration.test.ts`. The host tests also cover
 repository-specific labels and prompts, configuration edits on the default
 branch, and run settling while configuration or the Dockerfile is missing.
+The GitHub CLI fake serves each issue's timeline from one fixture shape (label
+events with their actors, body and title edits, comments and sub-issue links)
+and each account's repository role, so the host tests drive the adapter's
+readiness reads. `test/boundary.test.ts` checks that the package imports
+nothing from outside itself and that its issue query reads no body.
 The token tests drive the cache with a fake token command and clock; the one
 that runs the GitHub CLI against the sandbox's token file skips when `gh` is
 not installed. The run log's tests rely on file watching, which the published

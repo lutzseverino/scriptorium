@@ -63,7 +63,7 @@ field is refused, and nothing comes from environment variables.
 | `timeLimitMinutes`            | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                |
 | `usageThreshold`              | The provider usage percentage, from 0 to 100, at or above which that provider launches nothing.                                                                                            |
 | `pollSeconds`                 | The wait between passes.                                                                                                                                                                   |
-| `readiness.authorizedRoles`   | The repository roles whose readiness the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`. The factory validates the list but does not check readiness authorization yet. |
+| `readiness.authorizedRoles`   | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                  |
 | `unpushablePaths`             | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. A run whose branch changes them fails without a retry, naming the paths.         |
 | `stateDirectory`              | The absolute path of the directory the process owns.                                                                                                                                       |
 | `gitIdentity`                 | The `name` and `email` that commits made from the clones carry.                                                                                                                            |
@@ -103,6 +103,33 @@ Each repository names its labels, model label prefix and prompt in
 [factory configuration schema](factory-configuration.md) documents those
 required fields and the repository's ownership of readiness. The factory
 knows no repository convention by default.
+
+## Readiness
+
+The factory decides pickup itself from an issue's ready-label events, its
+body's last edit, its native GitHub links and its native blockers. It knows no
+issue template and reads no issue body.
+
+- **Authorization.** The account that last applied the ready label must hold
+  one of `readiness.authorizedRoles` now. The factory reads that account's
+  repository role on every pass, once per account and repository. Readiness a
+  bot or GitHub App applied never counts. A role it can't read holds the issue
+  for that pass.
+- **Revision binding.** The ready label must be newer than the issue body's
+  last edit, to the second. A title change or a comment doesn't count. After
+  reviewing an edit, remove and re-apply the label.
+- **Parents.** An open issue with native sub-issues in the same repository is
+  a parent, and it never launches. Its sub-issue runs only while the parent's
+  readiness counts, is newer than the parent's latest sub-issue link, to the
+  second, and the parent has no open native blocker. A native parent that is
+  closed or in another repository holds nothing.
+- **Closing.** An open issue whose readiness counts, with at least one native
+  sub-issue and every sub-issue closed, in any repository, is closed with a
+  comment listing them.
+
+Refused readiness is a skip with its reason in the process log and the
+[status file](#status-file). The factory never writes the ready label and
+never comments about readiness.
 
 ## Sandbox GitHub access
 

@@ -11,6 +11,7 @@ import {
   type Snapshot,
 } from "../src/factory.ts";
 import { createRegistry } from "../src/providers.ts";
+import type { Actor } from "../src/readiness.ts";
 import { fakePorts } from "./fakes.ts";
 
 // The factory's decision core, driven by snapshots of the host's
@@ -27,16 +28,22 @@ const registry = createRegistry(
   fakePorts().ports,
 );
 
+// The owner, whose admin role the host authorizes.
+const owner: Actor = { kind: "user", login: "owner", role: "admin" };
+
+// An issue the owner labelled when it was created, and never edited.
 function issue(
   number: number,
   labels = ["ready-for-agent"],
   details: Partial<Issue> = {},
 ): Issue {
+  const createdAt = `2026-10-0${Math.min(number, 9)}T00:00:00Z`;
   return {
     number,
-    createdAt: `2026-10-0${Math.min(number, 9)}T00:00:00Z`,
+    createdAt,
     labels,
-    readyAt: null,
+    ready: { at: createdAt, actor: owner },
+    editedAt: null,
     nativeParent: null,
     latestLink: null,
     subIssues: [],
@@ -98,6 +105,7 @@ function snapshot({
       caps: { "claude-code": 3, codex: 2 },
       usageThreshold: 80,
       timeLimitMinutes: 240,
+      authorizedRoles: ["admin", "maintain"],
       ...settings,
     },
   };
@@ -199,13 +207,115 @@ test("claimed, failed and blocked issues are skipped with their reasons", () => 
   assert.deepEqual(launched(decisions), ["acme/widgets#7"]);
 });
 
+// Readiness counts only when its label's latest actor holds an authorized
+// role now and it is newer than the body's last edit.
+const reapply =
+  "a person with the admin or maintain role must remove and re-apply ready-for-agent";
+
+function readyBy(actor: Actor, at = "2026-10-09T10:00:00Z") {
+  return { ready: { at, actor } };
+}
+
+test("readiness from a user holding an authorized role releases the issue", () => {
+  const decisions = decide({
+    issues: [
+      issue(4, undefined, readyBy(owner)),
+      issue(5, undefined, readyBy({ ...owner, role: "maintain" })),
+    ],
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#4", "acme/widgets#5"]);
+});
+
+test("readiness from a role the host doesn't authorize is refused", () => {
+  for (const role of ["write", "triage", "read", "none", "custom-reviewer"]) {
+    const decisions = decide({
+      issues: [
+        issue(4, undefined, readyBy({ ...owner, login: "casey", role })),
+      ],
+    });
+    assert.deepEqual(launches(decisions), [], role);
+    assert.equal(
+      skipOf(decisions, 4),
+      `its readiness is refused: ready-for-agent was applied by @casey, whose repository role ${role} is not authorized; ${reapply}`,
+    );
+  }
+  const widened = decide({
+    issues: [issue(4, undefined, readyBy({ ...owner, role: "triage" }))],
+    settings: { authorizedRoles: ["triage"] },
+  });
+  assert.deepEqual(launched(widened), ["acme/widgets#4"]);
+});
+
+test("readiness from a bot, an app or an account that is not a user never authorizes", () => {
+  const decisions = decide({
+    issues: [
+      issue(4, undefined, readyBy({ kind: "bot", login: "factory-app" })),
+      issue(5, undefined, readyBy({ kind: "unknown" })),
+      issue(6, undefined, { ready: null }),
+    ],
+  });
+  assert.deepEqual(launches(decisions), []);
+  assert.equal(
+    skipOf(decisions, 4),
+    `its readiness is refused: ready-for-agent was applied by factory-app, a bot or app, which never authorizes; ${reapply}`,
+  );
+  assert.equal(
+    skipOf(decisions, 5),
+    `its readiness is refused: ready-for-agent was applied by an account that is not a user, which never authorizes; ${reapply}`,
+  );
+  assert.equal(
+    skipOf(decisions, 6),
+    "its readiness is refused: no event applying ready-for-agent was found; remove and re-apply ready-for-agent",
+  );
+});
+
+test("a failed role lookup holds the issue for that pass only", () => {
+  const unread = decide({
+    issues: [issue(4, undefined, readyBy({ ...owner, role: null }))],
+  });
+  assert.deepEqual(launches(unread), []);
+  assert.equal(
+    skipOf(unread, 4),
+    "its readiness waits: the repository role of @owner, who applied ready-for-agent, could not be read this pass",
+  );
+  assert.deepEqual(launched(decide({ issues: [issue(4)] })), [
+    "acme/widgets#4",
+  ]);
+});
+
+test("readiness must be strictly newer than the body's last edit", () => {
+  const readyAt = "2026-10-09T10:00:00Z";
+  for (const editedAt of ["2026-10-09T10:00:01Z", readyAt]) {
+    const decisions = decide({
+      issues: [issue(4, undefined, { ...readyBy(owner, readyAt), editedAt })],
+    });
+    assert.deepEqual(launches(decisions), [], `edited at ${editedAt}`);
+    assert.equal(
+      skipOf(decisions, 4),
+      `its readiness is refused: ready-for-agent was applied at ${readyAt}, not after the body's last edit at ${editedAt}; review the edit, then remove and re-apply ready-for-agent`,
+    );
+  }
+  for (const editedAt of ["2026-10-09T09:59:59Z", null])
+    assert.deepEqual(
+      launched(
+        decide({
+          issues: [
+            issue(4, undefined, { ...readyBy(owner, readyAt), editedAt }),
+          ],
+        }),
+      ),
+      ["acme/widgets#4"],
+      `edited at ${editedAt}`,
+    );
+});
+
 // A parent's readiness releases its tickets: it counts only when it was
 // applied after the latest of its tickets was linked.
 const released = "2026-10-09T10:06:00Z";
 
-function parent(readyAt: string | null, details: Partial<Issue> = {}) {
+function parent(readyAt: string, details: Partial<Issue> = {}) {
   return issue(3, ["ready-for-agent"], {
-    readyAt,
+    ready: { at: readyAt, actor: owner },
     latestLink: { ticket: 6, at: "2026-10-09T10:05:00Z" },
     subIssues: [
       { number: 5, state: "open" },
@@ -277,6 +387,42 @@ test("parents stay open without readiness or with an open ticket", () => {
   assert.deepEqual(launches(decisions), []);
 });
 
+test("a finished parent stays open while its readiness is refused or unread", () => {
+  const finished = {
+    subIssues: [
+      { number: 5, state: "closed" as const },
+      { number: "acme/gadgets#6", state: "closed" as const },
+    ],
+  };
+  for (const [details, reason] of [
+    [
+      readyBy({ kind: "bot", login: "factory-app" }, released),
+      `is refused: ready-for-agent was applied by factory-app, a bot or app, which never authorizes; ${reapply}`,
+    ],
+    [
+      readyBy({ ...owner, login: "casey", role: "write" }, released),
+      `is refused: ready-for-agent was applied by @casey, whose repository role write is not authorized; ${reapply}`,
+    ],
+    [
+      { editedAt: released },
+      `is refused: ready-for-agent was applied at ${released}, not after the body's last edit at ${released}; review the edit, then remove and re-apply ready-for-agent`,
+    ],
+    [
+      readyBy({ ...owner, role: null }, released),
+      "waits: the repository role of @owner, who applied ready-for-agent, could not be read this pass",
+    ],
+  ] as const) {
+    const decisions = decide({
+      issues: [parent(released, { ...finished, ...details })],
+    });
+    assert.deepEqual(
+      decisions,
+      [{ kind: "skip", ...at(3), reason: `its readiness ${reason}` }],
+      reason,
+    );
+  }
+});
+
 test("closing any ready parent does not require pickup gates", () => {
   assert.deepEqual(
     decide({
@@ -340,11 +486,7 @@ test("a sub-issue waits while its parent is not ready for agent", () => {
 });
 
 test("a ticket stays held until its parent's readiness is re-applied after its latest link", () => {
-  for (const readyAt of [
-    "2026-10-09T10:02:00Z",
-    "2026-10-09T10:05:00Z",
-    null,
-  ]) {
+  for (const readyAt of ["2026-10-09T10:02:00Z", "2026-10-09T10:05:00Z"]) {
     const decisions = decide({ issues: [parent(readyAt), ...tickets()] });
     assert.deepEqual(launches(decisions), [], `readiness at ${readyAt}`);
     for (const number of [5, 6])
@@ -353,6 +495,45 @@ test("a ticket stays held until its parent's readiness is re-applied after its l
         "sub-issue of #3, whose readiness predates its latest ticket #6; remove and re-apply ready-for-agent on #3 once its tickets are published",
       );
   }
+});
+
+test("a ticket waits while its parent's readiness is refused or unread", () => {
+  const onParent = "remove and re-apply ready-for-agent on #3";
+  for (const [details, reason] of [
+    [
+      readyBy({ kind: "bot", login: "factory-app" }, released),
+      `whose readiness is refused: ready-for-agent was applied by factory-app, a bot or app, which never authorizes; a person with the admin or maintain role must ${onParent}`,
+    ],
+    [
+      readyBy({ ...owner, login: "casey", role: "triage" }, released),
+      `whose readiness is refused: ready-for-agent was applied by @casey, whose repository role triage is not authorized; a person with the admin or maintain role must ${onParent}`,
+    ],
+    [
+      { editedAt: "2026-10-09T10:07:00Z" },
+      `whose readiness is refused: ready-for-agent was applied at ${released}, not after the body's last edit at 2026-10-09T10:07:00Z; review the edit, then ${onParent}`,
+    ],
+    [
+      readyBy({ ...owner, role: null }, released),
+      "whose readiness waits: the repository role of @owner, who applied ready-for-agent, could not be read this pass",
+    ],
+  ] as const) {
+    const decisions = decide({
+      issues: [parent(released, details), ...tickets()],
+    });
+    assert.deepEqual(launches(decisions), [], reason);
+    for (const number of [5, 6])
+      assert.equal(skipOf(decisions, number), `sub-issue of #3, ${reason}`);
+  }
+});
+
+test("a parent's body edit before its readiness doesn't hold its tickets", () => {
+  const decisions = decide({
+    issues: [
+      parent(released, { editedAt: "2026-10-09T10:05:59Z" }),
+      ...tickets(),
+    ],
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#5", "acme/widgets#6"]);
 });
 
 test("a sub-issue waits while its parent has an open native blocker", () => {
@@ -1040,6 +1221,24 @@ test("a retry whose issue is no longer eligible fails it instead", () => {
         kind: "fail",
         issue: 9,
         failure: `${failed}, and its retry did not launch: its issue is no longer open`,
+      },
+    ],
+  );
+});
+
+test("a retry fails once its body was edited after its readiness", () => {
+  const editedAt = "2026-10-09T11:30:00Z";
+  assert.deepEqual(
+    decide({
+      issues: [issue(4, claimed, { editedAt })],
+      runs: [run(4, { ended: none })],
+    }),
+    [
+      {
+        kind: "fail",
+        ...at(4),
+        failure: `the run ended without an open pull request, and its retry did not launch: its readiness is refused: ready-for-agent was applied at 2026-10-04T00:00:00Z, not after the body's last edit at ${editedAt}; review the edit, then remove and re-apply ready-for-agent`,
+        log: log(4),
       },
     ],
   );
