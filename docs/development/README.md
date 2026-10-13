@@ -34,7 +34,10 @@ configuration's tests read the fixture files in
 the fixtures in `test/fixtures/factory-configuration/`; run it alone with
 `node --test test/factory-configuration.test.ts`. The host tests also cover
 repository-specific labels and prompts, configuration edits on the default
-branch, and run settling while configuration or the Dockerfile is missing.
+branch, run settling while configuration or the Dockerfile is missing, and
+paused runs: their label writes, single comment, recovery and resume. Each
+provider adapter's tests read raw logs shaped like Sandcastle's file display
+for its usage-limit errors.
 The GitHub CLI fake serves each issue's timeline from one fixture shape (label
 events with their actors, body and title edits, comments and sub-issue links)
 and each account's repository role, so the host tests drive the adapter's

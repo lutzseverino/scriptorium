@@ -70,3 +70,31 @@ export async function followRunLog(
     },
   };
 }
+
+// The end of a raw log: its last `bytes` bytes, starting at a line's start
+// unless one line fills them all.
+export async function readLogEnd(
+  raw: string,
+  bytes = 64 * 1024,
+): Promise<string> {
+  const file = await open(raw, "r");
+  try {
+    const { size } = await file.stat();
+    const start = Math.max(0, size - bytes);
+    const { buffer, bytesRead } = await file.read({
+      buffer: Buffer.alloc(size - start),
+      position: start,
+    });
+    const end = buffer.subarray(0, bytesRead);
+    // The first newline ends a line that began before the window, unless it
+    // ends the window's last line.
+    const newline = end.indexOf(0x0a);
+    const line =
+      start === 0 || newline === -1 || newline === end.length - 1
+        ? 0
+        : newline + 1;
+    return end.subarray(line).toString("utf8");
+  } finally {
+    await file.close();
+  }
+}

@@ -24,6 +24,7 @@ import {
   type Claim,
   type Decision,
   type Issue,
+  type Pause,
   type Repository,
   type Run,
   type Settings,
@@ -43,7 +44,7 @@ import type { HostConfiguration } from "./host-configuration.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
 import type { PullRequestState } from "./run-outcome.ts";
 import { createRedactor } from "./redaction.ts";
-import { followRunLog } from "./run-log.ts";
+import { followRunLog, readLogEnd } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
 
 export type HostPorts = {
@@ -89,7 +90,8 @@ type HostRun = Run & {
   exited: boolean;
   exitedAt: Date | null;
   stopped: boolean;
-  // A factory restart stopped its sandbox, so it launches again.
+  // A factory restart stopped its sandbox, so it launches again. A paused
+  // run, which also launches again, records its pause as how it ended.
   interrupted: boolean;
   // The host no longer holds it.
   settled: boolean;
@@ -219,6 +221,7 @@ export function createHost(
         (run) => run.repository === name && run.exited && !run.interrupted,
       )) {
         await run.finished;
+        if (pausedEnding(run)) continue;
         run.ended = {
           // Sandcastle's idle timeout can end a run at its limit before the
           // factory stops it, so the time it ran decides, not who ended it.
@@ -260,8 +263,8 @@ export function createHost(
     return pass;
   }
 
-  // Every running-labelled issue, open or closed, that no run on the host
-  // holds. Pull request state and issue closure remain independent.
+  // Every running- or paused-labelled issue, open or closed, that no run on
+  // the host holds. Pull request state and issue closure remain independent.
   async function readClaims(
     name: string,
     github: RepositoryGitHub,
@@ -274,7 +277,11 @@ export function createHost(
     const numbers = [
       ...(await github.readClosedClaims()),
       ...issues
-        .filter((issue) => issue.labels.includes(labels.running))
+        .filter(
+          (issue) =>
+            issue.labels.includes(labels.running) ||
+            issue.labels.includes(labels.paused),
+        )
         .map((issue) => issue.number),
     ];
     const { clone } = directory(name);
@@ -368,8 +375,8 @@ export function createHost(
   }
 
   // Before anything else, the first pass removes the sandboxes an earlier
-  // process left and recovers unsettled runs: interrupted ones relaunch,
-  // while orphans settle through the outcome table.
+  // process left and recovers unsettled runs: interrupted and paused ones
+  // relaunch, while orphans settle through the outcome table.
   function start() {
     ports.stopSandboxes();
     const recovered: HostRun[] = [];
@@ -397,7 +404,9 @@ export function createHost(
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
           ended: recorded.interrupted
             ? { interrupted: true }
-            : { timedOut: false, pullRequest: "none", orphaned: true },
+            : pausedEnding(recorded)
+              ? recorded.ended
+              : { timedOut: false, pullRequest: "none", orphaned: true },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
@@ -557,6 +566,24 @@ export function createHost(
         } catch (error) {
           report(`run for ${repository}#${issue} lost its log's end: ${error}`);
         }
+        // The raw log goes with the sandbox, so its end is read first.
+        try {
+          const limit = registry.providers
+            .get(run.provider)!
+            .usageLimit(await readLogEnd(raw));
+          if (limit)
+            run.ended = {
+              paused: {
+                cause: "usage limit",
+                reset: limit.reset && redactor.redact(limit.reset),
+              },
+              commented: false,
+            };
+        } catch (error) {
+          report(
+            `run for ${repository}#${issue} could not read its raw log's end: ${error}`,
+          );
+        }
         try {
           // A token outlives no run.
           await rm(sandbox, { recursive: true, force: true });
@@ -616,6 +643,23 @@ export function createHost(
       case "release":
         await github.release(decision.issue);
         forget(decision);
+        return;
+      case "pause": {
+        const run = find(decision);
+        const ended = run && pausedEnding(run);
+        if (!ended) return;
+        await github.pause(
+          decision.issue,
+          pauseComment(pass.configuration!.labels.paused, decision.pause, run),
+        );
+        // Recorded as told, so neither a later pass nor a restart tells it
+        // again.
+        ended.commented = true;
+        record(run);
+        return;
+      }
+      case "unpause":
+        await github.unpause(decision.issue);
         return;
       case "skip":
         report(
@@ -725,6 +769,24 @@ export function prompt(
     `First attempt failure: ${retry.failure}`,
     ...(tail ? [`First attempt log tail:\n${tail}`] : []),
   ].join("\n\n");
+}
+
+// How a run ended, when it paused.
+function pausedEnding(
+  run: Pick<Run, "ended">,
+): { paused: Pause; commented: boolean } | null {
+  return run.ended && "paused" in run.ended ? run.ended : null;
+}
+
+// Each pause tells its issue once; it names no log output.
+function pauseComment(pausedLabel: string, pause: Pause, run: HostRun): string {
+  return [
+    `The factory paused this run: ${run.provider} ${pause.cause}${pause.reset === null ? "" : `, resets ${pause.reset}`}.`,
+    "",
+    `- Model: \`${run.provider}/${run.model}@${run.effort}\`, attempt ${run.attempt}`,
+    "",
+    `The factory resumes the run by itself and removes \`${pausedLabel}\` when it does; nobody needs to act.`,
+  ].join("\n");
 }
 
 // A claim no run holds has no model or log to name.

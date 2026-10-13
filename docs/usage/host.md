@@ -164,14 +164,14 @@ process redacted its own logs as it wrote them.
 
 The process owns everything under `stateDirectory`:
 
-| Path                                             | Contents                                                                                                                                                                                                         |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status.json`                                    | The status file.                                                                                                                                                                                                 |
-| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                             |
-| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                     |
-| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                            |
-| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, and whether the host settled it. |
-| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                      |
+| Path                                             | Contents                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status.json`                                    | The status file.                                                                                                                                                                                                                                                                            |
+| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                        |
+| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                |
+| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                       |
+| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, its pause's cause and reset and whether its issue was told when it paused, and whether the host settled it. |
+| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                                                                                                 |
 
 Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
@@ -194,10 +194,48 @@ issue closed.
 | Anything else                            | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                 |
 
 After the owner answers the question and removes the needs-input label, pickup
-starts a fresh attempt 1 on the existing branch. Interrupted runs bypass the
-table and relaunch as the same attempt. An orphaned claim with no interrupted
-record settles as a failed attempt; an existing run record supplies its attempt
-number, and a claim with no record counts as attempt 1.
+starts a fresh attempt 1 on the existing branch. Interrupted and
+[paused runs](#paused-runs) bypass the table and relaunch as the same attempt.
+An orphaned claim with no interrupted or paused record settles as a failed
+attempt; an existing run record supplies its attempt number, and a claim with
+no record counts as attempt 1. An issue carrying the configured running or
+paused label that no run on the host holds is such a claim. Failing or
+releasing a claim removes whichever of the two labels it carries, and a claim
+kept awaiting merge or retried carries the running label.
+
+## Paused runs
+
+A paused run is one whose agent exited on its provider's usage limit. When the
+agent exits, the run's provider adapter reads the end of the run's raw log
+before its private directory is removed, and recognizes the provider's own
+limit error there: Claude Code's session, weekly or usage limit message, or
+Codex's usage-limit error. The model's prose and a high usage read after the
+exit don't count. When the error states a reset, such as
+`resets 12:50pm (UTC)`, the factory keeps it as written.
+
+A paused run bypasses the run outcome table, whether its pull request is open,
+it has none, or the factory stopped it at the time limit. It is not a failure:
+it spends no attempt or retry and takes no provider cap slot. The factory
+replaces the issue's running label with the configured paused label and posts
+one comment giving the cause, the reset when known, and the run's model and
+attempt, and saying that the factory resumes the run by itself and nobody
+needs to act. It contains no log output. Later passes and restarts don't
+repeat it.
+
+The run relaunches like an [interrupted run](#restarts): as the same attempt,
+with the same model, effort, prompt, retry context and log, on its
+`factory/issue-<n>` branch, so an agent that was babysitting a pull request
+resumes on it. Unlike an interrupted run, it relaunches only once its
+provider's usage is readable and below `usageThreshold`; an unreadable usage
+holds it. It also waits for its provider's cap and for its repository to
+resume. Before it launches, the factory swaps the paused label back for the
+running label; if that write fails, the run does not launch that pass.
+Resuming posts nothing. A relaunch that hits the limit again pauses again,
+with a new comment, and nothing caps the number of pauses.
+
+While a run is paused, its claim is released, and both labels removed, once
+its issue closes or carries the configured needs-input label. An open issue
+carrying the paused label is never picked up as a fresh attempt.
 
 ## Restarts
 
@@ -206,7 +244,8 @@ spends a run's retry. On `SIGTERM` or `SIGINT` the process stops claiming and
 launching, records each running run as interrupted, removes the sandbox
 containers and the runs' private directories, and exits without waiting for the runs to finish. On startup, before
 it claims or launches anything, it removes every sandbox container an earlier
-process left, then takes up the runs recorded as interrupted.
+process left, then takes up the runs recorded as interrupted or paused. A
+paused run stays paused, and its issue is not told again.
 
 An interrupted run launches again as the same attempt, with the same model,
 prompt and log, continuing its `factory/issue-<n>` branch and Sandcastle's
@@ -233,7 +272,9 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - its GitHub reads fail.
 
 Its ended runs keep settling while its GitHub reads succeed, and the other
-repositories continue. A run whose sandbox is still running counts against its
+repositories continue. A repository pause is no [paused run](#paused-runs): it
+never adds the paused label or posts on an issue, and its reason appears only
+in the process log and the status file. A run whose sandbox is still running counts against its
 provider's cap and time limit even while its repository can't be read.
 
 ## Status file
@@ -250,7 +291,13 @@ The factory posts no status to GitHub.
     {
       "repository": "acme/widgets",
       "state": "running",
-      "held": [{ "issue": 5, "reason": "blocked by #4" }]
+      "held": [
+        { "issue": 5, "reason": "blocked by #4" },
+        {
+          "issue": 7,
+          "reason": "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold"
+        }
+      ]
     },
     {
       "repository": "acme/gadgets",

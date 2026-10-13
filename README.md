@@ -48,9 +48,10 @@ The provider registry in `src/providers.ts` holds one adapter per provider the
 host configuration names: Claude Code and Codex. Each adapter launches its
 agent through Sandcastle, lists its reasoning efforts, routes bare model slugs
 by its vendor prefix (`claude-*` or `gpt-*`), supplies the prompt's
-`{skillPrefix}` (`/` or `$`), and reads its usage. Its one credential is a host
-file, read again at every launch and usage read: the Claude Code token file
-from `claude setup-token`, or the Codex login (`auth.json`) the host keeps
+`{skillPrefix}` (`/` or `$`), reads its usage, and recognizes its own
+usage-limit error at the end of an ended run's raw log. Its one credential is a
+host file, read again at every launch and usage read: the Claude Code token
+file from `claude setup-token`, or the Codex login (`auth.json`) the host keeps
 renewing. No provider credential comes from an environment variable.
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by

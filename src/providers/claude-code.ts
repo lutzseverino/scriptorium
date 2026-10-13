@@ -7,6 +7,7 @@ import type {
   ProviderPorts,
 } from "../providers.ts";
 import { launchAgent } from "./launch.ts";
+import { limitError } from "./limit.ts";
 import { fullest } from "./usage.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -48,8 +49,25 @@ export function claudeCodeAdapter(
       });
       return response.ok ? claudeUsage(await response.json()) : null;
     },
+    usageLimit: (log) => limitError(log, claudeLimitErrors),
   };
 }
+
+// Claude Code's session, weekly and usage limit errors, each on a line of its
+// own, such as `You've hit your session limit · resets 12:50pm (UTC)` or the
+// older `Claude AI usage limit reached|1760000000`, whose reset is no wording.
+const resets = String.raw`(?:\s*[·∙•]\s*resets\s+(?<reset>.+))?`;
+const claudeLimitErrors = [
+  /^Claude usage limit reached\. Your limit will reset at (?<reset>.+?)\.?$/i,
+  new RegExp(
+    String.raw`^You['’]ve (?:hit|reached) your (?:(?:(?:Opus|Sonnet) )?weekly |session |usage )?limit\b${resets}`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`^(?:Claude (?:AI )?usage|(?:(?:Opus|Sonnet) )?weekly|session|usage|5-hour) limit reached\b${resets}`,
+    "i",
+  ),
+];
 
 // The token as the file holds it now, so a replaced token takes effect at the
 // next launch or read.

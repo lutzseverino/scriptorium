@@ -55,3 +55,26 @@ export function command(options: RunOptions): string {
     dangerouslySkipPermissions: true,
   }).command;
 }
+
+// A raw log as Sandcastle's file display writes it: the agent's text and tool
+// calls, then the failure of an agent that exited with `detail` (which is its
+// standard error, its error result, or its last output lines), if it failed.
+export function rawRunLog(
+  provider: string,
+  agent: string[],
+  detail?: string[],
+): string {
+  return [
+    "",
+    "--- Run started: 2026-10-13T10:40:12.000Z ---",
+    "Sandcastle Run",
+    "  Name: acme/widgets#371",
+    `  Agent: ${provider}`,
+    "  Branch: factory/issue-371",
+    ...agent,
+    ...(detail
+      ? [`Agent invocation failed: ${provider} exited with code 1:`, ...detail]
+      : ["Run complete: reached 1 iteration(s) without completion signal."]),
+    "",
+  ].join("\n");
+}

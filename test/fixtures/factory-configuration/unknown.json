@@ -5,6 +5,7 @@
     "running": "working",
     "failed": "broken",
     "needsInput": "question",
+    "paused": "waiting",
     "other": "ignored"
   },
   "modelLabelPrefix": "agent:",

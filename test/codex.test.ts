@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createRegistry } from "../src/providers.ts";
 import { readCodexUsage } from "../src/providers/codex.ts";
-import { command, directory, fakePorts, request } from "./fakes.ts";
+import { command, directory, fakePorts, rawRunLog, request } from "./fakes.ts";
 
 const login = '{"tokens":{"access_token":"secret"}}';
 
@@ -177,4 +177,60 @@ test("a Codex usage read removes its login copy after an error or a timeout", as
     );
     assert.equal(existsSync(fake.seen().home), false, behavior);
   }
+});
+
+const working = ["Reading the issue first.", "Bash(gh issue view 371)"];
+
+test("Codex's usage-limit error at the end of a raw log is a usage limit, with any stated reset", (t) => {
+  const { adapter } = codex(t);
+  const error = (retry: string) =>
+    `You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or ${retry}.`;
+  for (const [detail, reset] of [
+    // Its standard error, after the prompt it read.
+    [
+      [
+        "Reading prompt from stdin...",
+        `ERROR: ${error("try again at 3:45 PM")}`,
+      ],
+      "3:45 PM",
+    ],
+    // Its error event as the error result.
+    [
+      ["You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."],
+      "in 2 days 3 hours 5 minutes",
+    ],
+    // Its last output lines, its error event among them.
+    [
+      [
+        '{"type":"turn.started"}',
+        JSON.stringify({ type: "error", message: error("try again later") }),
+        JSON.stringify({
+          type: "turn.failed",
+          error: { message: error("try again later") },
+        }),
+      ],
+      null,
+    ],
+  ] as const)
+    assert.deepEqual(
+      adapter.usageLimit(rawRunLog("codex", working, [...detail])),
+      { reset },
+      detail.join("\n"),
+    );
+});
+
+test("a Codex failure without its usage-limit error is no usage limit", (t) => {
+  const { adapter } = codex(t);
+  for (const log of [
+    rawRunLog("codex", working, [
+      "Reading prompt from stdin...",
+      "ERROR: stream disconnected before completion",
+    ]),
+    rawRunLog("codex", [
+      ...working,
+      "The deploy hit its rate limit; I stopped.",
+    ]),
+    "",
+  ])
+    assert.equal(adapter.usageLimit(log), null);
 });

@@ -8,6 +8,7 @@ export type FactoryConfiguration = {
     running: string;
     failed: string;
     needsInput: string;
+    paused: string;
   };
   modelLabelPrefix: string;
   prompt: string;
@@ -65,18 +66,23 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     if (Object.hasOwn(root, "version") && root.version !== 1)
       problems.push("version: must be 1");
     if (Object.hasOwn(root, "labels")) {
-      const fields = ["ready", "running", "failed", "needsInput"];
+      const fields = ["ready", "running", "failed", "needsInput", "paused"];
       const labels = object(root.labels, fields, "labels.");
       if (labels)
         for (const name of fields)
           if (Object.hasOwn(labels, name)) text(labels[name], `labels.${name}`);
-      if (
-        labels &&
-        fields.every((name) => typeof labels[name] === "string") &&
-        new Set(fields.map((name) => (labels[name] as string).toLowerCase()))
-          .size !== fields.length
-      )
-        problems.push("labels: must name four distinct labels");
+      // A label that repeats an earlier one, ignoring case, names both.
+      const named = (name: string) =>
+        typeof labels?.[name] === "string" ? labels[name].toLowerCase() : null;
+      fields.forEach((name, index) => {
+        const same = fields
+          .slice(0, index)
+          .find((earlier) => named(name) && named(name) === named(earlier));
+        if (same)
+          problems.push(
+            `labels.${name}: must differ from labels.${same}, ignoring case`,
+          );
+      });
     }
     if (Object.hasOwn(root, "modelLabelPrefix"))
       text(root.modelLabelPrefix, "modelLabelPrefix");

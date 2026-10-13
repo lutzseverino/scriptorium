@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createRegistry } from "../src/providers.ts";
-import { command, directory, fakePorts, request } from "./fakes.ts";
+import { command, directory, fakePorts, rawRunLog, request } from "./fakes.ts";
 
 const usage = readFileSync(
   new URL("fixtures/claude-usage.json", import.meta.url),
@@ -119,4 +119,67 @@ test("Claude Code usage is unreadable when the endpoint refuses or omits the win
     const ports = fakePorts({ fetch: async () => response });
     assert.equal(await claudeCode(t, ports).adapter.readUsage(), expected);
   }
+});
+
+const working = [
+  "I'll read the issue and its discussion first.",
+  "Bash(gh issue view 371 --comments)",
+];
+
+test("Claude Code's limit errors at the end of a raw log are usage limits, with any stated reset", (t) => {
+  const { adapter } = claudeCode(t);
+  for (const [error, reset] of [
+    ["You've hit your session limit · resets 12:50pm (UTC)", "12:50pm (UTC)"],
+    [
+      "You've hit your weekly limit · resets Oct 20, 3pm (Europe/Berlin)",
+      "Oct 20, 3pm (Europe/Berlin)",
+    ],
+    [
+      "You’ve hit your limit · resets 3pm (America/New_York)",
+      "3pm (America/New_York)",
+    ],
+    ["5-hour limit reached ∙ resets 3pm", "3pm"],
+    ["Claude AI usage limit reached|1760356800", null],
+    [
+      "Claude usage limit reached. Your limit will reset at 3pm (UTC).",
+      "3pm (UTC)",
+    ],
+  ] as const) {
+    // Claude Code shows its limit as the session's last text and as its
+    // error result, which Sandcastle's failure line carries.
+    assert.deepEqual(
+      adapter.usageLimit(
+        rawRunLog("claude-code", [...working, error], [error]),
+      ),
+      { reset },
+      error,
+    );
+    // An agent that exits cleanly after the limit still ends on it.
+    assert.deepEqual(
+      adapter.usageLimit(rawRunLog("claude-code", [...working, error])),
+      { reset },
+      error,
+    );
+  }
+});
+
+test("a Claude Code failure without its limit error, or prose about limits, is no usage limit", (t) => {
+  const { adapter } = claudeCode(t);
+  for (const log of [
+    rawRunLog("claude-code", working, [
+      'API Error: 500 {"type":"error","error":{"type":"api_error"}}',
+    ]),
+    rawRunLog("claude-code", [
+      ...working,
+      "The tests failed because you've hit your session limit · resets 12:50pm (UTC) in the fixture.",
+      "GitHub's API rate limit reached, so I stopped.",
+    ]),
+    // A limit long before the end is no limit the run ended on.
+    rawRunLog("claude-code", [
+      "You've hit your session limit · resets 12:50pm (UTC)",
+      ...Array.from({ length: 40 }, (_, line) => `Bash(echo ${line})`),
+    ]),
+    "",
+  ])
+    assert.equal(adapter.usageLimit(log), null);
 });

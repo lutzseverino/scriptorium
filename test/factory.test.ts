@@ -66,6 +66,7 @@ function repository(
         running: "factory:running",
         failed: "factory:failed",
         needsInput: "factory:needs-input",
+        paused: "factory:paused",
       },
       modelLabelPrefix: "model:",
       prompt: "{skillPrefix}implement #{issue}",
@@ -1403,6 +1404,215 @@ test("closing a parent takes precedence over relaunching its interrupted run", (
   );
 });
 
+const limit = { cause: "usage limit", reset: "12:50pm (UTC)" } as const;
+const pausing = { paused: limit, commented: false };
+const pausedRun = { paused: limit, commented: true };
+const pausedLabels = ["ready-for-agent", "factory:paused"];
+
+test("a run that ended on its provider's usage limit pauses its issue once, without a retry or a cap slot", () => {
+  const retry = {
+    failure: "the run ended without an open pull request",
+    log: log(4),
+  };
+  assert.deepEqual(
+    decide({
+      issues: [issue(2), issue(4, claimed), issue(5, claimed)],
+      runs: [
+        run(4, { attempt: 2, retry, ended: pausing }),
+        run(5, {
+          ended: { paused: { ...limit, reset: null }, commented: false },
+        }),
+      ],
+      settings: { caps: { "claude-code": 1 } },
+    }),
+    [
+      { kind: "claim", ...at(2) },
+      {
+        kind: "launch",
+        ...at(2),
+        provider: "claude-code",
+        model: "claude-sonnet-5-5",
+        effort: "high",
+        attempt: 1,
+      },
+      { kind: "pause", ...at(4), pause: limit },
+      { kind: "pause", ...at(5), pause: { ...limit, reset: null } },
+    ],
+  );
+});
+
+test("a paused run resumes as the same attempt only once its provider's usage reads below the threshold", () => {
+  const retry = {
+    failure: "the run ended without an open pull request",
+    log: log(4),
+  };
+  const paused = (
+    usage: Snapshot["usage"],
+    reset: string | null = limit.reset,
+  ) =>
+    decide({
+      issues: [issue(4, pausedLabels)],
+      runs: [
+        run(4, {
+          provider: "codex",
+          model: "gpt-5.5",
+          effort: "low",
+          attempt: 2,
+          retry,
+          ended: { paused: { ...limit, reset }, commented: true },
+        }),
+      ],
+      usage,
+    });
+  assert.equal(
+    skipOf(paused({}), 4),
+    "relaunch waits: codex hit its usage limit (resets 12:50pm (UTC)); its usage is unreadable",
+  );
+  assert.equal(
+    skipOf(paused({ codex: null }, null), 4),
+    "relaunch waits: codex hit its usage limit; its usage is unreadable",
+  );
+  assert.equal(
+    skipOf(paused({ codex: 80 }), 4),
+    "relaunch waits: codex hit its usage limit (resets 12:50pm (UTC)); usage 80% is at or above the 80% threshold",
+  );
+  assert.deepEqual(paused({ codex: 79 }), [
+    { kind: "unpause", ...at(4) },
+    {
+      kind: "launch",
+      ...at(4),
+      provider: "codex",
+      model: "gpt-5.5",
+      effort: "low",
+      attempt: 2,
+      retry,
+      relaunch: true,
+    },
+  ]);
+});
+
+test("a paused run also waits for its provider's cap and its repository", () => {
+  const capped = decide({
+    issues: [issue(4, pausedLabels)],
+    runs: [run(3), run(4, { ended: pausedRun })],
+    usage: { "claude-code": 10 },
+    settings: { caps: { "claude-code": 1 } },
+  });
+  assert.equal(
+    skipOf(capped, 4),
+    "relaunch waits: claude-code already runs its cap of 1 agent",
+  );
+  const repositoryPaused = decideFactory(
+    snapshot({
+      repositories: [
+        repository(widgets, [issue(4, pausedLabels)], {
+          paused: "it has no .factory/Dockerfile",
+        }),
+      ],
+      runs: [run(4, { ended: pausedRun })],
+      usage: { "claude-code": 10 },
+    }),
+    registry,
+  );
+  assert.deepEqual(repositoryPaused, [
+    {
+      kind: "skip",
+      ...at(4),
+      reason:
+        "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
+    },
+  ]);
+});
+
+test("a paused run continues whatever would now hold its pickup", () => {
+  assert.deepEqual(
+    decide({
+      issues: [
+        issue(4, ["factory:paused"], {
+          blockedBy: [{ number: 2, state: "open" }],
+        }),
+      ],
+      runs: [run(4, { ended: pausedRun })],
+      usage: { "claude-code": 10 },
+    }).map(({ kind }) => kind),
+    ["unpause", "launch"],
+  );
+});
+
+test("a paused run releases its claim once its issue closed or needs input, told or not", () => {
+  for (const ended of [pausing, pausedRun])
+    assert.deepEqual(
+      decide({
+        issues: [issue(5, [...pausedLabels, "factory:needs-input"])],
+        runs: [run(4, { ended }), run(5, { ended })],
+        usage: { "claude-code": 10 },
+      }).filter(({ kind }) => kind !== "skip"),
+      [
+        { kind: "release", ...at(5) },
+        { kind: "release", ...at(4) },
+      ],
+    );
+});
+
+test("closing a parent takes precedence over its paused run", () => {
+  assert.deepEqual(
+    decide({
+      issues: [
+        issue(3, pausedLabels, { subIssues: [{ number: 9, state: "closed" }] }),
+      ],
+      runs: [run(3, { ended: pausing })],
+    }),
+    [{ kind: "close", ...at(3), tickets: [9] }],
+  );
+});
+
+test("an open paused-labelled issue is never picked up as a fresh attempt", () => {
+  assert.equal(
+    skipOf(decide({ issues: [issue(4, pausedLabels)] }), 4),
+    "labelled factory:paused; the factory resumes its run by itself",
+  );
+});
+
+test("a paused-labelled claim no run holds settles as an orphaned claim under the running label", () => {
+  const settle = (pullRequest: Claim["pullRequest"]) =>
+    decide({
+      issues: [issue(4, pausedLabels)],
+      claims: [{ issue: 4, pullRequest }],
+    }).filter(({ kind }) => kind !== "skip");
+  assert.deepEqual(settle("none"), [
+    { kind: "unpause", ...at(4) },
+    {
+      kind: "launch",
+      ...at(4),
+      provider: "claude-code",
+      model: "claude-opus-5-5",
+      effort: "xhigh",
+      attempt: 2,
+      retry: {
+        failure: "no factory run or open pull request holds its claim",
+        log: "",
+      },
+    },
+  ]);
+  assert.deepEqual(settle("open"), [
+    { kind: "unpause", ...at(4) },
+    { kind: "keep", ...at(4) },
+  ]);
+  assert.deepEqual(settle("merged"), [
+    {
+      kind: "fail",
+      ...at(4),
+      failure:
+        "its pull request merged without closing the issue; close the issue if that finished it",
+      log: null,
+    },
+  ]);
+  assert.deepEqual(
+    decide({ issues: [], claims: [{ issue: 4, pullRequest: "none" }] }),
+    [{ kind: "release", ...at(4) }],
+  );
+});
+
 test("unpushable changes fail either attempt without a retry", () => {
   for (const attempt of [1, 2] as const)
     assert.deepEqual(
@@ -1471,6 +1681,7 @@ test("each repository uses its own labels and model label prefix", () => {
               running: "working",
               failed: "broken",
               needsInput: "question",
+              paused: "waiting",
             },
             modelLabelPrefix: "agent:",
             prompt: "{skillPrefix}ship #{issue}",

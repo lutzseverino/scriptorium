@@ -402,6 +402,7 @@ function host(
     configuration = {},
     caps = { "claude-code": 2, codex: 1 },
     imageFailures = [],
+    usage = {},
   }: {
     repositories: Record<string, IssueSpec[]>;
     remotes: Record<string, string>;
@@ -410,6 +411,8 @@ function host(
     configuration?: Partial<HostConfiguration>;
     caps?: { "claude-code": number; codex: number };
     imageFailures?: Error[];
+    // Each provider's usage as the next read finds it; absent is unreadable.
+    usage?: Record<string, number | null>;
   },
 ) {
   const root = directory(t);
@@ -477,7 +480,7 @@ function host(
       if (imageFailures.length > 0) throw imageFailures.shift();
       return `factory-sandbox:${builds.length}`;
     },
-    readUsage: async () => null,
+    readUsage: async (provider) => usage[provider] ?? null,
     launch: (provider, request) =>
       registry.providers.get(provider)!.launch(request),
     // The sandboxes are the launches whose agents have not finished; a
@@ -503,6 +506,7 @@ function host(
     tokens: tokenOf,
     tokenCommands,
     clock,
+    usage,
     state,
     clone: (name: string) => join(state, "repositories", name, "clone"),
     status: () => JSON.parse(readFileSync(join(state, "status.json"), "utf8")),
@@ -516,6 +520,7 @@ const conventions = {
     running: "factory:running",
     failed: "factory:failed",
     needsInput: "factory:needs-input",
+    paused: "factory:paused",
   },
   modelLabelPrefix: "model:",
   prompt: "{skillPrefix}implement #{issue}",
@@ -1227,6 +1232,7 @@ test("the configured template and state labels drive first attempts, retries and
       running: "working",
       failed: "broken",
       needsInput: "question",
+      paused: "waiting",
     },
     modelLabelPrefix: "agent:",
     prompt: "Handle #{issue} using {skillPrefix}ship; issue={issue}",
@@ -1252,7 +1258,7 @@ test("the configured template and state labels drive first attempts, retries and
   );
   assert.deepEqual(
     run.github.labels.get("acme/widgets"),
-    new Set(["working", "broken", "question"]),
+    new Set(["working", "broken", "question", "waiting"]),
   );
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "queued",
@@ -1612,6 +1618,7 @@ test("recovered runs retain configured state labels while invalid configuration 
       running: "working",
       failed: "broken",
       needsInput: "question",
+      paused: "waiting",
     },
   };
   const bare = remote(t, {
@@ -2045,4 +2052,329 @@ test("an orphaned claim waits for a failed role lookup without a failure comment
   );
   assert.equal(launch?.attempt, 2);
   assert.equal(run.launched.length, 1);
+});
+
+// Claude Code's session limit as the raw log ends with it.
+const sessionLimit = "You've hit your session limit · resets 12:50pm (UTC)";
+
+function endOnLimit(launch: { options: RunOptions }) {
+  appendFileSync(
+    rawLog(launch.options),
+    [
+      "Working on the issue.",
+      sessionLimit,
+      "Agent invocation failed: claude-code exited with code 1:",
+      sessionLimit,
+      "",
+    ].join("\n"),
+  );
+}
+
+const pauseComment = [
+  "The factory paused this run: claude-code usage limit, resets 12:50pm (UTC).",
+  "",
+  "- Model: `claude-code/claude-sonnet-5-5@high`, attempt 1",
+  "",
+  "The factory resumes the run by itself and removes `factory:paused` when it does; nobody needs to act.",
+].join("\n");
+
+for (const ended of [
+  "without a pull request",
+  "with an open pull request",
+  "at the time limit",
+])
+  test(`a run that ends on its provider's usage limit ${ended} pauses once and resumes as the same attempt below the threshold`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    assert.deepEqual(
+      run.github.labels.get("acme/widgets"),
+      new Set([
+        "factory:running",
+        "factory:failed",
+        "factory:needs-input",
+        "factory:paused",
+      ]),
+    );
+    const [first] = run.launched;
+    const issue = run.github.find("acme/widgets", 4);
+    endOnLimit(first);
+    if (ended === "with an open pull request") issue.pullRequests.push("OPEN");
+    if (ended === "at the time limit") {
+      run.clock.now = new Date("2026-10-09T16:01:00Z");
+      assert.equal((await run.tick())[0].kind, "stop");
+    } else first.finish(new Error("claude-code exited with code 1"));
+    await settled();
+    await until(() => recordOf(run.state, 4, 1).exited);
+
+    assert.deepEqual(
+      (await run.tick()).filter(({ kind }) => kind !== "skip"),
+      [
+        {
+          kind: "pause",
+          repository: "acme/widgets",
+          issue: 4,
+          pause: { cause: "usage limit", reset: "12:50pm (UTC)" },
+        },
+      ],
+    );
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+    assert.deepEqual(issue.comments, [pauseComment]);
+    assert.deepEqual(recordOf(run.state, 4, 1).ended, {
+      paused: { cause: "usage limit", reset: "12:50pm (UTC)" },
+      commented: true,
+    });
+
+    // Held with the limit named while usage is unreadable or too high, and
+    // told only once.
+    await run.tick();
+    assert.equal(
+      held(run, 4),
+      "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); its usage is unreadable",
+    );
+    run.usage["claude-code"] = 100;
+    await run.tick();
+    assert.equal(
+      held(run, 4),
+      "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold",
+    );
+    assert.ok(
+      run.reports.includes(
+        "acme/widgets#4 skipped: relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold",
+      ),
+    );
+    assert.equal(issue.comments.length, 1);
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+    assert.equal(run.launched.length, 1);
+
+    run.usage["claude-code"] = 12;
+    const decisions = await run.tick();
+    assert.deepEqual(
+      decisions.filter(({ kind }) => kind !== "skip"),
+      [
+        { kind: "unpause", repository: "acme/widgets", issue: 4 },
+        {
+          kind: "launch",
+          repository: "acme/widgets",
+          issue: 4,
+          provider: "claude-code",
+          model: "claude-sonnet-5-5",
+          effort: "high",
+          attempt: 1,
+          relaunch: true,
+        },
+      ],
+    );
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
+    const resumed = run.launched[1];
+    assert.equal(resumed.options.prompt, first.options.prompt);
+    assert.deepEqual(
+      resumed.options.branchStrategy,
+      first.options.branchStrategy,
+    );
+    const record = recordOf(run.state, 4, 1);
+    assert.equal(record.ended, null);
+    assert.equal(
+      record.log,
+      join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-1.log"),
+    );
+    assert.equal(issue.comments.length, 1);
+
+    // Hitting the limit again is a new pause, told again.
+    endOnLimit(resumed);
+    resumed.finish(new Error("claude-code exited with code 1"));
+    await settled();
+    await until(() => recordOf(run.state, 4, 1).exited);
+    await run.tick();
+    assert.deepEqual(issue.comments, [pauseComment, pauseComment]);
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+    assert.equal(run.launched.length, 2);
+  });
+
+test("a paused run stays paused across a restart, untold again, and resumes under the same rule", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.usage["claude-code"] = 100;
+  endOnLimit(run.launched[0]);
+  run.launched[0].finish(new Error("claude-code exited with code 1"));
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.comments, [pauseComment]);
+
+  const restarted = run.restart();
+  assert.deepEqual(await restarted.tick(), [
+    {
+      kind: "skip",
+      repository: "acme/widgets",
+      issue: 4,
+      reason:
+        "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold",
+    },
+  ]);
+  assert.deepEqual(issue.comments, [pauseComment]);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+  run.usage["claude-code"] = null;
+  await restarted.tick();
+  assert.match(held(run, 4)!, /its usage is unreadable$/);
+  run.usage["claude-code"] = 0;
+  const launch = (await restarted.tick()).find(
+    (decision) => decision.kind === "launch",
+  );
+  assert.equal(launch?.attempt, 1);
+  assert.equal(launch?.relaunch, true);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
+  assert.equal(run.launched.length, 2);
+});
+
+test("a pause told nothing before a restart is told once after it", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  endOnLimit(run.launched[0]);
+  run.launched[0].finish(new Error("claude-code exited with code 1"));
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  run.github.refused.add("acme/widgets#4");
+  await run.tick();
+  assert.equal(recordOf(run.state, 4, 1).ended.commented, false);
+  run.github.refused.delete("acme/widgets#4");
+  const restarted = run.restart();
+  await restarted.tick();
+  await restarted.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.comments, [pauseComment]);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+});
+
+test("a paused run whose label swap fails does not launch that pass", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  endOnLimit(run.launched[0]);
+  run.launched[0].finish(new Error("claude-code exited with code 1"));
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  await run.tick();
+  run.usage["claude-code"] = 10;
+  run.github.refused.add("acme/widgets#4");
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.ok(
+    run.reports.some((line) =>
+      line.startsWith(
+        "acme/widgets#4 unpause failed, so acme/widgets waits for the next pass",
+      ),
+    ),
+  );
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+  run.github.refused.delete("acme/widgets#4");
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
+});
+
+for (const change of ["needs input", "closed"] as const)
+  test(`a paused run whose issue ${change === "closed" ? "closed" : "needs input"} releases its claim and both labels`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    endOnLimit(run.launched[0]);
+    run.launched[0].finish(new Error("claude-code exited with code 1"));
+    await settled();
+    await until(() => recordOf(run.state, 4, 1).exited);
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    if (change === "closed") issue.state = "CLOSED";
+    else issue.labels.push("factory:needs-input");
+    const decisions = await run.tick();
+    assert.deepEqual(decisions, [
+      { kind: "release", repository: "acme/widgets", issue: 4 },
+    ]);
+    assert.deepEqual(
+      issue.labels,
+      change === "closed"
+        ? ["ready-for-agent"]
+        : ["ready-for-agent", "factory:needs-input"],
+    );
+    assert.equal(recordOf(run.state, 4, 1).settled, true);
+    assert.deepEqual(issue.comments, [pauseComment]);
+    run.usage["claude-code"] = 0;
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+  });
+
+test("a run that ends without a recognized limit error settles through the outcome table", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  appendFileSync(
+    rawLog(run.launched[0].options),
+    [
+      "The fixture says: You've hit your session limit · resets 12:50pm (UTC)",
+      "Agent invocation failed: claude-code exited with code 1:",
+      "API Error: 500",
+      "",
+    ].join("\n"),
+  );
+  run.launched[0].finish(new Error("claude-code exited with code 1"));
+  await settled();
+  const [decision] = await run.tick();
+  assert.equal(decision.kind, "launch");
+  assert.equal(decision.kind === "launch" && decision.attempt, 2);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "ready-for-agent",
+    "factory:running",
+  ]);
+});
+
+test("paused-labelled issues no run holds settle as orphaned claims and lose the paused label", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["ready-for-agent", "factory:paused"] },
+        {
+          number: 5,
+          labels: ["ready-for-agent", "factory:paused"],
+          pullRequests: ["MERGED"],
+        },
+        { number: 6, state: "CLOSED", labels: ["factory:paused"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  const decisions = await run.tick();
+  assert.deepEqual(
+    decisions.map(({ kind, issue }) => `${kind} #${issue}`),
+    ["release #6", "fail #5", "unpause #4", "launch #4", "skip #5"],
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "ready-for-agent",
+    "factory:running",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
+    "ready-for-agent",
+    "factory:failed",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 6).labels, []);
+  assert.equal(run.launched.length, 1);
+  assert.match(
+    run.launched[0].options.prompt ?? "",
+    /First attempt failure: no factory run/,
+  );
 });

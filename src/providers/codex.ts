@@ -13,6 +13,7 @@ import type {
   ProviderPorts,
 } from "../providers.ts";
 import { launchAgent } from "./launch.ts";
+import { limitError } from "./limit.ts";
 import { fullest } from "./usage.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh";
@@ -45,8 +46,16 @@ export function codexAdapter(
       );
     },
     readUsage: () => readCodexUsage(credential, ports.codexExecutable),
+    usageLimit: (log) => limitError(log, codexLimitErrors),
   };
 }
+
+// Codex's usage-limit error, which Sandcastle's failure detail may carry
+// behind a prefix or inside its JSON event, such as `You've hit your usage
+// limit. … try again at 3:45 PM.`; a relative reset keeps its `in`.
+const codexLimitErrors = [
+  /You['’]ve hit your usage limit\b(?:.*?\btry again (?:at )?(?!later\b)(?<reset>[^."]+))?/i,
+];
 
 // A Codex login's secret values: its API key and its sign-in tokens. A login
 // that is not JSON can't sign in, so its launch fails before Sandcastle.

@@ -4,7 +4,8 @@
     "ready": "queued",
     "running": "working",
     "failed": "broken",
-    "needsInput": "question"
+    "needsInput": "question",
+    "paused": "waiting"
   },
   "modelLabelPrefix": "agent:",
   "prompt": "Handle #{issue} using {skillPrefix}ship"

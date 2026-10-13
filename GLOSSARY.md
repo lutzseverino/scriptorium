@@ -21,6 +21,14 @@ A run whose sandbox a factory restart stopped, which launches again as the same
 attempt on its branch instead of ending with a run outcome.
 _Avoid_: Cancelled run, drained run
 
+**Paused run**:
+A run whose agent exited on its provider's usage limit, which the factory
+labels paused and relaunches by itself as the same attempt once the provider's
+usage reads below the threshold, instead of ending with a run outcome. Unlike a
+paused repository, which claims and launches nothing for a pass and never
+touches its issues, a paused run is one issue's run, marked on that issue.
+_Avoid_: Limited run, held run, failed run
+
 **Provider**:
 An agent CLI and the subscription behind it, on which the factory runs a
 model, such as Claude Code or Codex.

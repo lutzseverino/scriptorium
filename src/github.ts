@@ -63,6 +63,16 @@ export function repositoryGitHub(
       : `${node.repository.nameWithOwner}#${node.number}`;
   const edit = (issue: number, ...args: string[]) =>
     gh(["issue", "edit", String(issue), "--repo", repository, ...args]);
+  const post = (issue: number, body: string) =>
+    gh([
+      "issue",
+      "comment",
+      String(issue),
+      "--repo",
+      repository,
+      "--body",
+      body,
+    ]);
 
   return {
     async createStateLabels(): Promise<void> {
@@ -70,6 +80,7 @@ export function repositoryGitHub(
         ["running", "0052cc"],
         ["failed", "b60205"],
         ["needsInput", "fbca04"],
+        ["paused", "c5def5"],
       ] as const)
         await gh([
           "label",
@@ -198,49 +209,76 @@ export function repositoryGitHub(
       return states.includes("CLOSED") ? "closed" : "none";
     },
 
-    // The closed issues still carrying the running label.
+    // The closed issues still carrying the running or the paused label.
     async readClosedClaims(): Promise<number[]> {
-      const closed: { number: number }[] = JSON.parse(
-        await gh([
-          "issue",
-          "list",
-          "--repo",
-          repository,
-          "--state",
-          "closed",
-          "--label",
-          labels.running,
-          "--json",
-          "number",
-          "--limit",
-          "1000",
-        ]),
-      );
-      return closed.map(({ number }) => number);
+      const numbers = new Set<number>();
+      for (const label of [labels.running, labels.paused]) {
+        const closed: { number: number }[] = JSON.parse(
+          await gh([
+            "issue",
+            "list",
+            "--repo",
+            repository,
+            "--state",
+            "closed",
+            "--label",
+            label,
+            "--json",
+            "number",
+            "--limit",
+            "1000",
+          ]),
+        );
+        for (const { number } of closed) numbers.add(number);
+      }
+      return [...numbers];
     },
 
     claim: (issue: number) => edit(issue, "--add-label", labels.running),
 
-    release: (issue: number) => edit(issue, "--remove-label", labels.running),
+    // A claim ends without whichever of its running and paused labels it
+    // carries.
+    release: (issue: number) =>
+      edit(
+        issue,
+        "--remove-label",
+        labels.running,
+        "--remove-label",
+        labels.paused,
+      ),
 
     async fail(issue: number, comment: string) {
       await edit(
         issue,
         "--remove-label",
         labels.running,
+        "--remove-label",
+        labels.paused,
         "--add-label",
         labels.failed,
       );
-      await gh([
-        "issue",
-        "comment",
-        String(issue),
-        "--repo",
-        repository,
-        "--body",
-        comment,
-      ]);
+      await post(issue, comment);
     },
+
+    async pause(issue: number, comment: string) {
+      await edit(
+        issue,
+        "--remove-label",
+        labels.running,
+        "--add-label",
+        labels.paused,
+      );
+      await post(issue, comment);
+    },
+
+    unpause: (issue: number) =>
+      edit(
+        issue,
+        "--remove-label",
+        labels.paused,
+        "--add-label",
+        labels.running,
+      ),
 
     async close(issue: number, tickets: IssueId[]) {
       await gh([

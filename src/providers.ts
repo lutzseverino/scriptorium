@@ -52,7 +52,14 @@ export type ProviderAdapter = {
   launch(request: LaunchRequest): Promise<void>;
   // The fullest usage window's percentage, or null when unreadable.
   readUsage(): Promise<number | null>;
+  // Whether an ended run's raw log ends with the provider's own usage-limit
+  // error, judged from that error's wording, never the model's prose.
+  usageLimit(log: string): UsageLimit | null;
 };
+
+// A provider's usage limit as its error stated it: the reset as written, such
+// as `12:50pm (UTC)`, or null when the error states none.
+export type UsageLimit = { reset: string | null };
 
 export type ProviderPorts = {
   sandcastle: Sandcastle;

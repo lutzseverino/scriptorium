@@ -4,7 +4,8 @@
     "ready": [],
     "running": null,
     "failed": "",
-    "needsInput": " question "
+    "needsInput": " question ",
+    "paused": "waiting\n"
   },
   "modelLabelPrefix": 3,
   "prompt": "do work"

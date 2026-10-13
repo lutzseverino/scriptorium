@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createRedactor } from "../src/redaction.ts";
-import { followRunLog } from "../src/run-log.ts";
+import { followRunLog, readLogEnd } from "../src/run-log.ts";
 import { directory } from "./fakes.ts";
 
 async function until(condition: () => boolean) {
@@ -31,4 +37,17 @@ test("each complete raw line is published redacted as it arrives, and closing pu
     readFileSync(published, "utf8"),
     "token <REDACTED>\nhalf a line <REDACTED>\nend <REDACTED> ✓",
   );
+});
+
+test("a raw log's end starts at the first whole line within its last bytes", async (t) => {
+  const raw = join(directory(t), "agent.log");
+  writeFileSync(raw, "");
+  assert.equal(await readLogEnd(raw), "");
+  writeFileSync(raw, "first\nsecond\nlast ✓\n");
+  assert.equal(await readLogEnd(raw), "first\nsecond\nlast ✓\n");
+  assert.equal(await readLogEnd(raw, 12), "last ✓\n");
+  // One line fills the window.
+  assert.equal(await readLogEnd(raw, 4), "✓\n");
+  writeFileSync(raw, "first\nlast");
+  assert.equal(await readLogEnd(raw, 3), "ast");
 });
