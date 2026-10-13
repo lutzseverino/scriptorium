@@ -33,6 +33,23 @@ command or configuration loader yet. The boundary decisions live in
 [ADR 0013](../docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
 and [ADR 0014](../docs/adr/0014-name-every-factory-convention-in-configuration.md).
 
+## Providers
+
+The provider registry in `src/providers.ts` holds one adapter per provider the
+host configuration names: Claude Code and Codex. Each adapter launches its
+agent through Sandcastle, lists its reasoning efforts, routes bare model slugs
+by its vendor prefix (`claude-*` or `gpt-*`), supplies the prompt's
+`{skillPrefix}` (`/` or `$`), and reads its usage. Its one credential is a host
+file, read again at every launch and usage read: the Claude Code token file
+from `claude setup-token`, or the Codex login (`auth.json`) the host keeps
+renewing. No provider credential comes from an environment variable.
+
+A model is `<slug>` or `<provider>/<slug>`, optionally followed by
+`@<effort>`; a model label is the same under the repository's model label
+prefix. A model on a provider the host does not configure, an effort the
+provider does not list, or a bare slug no configured provider routes is refused
+with the reason.
+
 ## Documentation
 
 [Factory documentation](docs/README.md) covers package development, release,
