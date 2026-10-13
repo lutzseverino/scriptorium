@@ -41,6 +41,7 @@ import {
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
+import type { PullRequestState } from "./run-outcome.ts";
 import { createRedactor } from "./redaction.ts";
 import { followRunLog } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
@@ -213,6 +214,7 @@ export function createHost(
         pause(`its state labels could not be created: ${error}`);
     }
     try {
+      const issues = await github.readIssues();
       for (const run of runs.filter(
         (run) => run.repository === name && run.exited && !run.interrupted,
       )) {
@@ -224,26 +226,22 @@ export function createHost(
             run.stopped ||
             run.exitedAt!.getTime() - Date.parse(run.startedAt) >=
               settings.timeLimitMinutes * 60_000,
+          ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
           pullRequest: await github.pullRequestState(
             run.issue,
             run.pullRequestSince,
           ),
         };
-        if (
-          !run.ended.timedOut &&
-          ["none", "closed"].includes(run.ended.pullRequest)
-        ) {
-          const paths = await unpushedChanges(
-            git,
-            clone,
-            runBranch(run.issue),
-            run.base,
-            configuration.unpushablePaths,
-          );
-          if (paths.length) run.ended.unpushedChanges = paths;
-        }
+        const paths = await readUnpushableChanges(
+          git,
+          clone,
+          run.base,
+          issues.find((issue) => issue.number === run.issue),
+          run.ended.pullRequest,
+          pass.configuration.labels.needsInput,
+        );
+        if (paths.length) run.ended.unpushedChanges = paths;
       }
-      const issues = await github.readIssues();
       pass.read = {
         name,
         configuration: pass.configuration,
@@ -263,7 +261,7 @@ export function createHost(
   }
 
   // Every running-labelled issue, open or closed, that no run on the host
-  // holds. A closed issue's work counts as merged.
+  // holds. Pull request state and issue closure remain independent.
   async function readClaims(
     name: string,
     github: RepositoryGitHub,
@@ -272,16 +270,59 @@ export function createHost(
   ): Promise<Claim[]> {
     const held = (number: number) =>
       runs.some((run) => run.repository === name && run.issue === number);
-    const claims: Claim[] = (await github.readClosedClaims())
-      .filter((number) => !held(number))
-      .map((number) => ({ issue: number, pullRequest: "merged" }));
-    for (const issue of issues)
-      if (issue.labels.includes(labels.running) && !held(issue.number))
-        claims.push({
-          issue: issue.number,
-          pullRequest: await github.pullRequestState(issue.number),
-        });
+    const claims: Claim[] = [];
+    const numbers = [
+      ...(await github.readClosedClaims()),
+      ...issues
+        .filter((issue) => issue.labels.includes(labels.running))
+        .map((issue) => issue.number),
+    ];
+    const { clone } = directory(name);
+    const git: Git = async (cwd, args) =>
+      ports.git(await tokens.get(name), cwd, args);
+    for (const number of numbers) {
+      if (held(number)) continue;
+      const claim: Claim = {
+        issue: number,
+        pullRequest: await github.pullRequestState(number),
+      };
+      const paths = await readUnpushableChanges(
+        git,
+        clone,
+        "HEAD",
+        issues.find((issue) => issue.number === number),
+        claim.pullRequest,
+        labels.needsInput,
+      );
+      if (paths.length) claim.unpushedChanges = paths;
+      claims.push(claim);
+    }
     return claims;
+  }
+
+  // Earlier outcome rows settle without consulting the branch. Both runs
+  // and claims use the same eligibility rule; their base commits differ.
+  async function readUnpushableChanges(
+    git: Git,
+    clone: string,
+    base: string,
+    issue: Issue | undefined,
+    pullRequest: PullRequestState,
+    needsInputLabel: string,
+  ): Promise<string[]> {
+    if (
+      !issue ||
+      !["none", "closed"].includes(pullRequest) ||
+      issue.labels.includes(needsInputLabel)
+    )
+      return [];
+    return unpushedChanges(
+      git,
+      clone,
+      runBranch(issue.number),
+      base,
+      configuration.unpushablePaths,
+    );
   }
 
   async function readUsage() {
@@ -327,10 +368,11 @@ export function createHost(
   }
 
   // Before anything else, the first pass removes the sandboxes an earlier
-  // process left and takes up the runs it recorded as interrupted.
+  // process left and recovers unsettled runs: interrupted ones relaunch,
+  // while orphans settle through the outcome table.
   function start() {
     ports.stopSandboxes();
-    const interrupted: HostRun[] = [];
+    const recovered: HostRun[] = [];
     for (const name of configuration.repositories) {
       const runsDirectory = directory(name).runs;
       if (!existsSync(runsDirectory)) continue;
@@ -346,19 +388,23 @@ export function createHost(
           report(`the run record ${file} of ${name} is unreadable: ${error}`);
           continue;
         }
-        if (!recorded.interrupted || recorded.settled) continue;
+        if (recorded.settled) continue;
         if (recorded.configuration)
           conventions.set(name, recorded.configuration);
-        interrupted.push({
+        recovered.push({
           ...recorded,
-          exitedAt: new Date(recorded.exitedAt),
+          exited: true,
+          exitedAt: new Date(recorded.exitedAt ?? ports.now()),
+          ended: recorded.interrupted
+            ? { interrupted: true }
+            : { timedOut: false, pullRequest: "none", orphaned: true },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
         });
       }
     }
-    runs.push(...interrupted);
+    runs.push(...recovered);
   }
 
   // On a stop signal: stop claiming and launching, record every running run
@@ -554,9 +600,13 @@ export function createHost(
         );
         forget(decision);
         return;
-      case "keep":
-        forget(decision);
+      case "keep": {
+        // Awaiting merge takes no cap slot but retains its attempt and PR
+        // history until the claim settles, including across a restart.
+        const run = find(decision);
+        if (run) record(run);
         return;
+      }
       case "release":
         await github.release(decision.issue);
         forget(decision);

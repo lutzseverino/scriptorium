@@ -52,22 +52,22 @@ field is refused, and nothing comes from environment variables.
 }
 ```
 
-| Field                         | Value                                                                                                                                                                                      |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `repositories`                | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                      |
-| `providers.<name>`            | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                            |
-| `providers.<name>.cap`        | The whole number of sandboxes that provider may run at once across every repository.                                                                                                       |
-| `providers.<name>.credential` | The absolute path of the provider's one credential file: the Claude Code token file from `claude setup-token`, or the Codex login (`auth.json`). It is read at each launch and usage read. |
-| `models.default`              | The model an issue without a model label runs on.                                                                                                                                          |
-| `models.retry`                | The model a failed first attempt retries on.                                                                                                                                               |
-| `timeLimitMinutes`            | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                |
-| `usageThreshold`              | The provider usage percentage, from 0 to 100, at or above which that provider launches nothing.                                                                                            |
-| `pollSeconds`                 | The wait between passes.                                                                                                                                                                   |
-| `readiness.authorizedRoles`   | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                  |
-| `unpushablePaths`             | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. A run whose branch changes them fails without a retry, naming the paths.         |
-| `stateDirectory`              | The absolute path of the directory the process owns.                                                                                                                                       |
-| `gitIdentity`                 | The `name` and `email` that commits made from the clones carry.                                                                                                                            |
-| `github.tokenCommand`         | The executable and leading arguments that print a GitHub token for a repository.                                                                                                           |
+| Field                         | Value                                                                                                                                                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repositories`                | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                                                   |
+| `providers.<name>`            | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                                                         |
+| `providers.<name>.cap`        | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                    |
+| `providers.<name>.credential` | The absolute path of the provider's one credential file: the Claude Code token file from `claude setup-token`, or the Codex login (`auth.json`). It is read at each launch and usage read.                              |
+| `models.default`              | The model an issue without a model label runs on.                                                                                                                                                                       |
+| `models.retry`                | The model a failed first attempt retries on.                                                                                                                                                                            |
+| `timeLimitMinutes`            | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                             |
+| `usageThreshold`              | The provider usage percentage, from 0 to 100, at or above which that provider launches nothing.                                                                                                                         |
+| `pollSeconds`                 | The wait between passes.                                                                                                                                                                                                |
+| `readiness.authorizedRoles`   | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                               |
+| `unpushablePaths`             | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
+| `stateDirectory`              | The absolute path of the directory the process owns.                                                                                                                                                                    |
+| `gitIdentity`                 | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
+| `github.tokenCommand`         | The executable and leading arguments that print a GitHub token for a repository.                                                                                                                                        |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -176,6 +176,28 @@ Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
 `.factory/Dockerfile` is read from the clone on every pass.
 
+## Run outcomes
+
+Ended runs and orphaned claims use the same table, in order. Pull requests
+come from the issue's closing references and its `factory/issue-<n>` branch.
+An open pull request takes precedence even when the run timed out or the
+issue closed.
+
+| First matching observation               | Run outcome    | Action                                                                  |
+| ---------------------------------------- | -------------- | ----------------------------------------------------------------------- |
+| Pull request open                        | Awaiting merge | Keep the claim without taking a provider cap slot.                      |
+| Issue closed                             | Done           | Release the claim.                                                      |
+| Pull request merged, issue open          | Failed, final  | Fail without retrying.                                                  |
+| Configured needs-input label present     | Needs input    | Release without failure or retry, including after timeout or orphaning. |
+| Unpushed commits under `unpushablePaths` | Failed, final  | Fail without retrying and name the paths.                               |
+| Anything else                            | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                 |
+
+After the owner answers the question and removes the needs-input label, pickup
+starts a fresh attempt 1 on the existing branch. Interrupted runs bypass the
+table and relaunch as the same attempt. An orphaned claim with no interrupted
+record settles as a failed attempt; an existing run record supplies its attempt
+number, and a claim with no record counts as attempt 1.
+
 ## Restarts
 
 A restart, such as for a factory upgrade or a changed credential file, never
@@ -191,7 +213,7 @@ worktree for it, and keeps its claim meanwhile. It takes its issue's turn in
 the queue and waits for its provider's cap and usage gate and for its
 repository to resume. It continues as it would have without the restart, so a
 readiness change or a new blocker does not hold it; it releases its claim
-instead once its issue is closed or carries `factory:needs-input`. Its time
+instead once its issue is closed or carries its configured needs-input label. Its time
 limit starts again at the relaunch.
 
 A sandbox container is any container from a factory sandbox image, which

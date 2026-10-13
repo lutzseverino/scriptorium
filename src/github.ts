@@ -1,8 +1,9 @@
 // One repository's GitHub reads and writes, through the GitHub CLI with that
 // repository's token.
 import type { FactoryConfiguration } from "./factory-configuration.ts";
-import type { Issue, IssueId, PullRequestState } from "./factory.ts";
+import type { Issue, IssueId } from "./factory.ts";
 import { reference, type Actor } from "./readiness.ts";
+import type { PullRequestState } from "./run-outcome.ts";
 
 // Runs the GitHub CLI and resolves its standard output.
 export type GitHubCli = (args: string[]) => Promise<string>;
@@ -162,10 +163,7 @@ export function repositoryGitHub(
 
     // A run's pull request is one from this repository, not a fork, that
     // closes its issue or comes from the run's branch, opened since the first
-    // attempt started (`since`), so an earlier run's pull requests don't
-    // decide it. Only a closed issue counts as merged work. An open pull
-    // request holds the claim; a merged pull request with the issue still
-    // open and none open is its own state.
+    // attempt started (`since`). Issue closure is observed separately.
     async pullRequestState(
       number: number,
       since?: string,
@@ -195,9 +193,8 @@ export function repositoryGitHub(
               Date.parse(pullRequest.createdAt) >= Date.parse(since)),
         )
         .map((pullRequest: { state: string }) => pullRequest.state);
-      if (issue.state === "CLOSED") return "merged";
       if (states.includes("OPEN")) return "open";
-      if (states.includes("MERGED")) return "merged-issue-open";
+      if (states.includes("MERGED")) return "merged";
       return states.includes("CLOSED") ? "closed" : "none";
     },
 

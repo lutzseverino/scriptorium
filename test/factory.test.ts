@@ -918,12 +918,21 @@ test("a running sandbox of a repository this pass could not read still counts an
 
 for (const attempt of [1, 2] as const)
   for (const timedOut of [false, true])
-    for (const pullRequest of ["none", "closed", "merged-issue-open"] as const)
+    for (const pullRequest of ["none", "closed"] as const)
       test(`attempt ${attempt} needing input releases its claim with ${pullRequest} pull request, timed out: ${timedOut}`, () => {
         assert.deepEqual(
           decide({
             issues: [issue(4, [...claimed, "factory:needs-input"])],
-            runs: [run(4, { attempt, ended: { timedOut, pullRequest } })],
+            runs: [
+              run(4, {
+                attempt,
+                ended: {
+                  timedOut,
+                  pullRequest,
+                  unpushedChanges: [".github/workflows/ci.yml"],
+                },
+              }),
+            ],
           }),
           [
             { kind: "release", ...at(4) },
@@ -1081,6 +1090,7 @@ test("a claim no run holds stays while its pull request is open and is released 
       ],
     }),
     [
+      { kind: "keep", ...at(4) },
       { kind: "release", ...at(5) },
       { kind: "skip", ...at(4), reason: "claimed by a running factory run" },
     ],
@@ -1088,22 +1098,29 @@ test("a claim no run holds stays while its pull request is open and is released 
 });
 
 test("a needs-input claim left by an earlier factory process releases unless its pull request is open", () => {
-  for (const pullRequest of [
-    "none",
-    "closed",
-    "merged-issue-open",
-    "open",
-  ] as const)
+  for (const pullRequest of ["none", "closed", "merged", "open"] as const)
     assert.deepEqual(
       decide({
         issues: [issue(4, [...claimed, "factory:needs-input"])],
         claims: [{ issue: 4, pullRequest }],
       }).filter(({ kind }) => kind !== "skip"),
-      pullRequest === "open" ? [] : [{ kind: "release", ...at(4) }],
+      pullRequest === "open"
+        ? [{ kind: "keep", ...at(4) }]
+        : pullRequest === "merged"
+          ? [
+              {
+                kind: "fail",
+                ...at(4),
+                failure:
+                  "its pull request merged without closing the issue; close the issue if that finished it",
+                log: null,
+              },
+            ]
+          : [{ kind: "release", ...at(4) }],
     );
 });
 
-test("a claim that neither a run nor an open pull request holds fails its issue", () => {
+test("an orphaned claim without an interrupted record retries its failed first attempt", () => {
   const decisions = decide({
     issues: [issue(6, claimed), issue(7, claimed)],
     claims: [
@@ -1111,18 +1128,27 @@ test("a claim that neither a run nor an open pull request holds fails its issue"
       { issue: 7, pullRequest: "none" },
     ],
   });
-  assert.deepEqual(decisions.slice(0, 2), [
+  assert.deepEqual(launches(decisions), [
     {
-      kind: "fail",
+      kind: "launch",
       ...at(6),
-      failure: "its pull request closed without merging",
-      log: null,
+      provider: "claude-code",
+      model: "claude-opus-5-5",
+      effort: "xhigh",
+      attempt: 2,
+      retry: { failure: "its pull request closed without merging", log: "" },
     },
     {
-      kind: "fail",
+      kind: "launch",
       ...at(7),
-      failure: "no factory run or open pull request holds its claim",
-      log: null,
+      provider: "claude-code",
+      model: "claude-opus-5-5",
+      effort: "xhigh",
+      attempt: 2,
+      retry: {
+        failure: "no factory run or open pull request holds its claim",
+        log: "",
+      },
     },
   ]);
 });
@@ -1132,9 +1158,7 @@ test("a pull request that merged without closing its issue fails it without a re
     "its pull request merged without closing the issue; close the issue if that finished it";
   const fromRun = decide({
     issues: [issue(4, claimed)],
-    runs: [
-      run(4, { ended: { timedOut: false, pullRequest: "merged-issue-open" } }),
-    ],
+    runs: [run(4, { ended: { timedOut: false, pullRequest: "merged" } })],
   });
   assert.deepEqual(launches(fromRun), []);
   assert.deepEqual(fromRun[0], {
@@ -1145,7 +1169,7 @@ test("a pull request that merged without closing its issue fails it without a re
   });
   const fromClaim = decide({
     issues: [issue(6, claimed)],
-    claims: [{ issue: 6, pullRequest: "merged-issue-open" }],
+    claims: [{ issue: 6, pullRequest: "merged" }],
   });
   assert.deepEqual(fromClaim[0], {
     kind: "fail",
@@ -1197,6 +1221,7 @@ test("a retry whose issue is no longer eligible fails it instead", () => {
       failure: decision.kind === "fail" ? decision.failure : undefined,
     })),
     [
+      { kind: "release", issue: 9, failure: undefined },
       {
         kind: "fail",
         issue: 4,
@@ -1216,11 +1241,6 @@ test("a retry whose issue is no longer eligible fails it instead", () => {
         kind: "fail",
         issue: 7,
         failure: `${failed}, and its retry did not launch: sub-issue of #8, which is not ready; apply ready-for-agent to #8 once its tickets are published`,
-      },
-      {
-        kind: "fail",
-        issue: 9,
-        failure: `${failed}, and its retry did not launch: its issue is no longer open`,
       },
     ],
   );
@@ -1408,22 +1428,28 @@ test("unpushable changes fail either attempt without a retry", () => {
     );
 });
 
-test("timeouts ignore unpushable changes and keep their retry", () => {
-  const ended = {
-    timedOut: true,
-    pullRequest: "none" as const,
-    unpushedChanges: [".github/workflows/ci.yml"],
-  };
-  const [retry] = decide({
+test("timeouts with unpushable commits fail at once without retry", () => {
+  const decisions = decide({
     issues: [issue(4, claimed)],
-    runs: [run(4, { ended })],
+    runs: [
+      run(4, {
+        ended: {
+          timedOut: true,
+          pullRequest: "none",
+          unpushedChanges: [".github/workflows/ci.yml"],
+        },
+      }),
+    ],
   });
-  assert.equal(retry.kind === "launch" && retry.attempt, 2);
-  const [failure] = decide({ runs: [run(4, { attempt: 2, ended })] });
-  assert.equal(
-    failure.kind === "fail" && failure.failure,
-    "the run exceeded the time limit of 240 minutes",
-  );
+  assert.deepEqual(decisions[0], {
+    kind: "fail",
+    ...at(4),
+    failure:
+      "the run's branch changes paths the factory's GitHub App can't push",
+    unpushedChanges: [".github/workflows/ci.yml"],
+    log: log(4),
+  });
+  assert.deepEqual(launches(decisions), []);
 });
 
 test("each repository uses its own labels and model label prefix", () => {
@@ -1472,4 +1498,161 @@ test("each repository uses its own labels and model label prefix", () => {
     "labelled question; answer the question and remove the label to run it again",
   );
   assert.equal(skipOf(decisions, 4), undefined);
+});
+
+test("a closed issue is done regardless of timeout, unpushable commits or pull request history, unless a pull request is open", () => {
+  for (const pullRequest of ["none", "closed", "merged", "open"] as const) {
+    const decision =
+      pullRequest === "open"
+        ? { kind: "keep", ...at(4) }
+        : { kind: "release", ...at(4) };
+    for (const timedOut of [false, true])
+      assert.deepEqual(
+        decide({
+          runs: [
+            run(4, {
+              ended: {
+                timedOut,
+                pullRequest,
+                unpushedChanges: [".github/workflows/ci.yml"],
+              },
+            }),
+          ],
+        }),
+        [decision],
+      );
+    assert.deepEqual(
+      decide({
+        claims: [
+          {
+            issue: 4,
+            pullRequest,
+            unpushedChanges: [".github/workflows/ci.yml"],
+          },
+        ],
+      }),
+      [decision],
+    );
+  }
+});
+
+test("a merged pull request with an open issue fails before needs input or unpushable commits", () => {
+  const issues = [issue(4, [...claimed, "factory:needs-input"])];
+  const unpushedChanges = [".github/workflows/ci.yml"];
+  const failure =
+    "its pull request merged without closing the issue; close the issue if that finished it";
+  for (const timedOut of [false, true]) {
+    const decisions = decide({
+      issues,
+      runs: [
+        run(4, { ended: { timedOut, pullRequest: "merged", unpushedChanges } }),
+      ],
+    });
+    assert.deepEqual(decisions[0], {
+      kind: "fail",
+      ...at(4),
+      failure,
+      log: log(4),
+    });
+    assert.deepEqual(launches(decisions), []);
+  }
+  assert.deepEqual(
+    decide({
+      issues,
+      claims: [{ issue: 4, pullRequest: "merged", unpushedChanges }],
+    })[0],
+    { kind: "fail", ...at(4), failure, log: null },
+  );
+});
+
+test("an orphaned claim with unpushable commits fails without retry", () => {
+  const decisions = decide({
+    issues: [issue(4, claimed)],
+    claims: [
+      {
+        issue: 4,
+        pullRequest: "none",
+        unpushedChanges: [".github/workflows/ci.yml"],
+      },
+    ],
+  });
+  assert.deepEqual(decisions[0], {
+    kind: "fail",
+    ...at(4),
+    failure:
+      "the run's branch changes paths the factory's GitHub App can't push",
+    log: null,
+    unpushedChanges: [".github/workflows/ci.yml"],
+  });
+  assert.deepEqual(launches(decisions), []);
+});
+
+test("an orphaned second attempt fails without a third attempt", () => {
+  const decisions = decide({
+    issues: [issue(4, claimed)],
+    runs: [run(4, { attempt: 2, ended: { ...none, orphaned: true } })],
+  });
+  assert.deepEqual(decisions[0], {
+    kind: "fail",
+    ...at(4),
+    failure: "no factory run or open pull request holds its claim",
+    log: log(4),
+  });
+  assert.deepEqual(launches(decisions), []);
+});
+
+test("after needs input is removed pickup starts a fresh attempt 1", () => {
+  const waiting = issue(4, [...claimed, "factory:needs-input"]);
+  const released = decide({
+    issues: [waiting],
+    claims: [{ issue: 4, pullRequest: "none" }],
+  });
+  assert.deepEqual(released[0], { kind: "release", ...at(4) });
+  // The release removes the running label; the owner's answer removes needs input.
+  waiting.labels = waiting.labels.filter(
+    (label) => !["factory:running", "factory:needs-input"].includes(label),
+  );
+  assert.deepEqual(decide({ issues: [waiting] }), [
+    { kind: "claim", ...at(4) },
+    {
+      kind: "launch",
+      ...at(4),
+      provider: "claude-code",
+      model: "claude-sonnet-5-5",
+      effort: "high",
+      attempt: 1,
+    },
+  ]);
+});
+
+test("a failed first attempt waits for an unreadable readiness role, including its parent's, then retries", () => {
+  for (const orphaned of [false, true])
+    for (const parent of [false, true]) {
+      const waiting = issue(4, claimed);
+      const issues = parent
+        ? [
+            waiting,
+            issue(3, undefined, { subIssues: [{ number: 4, state: "open" }] }),
+          ]
+        : [waiting];
+      if (parent) waiting.nativeParent = 3;
+      const authorizing = parent ? issues[1] : waiting;
+      authorizing.ready = {
+        at: now,
+        actor: { kind: "user", login: "owner", role: null },
+      };
+      const claims: Claim[] = [{ issue: 4, pullRequest: "none" }];
+      const observed = orphaned
+        ? { issues, claims }
+        : { issues, runs: [run(4, { ended: none })] };
+      const decisions = decide(observed);
+      assert.equal(
+        decisions.some(({ kind }) => kind === "fail"),
+        false,
+      );
+      assert.deepEqual(launches(decisions), []);
+      assert.match(skipOf(decisions, 4)!, /^retry waits: .*readiness waits:/);
+      authorizing.ready.actor = owner;
+      assert.equal(launches(decide(observed))[0].attempt, 2);
+    }
 });

@@ -9,6 +9,11 @@ import {
   type Policy,
   type Readiness,
 } from "./readiness.ts";
+import {
+  runOutcome,
+  type Observation,
+  type PullRequestState,
+} from "./run-outcome.ts";
 
 // An issue's number in its own repository, or `<owner>/<name>#<n>` in another.
 export type IssueId = number | string;
@@ -31,12 +36,6 @@ export type Issue = {
   blockedBy: { number: number; state: "open" | "closed" }[];
 };
 
-// The state of the pull requests for an issue: merged once the issue closed,
-// merged-issue-open when one merged but the issue is still open, else open
-// while one is open.
-export type PullRequestState =
-  "open" | "merged" | "merged-issue-open" | "closed" | "none";
-
 // A run the host started, in the repository named `<owner>/<name>`. `ended`
 // is null while its sandbox runs, and interrupted once a factory restart
 // stopped its sandbox.
@@ -56,6 +55,7 @@ export type Run = {
     | { interrupted: true }
     | {
         timedOut: boolean;
+        orphaned?: true;
         pullRequest: PullRequestState;
         // Paths under the host's unpushable paths in commits the remote lacks.
         unpushedChanges?: string[];
@@ -63,7 +63,11 @@ export type Run = {
 };
 
 // A running-labelled issue that no run on the host holds.
-export type Claim = { issue: number; pullRequest: PullRequestState };
+export type Claim = {
+  issue: number;
+  pullRequest: PullRequestState;
+  unpushedChanges?: string[];
+};
 
 // One repository the host configuration lists, as this pass read it: its open
 // issues and its claims. A paused repository claims and launches nothing,
@@ -128,11 +132,6 @@ export type Decision = { repository: string; issue: number } & (
   | { kind: "release" }
 );
 
-// Running the issue again could redo merged work, so this failure never
-// retries.
-const mergedIssueOpen =
-  "its pull request merged without closing the issue; close the issue if that finished it";
-
 export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   const decisions: Decision[] = [];
   const running = runningCounts(snapshot);
@@ -156,8 +155,27 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   }
   for (const repository of snapshot.repositories)
     for (const claim of repository.claims)
-      if (!closing.has(key(repository.name, claim.issue)))
-        decisions.push(...settleClaim(repository, claim));
+      if (!closing.has(key(repository.name, claim.issue))) {
+        const settled = settleOutcome(
+          {
+            repository: repository.name,
+            issue: claim.issue,
+            attempt: 1,
+            log: null,
+          },
+          {
+            ended: "orphaned",
+            pullRequest: claim.pullRequest,
+            unpushedChanges: claim.unpushedChanges,
+          },
+          repository,
+          snapshot,
+          models,
+        );
+        if ("failure" in settled)
+          retries.set(key(repository.name, claim.issue), settled);
+        else decisions.push(...settled);
+      }
   for (const { repository, issue } of oldestFirst(snapshot.repositories)) {
     const at = { repository: repository.name, issue: issue.number };
     if (closing.has(key(repository.name, issue.number))) {
@@ -253,7 +271,10 @@ function runningCounts(snapshot: Snapshot): Map<string, number> {
 }
 
 // A failed first run that may retry on the retry model.
-type Retry = { run: Run; failure: string; model: Model };
+type SettlingRun = Pick<Run, "repository" | "issue" | "attempt"> & {
+  log: string | null;
+};
+type Retry = { run: SettlingRun; failure: string; model: Model };
 
 // A running run over the time limit is stopped. An ended run releases its
 // claim once its issue closes and keeps it while the pull request is open. A
@@ -275,32 +296,65 @@ function settle(
       : [];
   }
   if ("interrupted" in run.ended) return { interrupted: run };
-  if (run.ended.pullRequest !== "open" && needsInput(run, snapshot))
+  const repository = snapshot.repositories.find(
+    (repository) => repository.name === run.repository,
+  );
+  // Unreadable repositories supply only running sandboxes.
+  if (!repository) return [];
+  return settleOutcome(
+    run,
+    {
+      ended: run.ended.orphaned
+        ? "orphaned"
+        : run.ended.timedOut
+          ? "timed out"
+          : "exited",
+      pullRequest: run.ended.pullRequest,
+      unpushedChanges: run.ended.unpushedChanges,
+    },
+    repository,
+    snapshot,
+    models,
+  );
+}
+
+// Runs and orphaned claims settle through the same outcome table. The core
+// owns retries and gates; the outcome module owns observation precedence.
+function settleOutcome(
+  run: SettlingRun,
+  observation: Pick<Observation, "ended" | "pullRequest" | "unpushedChanges">,
+  repository: Repository,
+  snapshot: Snapshot,
+  models: Models,
+): Decision[] | Retry {
+  const at = { repository: run.repository, issue: run.issue };
+  const issue = repository.issues.find((issue) => issue.number === run.issue);
+  const outcome = runOutcome(
+    {
+      ...observation,
+      issueClosed: !issue,
+      needsInput:
+        issue?.labels.includes(repository.configuration.labels.needsInput) ??
+        false,
+    },
+    snapshot.settings.timeLimitMinutes,
+  );
+  if (outcome.kind === "awaiting merge") return [{ kind: "keep", ...at }];
+  if (outcome.kind === "done" || outcome.kind === "needs input")
     return [{ kind: "release", ...at }];
-  if (run.ended.pullRequest === "merged-issue-open")
-    return [{ kind: "fail", ...at, failure: mergedIssueOpen, log: run.log }];
-  if (!run.ended.timedOut && run.ended.pullRequest === "merged")
-    return [{ kind: "release", ...at }];
-  if (run.ended.pullRequest === "open") return [{ kind: "keep", ...at }];
-  if (!run.ended.timedOut && run.ended.unpushedChanges?.length)
-    return [
-      {
-        kind: "fail",
-        ...at,
-        failure:
-          "the run's branch changes paths the factory's GitHub App can't push",
-        unpushedChanges: run.ended.unpushedChanges,
-        log: run.log,
-      },
-    ];
-  const failure = run.ended.timedOut
-    ? `the run exceeded ${overtime}`
-    : "the run ended without an open pull request";
-  const fail: Decision = { kind: "fail", ...at, failure, log: run.log };
-  if (run.attempt === 2) return [fail];
+  const fail: Decision = {
+    kind: "fail",
+    ...at,
+    failure: outcome.failure,
+    log: run.log,
+    ...(outcome.unpushedChanges && {
+      unpushedChanges: outcome.unpushedChanges,
+    }),
+  };
+  if (outcome.final || run.attempt === 2) return [fail];
   const model = models.resolveModel(snapshot.settings.retryModel);
   if ("error" in model) return [fail];
-  return { run, failure, model };
+  return { run, failure: outcome.failure, model };
 }
 
 // A retry takes its issue's turn in oldest-first order. It launches only
@@ -318,7 +372,16 @@ function relaunch(
   const reason = issue.labels.includes(labels.ready)
     ? exclusion(issue, repository, snapshot.settings)
     : `it no longer carries ${labels.ready}`;
-  if (reason) return [unretried(retry, reason)];
+  if (reason) {
+    const readiness = readinessExclusion(
+      issue,
+      repository.issues,
+      policy(repository, snapshot.settings),
+    );
+    if (issue.labels.includes(labels.ready) && readiness?.waiting)
+      return [{ kind: "skip", ...at, reason: `retry waits: ${reason}` }];
+    return [unretried(retry, reason)];
+  }
   const { provider } = retry.model;
   const gated = paused(repository) ?? gate(provider, running, snapshot);
   if (gated) return [{ kind: "skip", ...at, reason: `retry waits: ${gated}` }];
@@ -329,7 +392,7 @@ function relaunch(
       ...at,
       ...retry.model,
       attempt: 2,
-      retry: { failure: retry.failure, log: retry.run.log },
+      retry: { failure: retry.failure, log: retry.run.log ?? "" },
     },
   ];
 }
@@ -374,45 +437,6 @@ function unretried({ run, failure }: Retry, reason: string): Decision {
     failure: `${failure}, and its retry did not launch: ${reason}`,
     log: run.log,
   };
-}
-
-// A claim no run holds stays while its pull request is open and is released
-// once its issue closes or needs input. Any other claim, such as one left by
-// a factory restart, fails its issue.
-function settleClaim(
-  repository: Repository,
-  { issue, pullRequest }: Claim,
-): Decision[] {
-  const at = { repository: repository.name, issue };
-  if (pullRequest === "open") return [];
-  if (
-    repository.issues.some(
-      (open) =>
-        open.number === issue &&
-        open.labels.includes(repository.configuration.labels.needsInput),
-    )
-  )
-    return [{ kind: "release", ...at }];
-  if (pullRequest === "merged") return [{ kind: "release", ...at }];
-  const failure =
-    pullRequest === "merged-issue-open"
-      ? mergedIssueOpen
-      : pullRequest === "closed"
-        ? "its pull request closed without merging"
-        : "no factory run or open pull request holds its claim";
-  return [{ kind: "fail", ...at, failure, log: null }];
-}
-
-function needsInput(run: Run, snapshot: Snapshot): boolean {
-  return snapshot.repositories.some(
-    (repository) =>
-      repository.name === run.repository &&
-      repository.issues.some(
-        (issue) =>
-          issue.number === run.issue &&
-          issue.labels.includes(repository.configuration.labels.needsInput),
-      ),
-  );
 }
 
 function paused(repository: Repository): string | null {
@@ -490,7 +514,7 @@ function exclusion(
     repository.issues,
     policy(repository, settings),
   );
-  if (held) return held;
+  if (held) return held.reason;
   if (issue.labels.includes(labels.failed))
     return `labelled ${labels.failed}; remove the label to run it again`;
   const blockers = issue.blockedBy.filter(

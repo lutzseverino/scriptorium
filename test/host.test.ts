@@ -988,43 +988,45 @@ test("a failed first run retries with its failure and log tail after the provide
   ]);
 });
 
-test("a run whose pull request is open leaves the host and frees its cap slot", async (t) => {
-  const run = host(t, {
-    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
-    remotes: { "acme/widgets": remote(t, factoryFiles) },
-    caps: { "claude-code": 1, codex: 1 },
+for (const timedOut of [false, true])
+  test(`a run whose pull request is open keeps its claim and frees its cap slot, timed out: ${timedOut}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      caps: { "claude-code": 1, codex: 1 },
+    });
+    await run.tick();
+    assert.deepEqual(run.status().repositories[0].held, [
+      { issue: 5, reason: "claude-code already runs its cap of 1 agent" },
+    ]);
+    run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+    if (timedOut) run.clock.now = new Date("2026-10-09T16:00:00Z");
+    run.launched[0].finish();
+    await settled();
+    const decisions = await run.tick();
+    assert.deepEqual(
+      decisions.filter((decision) => decision.kind !== "skip"),
+      [
+        { kind: "keep", repository: "acme/widgets", issue: 4 },
+        { kind: "claim", repository: "acme/widgets", issue: 5 },
+        {
+          kind: "launch",
+          repository: "acme/widgets",
+          issue: 5,
+          provider: "claude-code",
+          model: "claude-sonnet-5-5",
+          effort: "high",
+          attempt: 1,
+        },
+      ],
+    );
+    assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+      "ready-for-agent",
+      "factory:running",
+    ]);
+    await run.tick();
+    assert.equal(run.launched.length, 2, "the awaiting claim holds no slot");
   });
-  await run.tick();
-  assert.deepEqual(run.status().repositories[0].held, [
-    { issue: 5, reason: "claude-code already runs its cap of 1 agent" },
-  ]);
-  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
-  run.launched[0].finish();
-  await settled();
-  const decisions = await run.tick();
-  assert.deepEqual(
-    decisions.filter((decision) => decision.kind !== "skip"),
-    [
-      { kind: "keep", repository: "acme/widgets", issue: 4 },
-      { kind: "claim", repository: "acme/widgets", issue: 5 },
-      {
-        kind: "launch",
-        repository: "acme/widgets",
-        issue: 5,
-        provider: "claude-code",
-        model: "claude-sonnet-5-5",
-        effort: "high",
-        attempt: 1,
-      },
-    ],
-  );
-  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
-    "ready-for-agent",
-    "factory:running",
-  ]);
-  await run.tick();
-  assert.equal(run.launched.length, 2, "the awaiting claim holds no slot");
-});
 
 for (const scenario of [
   "absent",
@@ -1033,6 +1035,8 @@ for (const scenario of [
   "pushed workflow with local docs",
   "pushed workflow with local workflow",
   "contains",
+  "diverged local workflow",
+  "diverged pushed workflow",
   "ordinary",
   "removed",
   "reverted",
@@ -1089,12 +1093,39 @@ for (const scenario of [
       push();
       git(work, ["reset", "--quiet", "--hard", head]);
     }
+    if (scenario === "diverged local workflow") {
+      const local = git(work, ["rev-parse", "HEAD"]).trim();
+      git(work, ["reset", "--quiet", "--hard", "HEAD^"]);
+      commit({ "remote.md": "remote change\n" }, "remote divergence");
+      push();
+      git(work, ["reset", "--quiet", "--hard", local]);
+    }
+    if (scenario === "diverged pushed workflow") {
+      push();
+      const shared = git(work, ["rev-parse", "HEAD"]).trim();
+      commit({ "remote.md": "remote change\n" }, "remote divergence");
+      push();
+      git(work, ["reset", "--quiet", "--hard", shared]);
+      commit({ "README.md": "local change\n" }, "local divergence");
+    }
+    if (scenario.startsWith("diverged")) {
+      assert.equal(
+        git(work, [
+          "rev-list",
+          "--left-right",
+          "--count",
+          "HEAD...origin/factory/issue-4",
+        ]).trim(),
+        "1\t1",
+      );
+    }
     run.launched[0].finish();
     await settled();
     const decisions = await run.tick();
     const failing = [
       "absent",
       "behind",
+      "diverged local workflow",
       "pushed workflow with local workflow",
       "removed",
       "reverted",
@@ -1747,4 +1778,220 @@ test("a parent's readiness releases its tickets and closes it only when it count
   assert.equal(run.github.find("acme/widgets", 5).state, "OPEN");
   assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
   assert.equal(run.github.find("acme/widgets", 6).state, "CLOSED");
+});
+
+test("a timed-out run fails at once when its branch has unpushable commits", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const clone = run.clone("acme/widgets");
+  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  write(work, { ".github/workflows/new.yml": "changed\n" });
+  git(work, ["add", "."]);
+  git(work, ["commit", "--quiet", "-m", "workflow change"]);
+  run.clock.now = new Date("2026-10-09T16:00:00Z");
+  run.launched[0].finish();
+  await settled();
+  const [decision] = await run.tick();
+  assert.equal(decision.kind, "fail");
+  assert.match(
+    run.github.find("acme/widgets", 4).comments[0],
+    /Unpushable: `.github\/workflows\/new.yml`/,
+  );
+  assert.equal(run.launched.length, 1);
+});
+
+test("a second attempt awaiting merge cannot retry after its pull request closes, even across restart", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.pullRequests.push("OPEN");
+  run.launched[1].finish();
+  await settled();
+  await run.tick();
+  issue.pullRequests = ["CLOSED"];
+  const restarted = run.restart();
+  const [decision] = await restarted.tick();
+  assert.equal(decision.kind, "fail");
+  assert.equal(run.launched.length, 2);
+  assert.match(issue.comments[0], /attempt 2/);
+});
+
+for (const ended of ["timed out", "orphaned"] as const)
+  test(`needs input on a ${ended} second attempt releases and later starts attempt 1 on the existing branch`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const clone = run.clone("acme/widgets");
+    const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+    git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+    write(work, { "README.md": "work to continue\n" });
+    git(work, ["commit", "--quiet", "-am", "existing work"]);
+    const head = git(work, ["rev-parse", "HEAD"]).trim();
+    run.launched[0].finish();
+    await settled();
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    issue.labels.push("factory:needs-input");
+    let active: Pick<ReturnType<typeof createHost>, "tick"> = run;
+    if (ended === "timed out") {
+      run.clock.now = new Date("2026-10-09T16:00:00Z");
+      run.launched[1].finish();
+      await settled();
+    } else active = run.restart();
+    const [decision] = await active.tick();
+    assert.deepEqual(decision, {
+      kind: "release",
+      repository: "acme/widgets",
+      issue: 4,
+    });
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:needs-input"]);
+    assert.deepEqual(issue.comments, []);
+    issue.labels = ["ready-for-agent"];
+    const decisions = await active.tick();
+    const launch = decisions.find((decision) => decision.kind === "launch");
+    assert.equal(launch?.attempt, 1);
+    assert.equal(run.launched.length, 3);
+    assert.equal(run.launched[2].options.prompt, "/implement #4");
+    assert.deepEqual(run.launched[2].options.branchStrategy, {
+      type: "branch",
+      branch: "factory/issue-4",
+    });
+    assert.equal(git(work, ["rev-parse", "HEAD"]).trim(), head);
+    assert.equal(recordOf(run.state, 4, 1).attempt, 1);
+  });
+
+test("an orphaned second attempt with no interrupted record fails after startup stops its sandbox", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  const restarted = run.restart();
+  const [decision] = await restarted.tick();
+  assert.equal(decision.kind, "fail");
+  assert.equal(run.launched.length, 2);
+  assert.equal(run.launched[1].removed, true);
+  assert.match(run.github.find("acme/widgets", 4).comments[0], /attempt 2/);
+  assert.equal(recordOf(run.state, 4, 2).settled, true);
+});
+
+test("a claim with no run record observes its branch and fails unpushable commits without retry", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: [] }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const clone = run.clone("acme/widgets");
+  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  write(work, { ".github/workflows/new.yml": "changed\n" });
+  git(work, ["add", "."]);
+  git(work, ["commit", "--quiet", "-m", "unpushable work"]);
+  run.github.find("acme/widgets", 4).labels = [
+    "ready-for-agent",
+    "factory:running",
+  ];
+  // The next process has no factory-owned run record for this claim.
+  const [decision] = await run.restart().tick();
+  assert.equal(decision.kind, "fail");
+  assert.equal(run.launched.length, 0);
+  assert.match(
+    run.github.find("acme/widgets", 4).comments[0],
+    /Unpushable: `.github\/workflows\/new.yml`/,
+  );
+});
+
+test("claim settling reads pull requests separately from issue closure and gives merged work precedence over needs input", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          state: "CLOSED",
+          labels: ["factory:running"],
+          pullRequests: ["OPEN"],
+        },
+        {
+          number: 5,
+          state: "CLOSED",
+          labels: ["factory:running"],
+          pullRequests: [],
+        },
+        {
+          number: 6,
+          labels: ["factory:running", "factory:needs-input"],
+          pullRequests: ["MERGED"],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  assert.deepEqual(await run.tick(), [
+    { kind: "keep", repository: "acme/widgets", issue: 4 },
+    { kind: "release", repository: "acme/widgets", issue: 5 },
+    {
+      kind: "fail",
+      repository: "acme/widgets",
+      issue: 6,
+      failure:
+        "its pull request merged without closing the issue; close the issue if that finished it",
+      log: null,
+    },
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "factory:running",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 5).labels, []);
+  assert.deepEqual(run.github.find("acme/widgets", 6).labels, [
+    "factory:needs-input",
+    "factory:failed",
+  ]);
+  assert.equal(run.launched.length, 0);
+});
+
+test("an orphaned claim waits for a failed role lookup without a failure comment or losing its retry", async (t) => {
+  const roles: Record<string, string | Error> = {
+    owner: new Error("HTTP 502"),
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["ready-for-agent", "factory:running"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    roles,
+  });
+  const decisions = await run.tick();
+  assert.equal(
+    decisions.some(({ kind }) => kind === "fail"),
+    false,
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "ready-for-agent",
+    "factory:running",
+  ]);
+  assert.equal(run.launched.length, 0);
+  roles.owner = "admin";
+  const launch = (await run.tick()).find(
+    (decision) => decision.kind === "launch",
+  );
+  assert.equal(launch?.attempt, 2);
+  assert.equal(run.launched.length, 1);
 });
