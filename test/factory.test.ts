@@ -50,7 +50,24 @@ function repository(
   issues: Issue[],
   details: Partial<Repository> = {},
 ): Repository {
-  return { name, paused: null, issues, claims: [], ...details };
+  return {
+    name,
+    configuration: {
+      version: 1,
+      labels: {
+        ready: "ready-for-agent",
+        running: "factory:running",
+        failed: "factory:failed",
+        needsInput: "factory:needs-input",
+      },
+      modelLabelPrefix: "model:",
+      prompt: "{skillPrefix}implement #{issue}",
+    },
+    paused: null,
+    issues,
+    claims: [],
+    ...details,
+  };
 }
 
 // A snapshot of one repository, acme/widgets, unless `repositories` names
@@ -317,7 +334,7 @@ test("a sub-issue waits while its parent is not ready for agent", () => {
     for (const number of [5, 6])
       assert.equal(
         skipOf(decisions, number),
-        "sub-issue of #3, which is not ready for agent; apply ready-for-agent to #3 once its tickets are published",
+        "sub-issue of #3, which is not ready; apply ready-for-agent to #3 once its tickets are published",
       );
   }
 });
@@ -1017,7 +1034,7 @@ test("a retry whose issue is no longer eligible fails it instead", () => {
       {
         kind: "fail",
         issue: 7,
-        failure: `${failed}, and its retry did not launch: sub-issue of #8, which is not ready for agent; apply ready-for-agent to #8 once its tickets are published`,
+        failure: `${failed}, and its retry did not launch: sub-issue of #8, which is not ready; apply ready-for-agent to #8 once its tickets are published`,
       },
       {
         kind: "fail",
@@ -1208,4 +1225,52 @@ test("timeouts ignore unpushable changes and keep their retry", () => {
     failure.kind === "fail" && failure.failure,
     "the run exceeded the time limit of 240 minutes",
   );
+});
+
+test("each repository uses its own labels and model label prefix", () => {
+  const decisions = decide({
+    repositories: [
+      repository(
+        widgets,
+        [
+          issue(1, ["queued", "agent:gpt-5.5"]),
+          issue(2, ["queued", "broken"]),
+          issue(3, ["queued", "question"]),
+          issue(4, ["ready-for-agent"]),
+        ],
+        {
+          configuration: {
+            version: 1,
+            labels: {
+              ready: "queued",
+              running: "working",
+              failed: "broken",
+              needsInput: "question",
+            },
+            modelLabelPrefix: "agent:",
+            prompt: "{skillPrefix}ship #{issue}",
+          },
+        },
+      ),
+    ],
+  });
+  assert.deepEqual(launches(decisions), [
+    {
+      kind: "launch",
+      ...at(1),
+      provider: "codex",
+      model: "gpt-5.5",
+      effort: "high",
+      attempt: 1,
+    },
+  ]);
+  assert.equal(
+    skipOf(decisions, 2),
+    "labelled broken; remove the label to run it again",
+  );
+  assert.equal(
+    skipOf(decisions, 3),
+    "labelled question; answer the question and remove the label to run it again",
+  );
+  assert.equal(skipOf(decisions, 4), undefined);
 });

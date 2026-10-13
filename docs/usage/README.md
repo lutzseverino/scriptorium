@@ -4,5 +4,7 @@ This directory documents the contracts a repository and host use with the factor
 
 - [Host installation and configuration](host.md): starting the process, the
   host configuration schema, the state directory, and the status file.
+- [Repository factory configuration](factory-configuration.md): repository
+  labels, model label prefix, prompt template, pauses, and protection.
 - [Sandbox image contract](sandbox-image.md): repository toolchain requirements,
   the factory's agent layer, pinned tools, and image reuse.

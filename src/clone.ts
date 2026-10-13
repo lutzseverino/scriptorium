@@ -22,6 +22,8 @@ export async function updateClone(
     await git(dirname(clone), ["clone", "--quiet", url, clone]);
   } else {
     await git(clone, ["fetch", "--quiet", "--prune", "origin"]);
+    // Fetch alone leaves origin/HEAD pointing at the old default branch.
+    await git(clone, ["remote", "set-head", "origin", "--auto"]);
     await git(clone, [
       "reset",
       "--quiet",

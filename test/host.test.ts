@@ -106,15 +106,25 @@ function fakeGitHub(
     nodes: labels.map((name) => ({ name })),
   });
 
+  const calls: string[][] = [];
+  const labels = new Map<string, Set<string>>();
+
   // Edits GitHub refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
 
   async function gh(token: string, args: string[]): Promise<string> {
+    calls.push(args);
     const repository =
       args[0] === "api"
         ? `${field(args, "owner")}/${field(args, "name")}`
         : value(args, "--repo");
     assert.equal(token, tokens[repository], `${repository}'s token`);
+    if (args[0] === "label" && args[1] === "create") {
+      const existing = labels.get(repository) ?? new Set<string>();
+      existing.add(args[2]);
+      labels.set(repository, existing);
+      return "";
+    }
     if (args[0] === "api") {
       const query = args.find((arg) => arg.startsWith("query="))!;
       if (query.includes("closedByPullRequestsReferences")) {
@@ -206,7 +216,7 @@ function fakeGitHub(
     throw new Error(`unexpected gh ${args.join(" ")}`);
   }
 
-  return { gh, find, refused };
+  return { gh, find, refused, calls, labels };
 }
 
 // Sandcastle that records each run, with the token the sandbox would read,
@@ -369,7 +379,19 @@ function host(
   };
 }
 
+const conventions = {
+  version: 1,
+  labels: {
+    ready: "ready-for-agent",
+    running: "factory:running",
+    failed: "factory:failed",
+    needsInput: "factory:needs-input",
+  },
+  modelLabelPrefix: "model:",
+  prompt: "{skillPrefix}implement #{issue}",
+};
 const factoryFiles = {
+  ".factory/config.json": JSON.stringify(conventions),
   ".factory/Dockerfile": toolchain,
   "README.md": "base\n",
   ".github/workflows/old.yml": "old\n",
@@ -527,7 +549,10 @@ test("the status file lists each repository's state and its held issues", async 
     },
     remotes: {
       "acme/widgets": remote(t, factoryFiles),
-      "acme/gadgets": remote(t, { "README.md": "no factory\n" }),
+      "acme/gadgets": remote(t, {
+        ".factory/config.json": JSON.stringify(conventions),
+        "README.md": "no factory\n",
+      }),
       "acme/tools": remote(t, factoryFiles),
     },
     tokens: {
@@ -841,6 +866,245 @@ for (const scenario of [
   });
 }
 
+test("the configured template and state labels drive first attempts, retries and failures", async (t) => {
+  const configuration = {
+    version: 1,
+    labels: {
+      ready: "queued",
+      running: "working",
+      failed: "broken",
+      needsInput: "question",
+    },
+    modelLabelPrefix: "agent:",
+    prompt: "Handle #{issue} using {skillPrefix}ship; issue={issue}",
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: ["queued", "agent:gpt-5.5"] }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify(configuration),
+      }),
+    },
+    configuration: {
+      models: { default: "claude-sonnet-5-5", retry: "claude-opus-5-5" },
+    },
+  });
+  await run.tick();
+  assert.equal(
+    run.launched[0].options.prompt,
+    "Handle #4 using $ship; issue=4",
+  );
+  assert.deepEqual(
+    run.github.labels.get("acme/widgets"),
+    new Set(["working", "broken", "question"]),
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "queued",
+    "agent:gpt-5.5",
+    "working",
+  ]);
+  const log = (run.launched[0].options.logging as { path: string }).path;
+  writeFileSync(log, "failure details\n");
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  assert.equal(
+    run.launched[1].options.prompt,
+    [
+      "Handle #4 using /ship; issue=4",
+      "First attempt failure: the run ended without an open pull request",
+      "First attempt log tail:\nfailure details\n",
+    ].join("\n\n"),
+  );
+  run.launched[1].finish();
+  await settled();
+  await run.tick();
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "queued",
+    "agent:gpt-5.5",
+    "broken",
+  ]);
+  assert.match(
+    run.github.find("acme/widgets", 4).comments[0],
+    /Remove `broken`/,
+  );
+  assert.equal(
+    run.github.calls.some((args) =>
+      args.some(
+        (arg, index) =>
+          ["--add-label", "--remove-label"].includes(arg) &&
+          args[index + 1] === "queued",
+      ),
+    ),
+    false,
+  );
+});
+
+for (const fault of [
+  "missing configuration",
+  "invalid configuration",
+  "missing Dockerfile",
+])
+  test(`${fault} pauses pickup while existing runs settle and other repositories continue`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [{ number: 2 }, { number: 3 }],
+        "acme/gadgets": [{ number: 4 }],
+      },
+      remotes: {
+        "acme/widgets": bare,
+        "acme/gadgets": remote(t, factoryFiles),
+      },
+      caps: { "claude-code": 1, codex: 1 },
+    });
+    await run.tick();
+    run.github.find("acme/widgets", 2).state = "CLOSED";
+    run.launched[0].finish();
+    await settled();
+    const work = join(dirname(bare), "work");
+    if (fault === "invalid configuration")
+      write(work, { ".factory/config.json": "{}" });
+    else
+      git(work, [
+        "rm",
+        "--quiet",
+        fault === "missing configuration"
+          ? ".factory/config.json"
+          : ".factory/Dockerfile",
+      ]);
+    git(work, ["commit", "--quiet", "-am", "break factory input"]);
+    git(work, ["push", "--quiet", bare, "main"]);
+    const decisions = await run.tick();
+    assert.ok(
+      decisions.some(
+        (decision) =>
+          decision.kind === "release" &&
+          decision.repository === "acme/widgets" &&
+          decision.issue === 2,
+      ),
+    );
+    assert.deepEqual(run.github.find("acme/widgets", 2).labels, [
+      "ready-for-agent",
+    ]);
+    assert.deepEqual(run.github.find("acme/widgets", 3).labels, [
+      "ready-for-agent",
+    ]);
+    assert.deepEqual(
+      run.launched.map(({ options }) => options.name),
+      ["acme/widgets#2", "acme/gadgets#4"],
+    );
+    const status = run.status().repositories[0];
+    assert.equal(status.state, "paused");
+    assert.match(
+      status.reason,
+      fault === "missing Dockerfile"
+        ? /no .factory\/Dockerfile/
+        : /factory configuration.*(?:unreadable|invalid)/,
+    );
+    assert.ok(
+      run.reports.some((line) =>
+        line.includes(`acme/widgets is paused: ${status.reason}`),
+      ),
+    );
+    assert.ok(status.held.some((held: { issue: number }) => held.issue === 3));
+    // Restoring the default branch resumes pickup on the next pass.
+    git(work, ["revert", "--no-edit", "HEAD"]);
+    git(work, ["push", "--quiet", bare, "main"]);
+    run.github.find("acme/gadgets", 4).state = "CLOSED";
+    run.launched[1].finish();
+    await settled();
+    await run.tick();
+    assert.equal(run.status().repositories[0].state, "running");
+    assert.equal(run.launched[2].options.name, "acme/widgets#3");
+  });
+
+test("a repository without configuration at startup pauses without guessing conventions", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, { ".factory/Dockerfile": toolchain }),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+  });
+  await run.tick();
+  assert.equal(run.status().repositories[0].state, "paused");
+  assert.match(
+    run.status().repositories[0].reason,
+    /factory configuration.*unreadable/,
+  );
+  assert.equal(run.github.labels.has("acme/widgets"), false);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "ready-for-agent",
+  ]);
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/gadgets#3"],
+  );
+});
+
+test("prompt edits on the default branch apply on the next pass, ignoring run branches", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const work = join(dirname(bare), "work");
+  write(work, {
+    ".factory/config.json": JSON.stringify({
+      ...conventions,
+      prompt: "{skillPrefix}ship #{issue}",
+    }),
+  });
+  git(work, ["commit", "--quiet", "-am", "new prompt"]);
+  git(work, ["push", "--quiet", bare, "main"]);
+  git(work, ["checkout", "--quiet", "-b", "factory/issue-4"]);
+  write(work, { ".factory/config.json": "{}" });
+  git(work, ["commit", "--quiet", "-am", "invalid run branch config"]);
+  git(work, ["push", "--quiet", bare, "factory/issue-4"]);
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  assert.equal(
+    run.launched[1].options.prompt,
+    "$ship #4\n\nFirst attempt failure: the run ended without an open pull request",
+  );
+});
+
+test("configuration follows a changed remote default branch on the next pass", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const work = join(dirname(bare), "work");
+  git(work, ["checkout", "--quiet", "-b", "next"]);
+  write(work, {
+    ".factory/config.json": JSON.stringify({
+      ...conventions,
+      prompt: "{skillPrefix}ship #{issue}",
+    }),
+  });
+  git(work, ["commit", "--quiet", "-am", "new default configuration"]);
+  git(work, ["push", "--quiet", bare, "next"]);
+  git(bare, ["symbolic-ref", "HEAD", "refs/heads/next"]);
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  assert.equal(
+    run.launched[1].options.prompt,
+    "$ship #4\n\nFirst attempt failure: the run ended without an open pull request",
+  );
+});
+
 const recordOf = (state: string, issue: number, attempt: number) =>
   JSON.parse(
     readFileSync(
@@ -976,4 +1240,42 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
     /`codex\/gpt-5\.5@high`, attempt 2/,
   );
   assert.equal(run.launched.length, 3);
+});
+
+test("recovered runs retain configured state labels while invalid configuration pauses relaunch", async (t) => {
+  const configuration = {
+    ...conventions,
+    labels: {
+      ready: "queued",
+      running: "working",
+      failed: "broken",
+      needsInput: "question",
+    },
+  };
+  const bare = remote(t, {
+    ...factoryFiles,
+    ".factory/config.json": JSON.stringify(configuration),
+  });
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["queued"] }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  run.interrupt();
+  const work = join(dirname(bare), "work");
+  write(work, { ".factory/config.json": "{}" });
+  git(work, ["commit", "--quiet", "-am", "invalid configuration"]);
+  git(work, ["push", "--quiet", bare, "main"]);
+  const restarted = run.restart();
+  const decisions = await restarted.tick();
+  assert.equal(decisions[0]?.kind, "skip");
+  assert.equal(run.status().repositories[0].state, "paused");
+  assert.equal(run.launched.length, 1);
+  run.github.find("acme/widgets", 4).labels.push("question");
+  await restarted.tick();
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "queued",
+    "question",
+  ]);
+  assert.equal(run.launched.length, 1);
 });

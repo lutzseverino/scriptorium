@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "labels": {
+    "ready": "queued",
+    "running": "working",
+    "failed": "broken",
+    "needsInput": "question"
+  },
+  "modelLabelPrefix": "agent:",
+  "prompt": "Handle #{issue} using {skillPrefix}ship"
+}

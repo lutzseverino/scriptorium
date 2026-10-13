@@ -1,0 +1,1 @@
+{ "labels": { "ready": "queued", "running": "working", "failed": "broken" } }

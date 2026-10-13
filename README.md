@@ -27,8 +27,10 @@ and [contribution guidelines](../CONTRIBUTING.md) for delivery.
 
 ## Configuration
 
-The operator owns the host configuration; each repository owns its sandbox
-Dockerfile, `.factory/Dockerfile`. Start the process with
+The operator owns the host configuration; each repository owns its factory
+configuration, `.factory/config.json`, and sandbox Dockerfile, `.factory/Dockerfile`.
+The [factory configuration schema](docs/usage/factory-configuration.md) names
+the required labels, model label prefix and prompt template. Start the process with
 `node src/main.ts <host configuration>`;
 [host installation and configuration](docs/usage/host.md) documents the host
 configuration schema, the state directory and the status file. The package's

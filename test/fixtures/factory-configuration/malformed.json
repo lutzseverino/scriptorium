@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "labels": {
+    "ready": [],
+    "running": null,
+    "failed": "",
+    "needsInput": " question "
+  },
+  "modelLabelPrefix": 3,
+  "prompt": "do work"
+}

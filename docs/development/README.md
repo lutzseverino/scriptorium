@@ -30,7 +30,12 @@ the real provider registry, a fake sandbox removal, and real Git clones of
 local bare remotes, so they need Git. The decision core's tests in
 `test/factory.test.ts` drive it with snapshots, and the host
 configuration's tests read the fixture files in
-`test/fixtures/host-configuration/`. The token test that runs the GitHub CLI
+`test/fixtures/host-configuration/`. Factory configuration validation reads
+the fixtures in `test/fixtures/factory-configuration/`; run it alone with
+`node --test test/factory-configuration.test.ts`. The host tests also cover
+repository-specific labels and prompts, configuration edits on the default
+branch, and run settling while configuration or the Dockerfile is missing.
+The token test that runs the GitHub CLI
 against the sandbox's token file skips when `gh` is not installed.
 
 Sandcastle is pinned at 0.12.0. Its public types reference

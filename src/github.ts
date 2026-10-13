@@ -1,6 +1,6 @@
 // One repository's GitHub reads and writes, through the GitHub CLI with that
 // repository's token.
-import { labels } from "./conventions.ts";
+import type { FactoryConfiguration } from "./factory-configuration.ts";
 import {
   reference,
   type Issue,
@@ -47,7 +47,11 @@ export function runBranch(issue: number): string {
 }
 
 // `repository` is `<owner>/<name>`.
-export function repositoryGitHub(repository: string, gh: GitHubCli) {
+export function repositoryGitHub(
+  repository: string,
+  labels: FactoryConfiguration["labels"],
+  gh: GitHubCli,
+) {
   const [owner, name] = repository.split("/");
   const identity = ["-F", `owner=${owner}`, "-F", `name=${name}`];
   // An issue as the decision core identifies it: its number in this
@@ -63,6 +67,26 @@ export function repositoryGitHub(repository: string, gh: GitHubCli) {
     gh(["issue", "edit", String(issue), "--repo", repository, ...args]);
 
   return {
+    async createStateLabels(): Promise<void> {
+      for (const [role, color] of [
+        ["running", "0052cc"],
+        ["failed", "b60205"],
+        ["needsInput", "fbca04"],
+      ] as const)
+        await gh([
+          "label",
+          "create",
+          labels[role],
+          "--repo",
+          repository,
+          "--color",
+          color,
+          "--description",
+          `Factory state: ${role}`,
+          "--force",
+        ]);
+    },
+
     async readIssues(): Promise<Issue[]> {
       const pages = JSON.parse(
         await gh([
