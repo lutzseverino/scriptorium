@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
-export const AGENT_LAYER_VERSION = "1";
+export const AGENT_LAYER_VERSION = "2";
 
 // The factory layer's label, which every sandbox container carries from its
 // image.

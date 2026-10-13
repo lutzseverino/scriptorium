@@ -45,10 +45,31 @@ helpers are installed system-wide, ahead of the toolchain's executables in
 Git's relocatable release keeps its helper executables under
 `/opt/factory/git/libexec/git-core`, selected by `GIT_EXEC_PATH`. Claude Code's
 auto-updater is disabled so its version stays with the factory release.
+
 The layer creates or updates `agent` with the host's UID and GID, prepares a
 writable `/home/agent`, and sets `HOME=/home/agent`, `USER agent`,
 `WORKDIR /home/agent`, and `ENTRYPOINT ["sleep", "infinity"]`. Sandcastle
 mounts a run's worktree and starts its agent within this long-running container.
+
+The layer also installs the provider policy, each provider's system policy,
+owned by root and readable but not writable by `agent`:
+
+- Codex requirements, `/etc/codex/requirements.toml`, whose `[features]` table
+  pins `apps`, `enable_mcp_apps` and `codex_apps_mcp_2026_07_28` off, so
+  Codex offers no ChatGPT apps or connectors.
+- Claude Code managed settings, `/etc/claude-code/managed-settings.json`, which
+  set `disableClaudeAiConnectors` to `true`, so Claude Code fetches no
+  claude.ai connectors.
+
+A run signs its agent in with the host's provider login. Without the provider
+policy, that login could reach the account's GitHub connector, which acts as
+the account's linked GitHub user, and give the agent a second GitHub identity
+beside the [minted installation token](host.md#sandbox-github-access), with
+none of the factory GitHub App's restrictions. System policy outranks the
+agent's own configuration, launch options and provider defaults, and the agent
+can write its own Codex and Claude Code homes but not this policy. The layer
+owns `/etc/codex` and `/etc/claude-code`: it replaces whatever the toolchain
+image put there.
 
 ## Image tags and compatibility
 

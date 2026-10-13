@@ -21,6 +21,57 @@ test(
   },
 );
 
+// Asserts the image's provider policy as agent: Codex's apps stay off whatever
+// the agent configures or passes, and agent can read but not change or replace
+// either policy file.
+function assertProviderPolicy(image: string): void {
+  const asAgent = (script: string) =>
+    execFileSync(
+      "docker",
+      ["run", "--rm", "--entrypoint", "sh", image, "-ec", script],
+      { encoding: "utf8", timeout: 60_000 },
+    );
+  const assertPinned = (list: string) => {
+    // Each row is the feature, its stage and its effective value.
+    const values = new Map(
+      list
+        .split("\n")
+        .map((row) => row.trim().split(/\s+/))
+        .filter((columns) => columns.length >= 3)
+        .map((columns) => [columns[0], columns.at(-1)]),
+    );
+    // A Codex pin that renames apps fails here instead of passing silently.
+    assert.equal(values.get("apps"), "false", "Codex lists apps as false");
+    for (const feature of ["enable_mcp_apps", "codex_apps_mcp_2026_07_28"])
+      if (values.has(feature)) assert.equal(values.get(feature), "false");
+  };
+  const [defaults, overridden] = asAgent(
+    "codex features list; echo ---; mkdir -p ~/.codex; " +
+      "printf '%s\\n' '[features]' 'apps = true' 'enable_mcp_apps = true' " +
+      "'codex_apps_mcp_2026_07_28 = true' > ~/.codex/config.toml; " +
+      "codex -c features.apps=true --enable apps features list",
+  ).split("\n---\n");
+  assertPinned(defaults!);
+  assertPinned(overridden!);
+  // Under `sh -e` a command negated with `!` never stops the script, so each
+  // refused change exits explicitly when it succeeds.
+  asAgent(
+    'refused() { if "$@" 2>/dev/null; then echo "agent could: $*" >&2; exit 1; fi; }; ' +
+      'test "$(id -un)" = agent; ' +
+      'test "$(ls -A /etc/codex)" = requirements.toml; ' +
+      'test "$(ls -A /etc/claude-code)" = managed-settings.json; ' +
+      "for path in /etc/codex/requirements.toml /etc/claude-code/managed-settings.json; do " +
+      'test -r "$path"; test "$(stat -c %U:%G:%a "$path")" = root:root:644; ' +
+      'test "$(stat -c %U:%G:%a "${path%/*}")" = root:root:755; ' +
+      'refused sh -c \'echo >> "$1"\' sh "$path"; refused rm -f "$path"; ' +
+      'refused mv "$path" "$path.moved"; refused mv "${path%/*}" "${path%/*}.moved"; done',
+  );
+  const settings = JSON.parse(
+    asAgent("cat /etc/claude-code/managed-settings.json"),
+  );
+  assert.equal(settings.disableClaudeAiConnectors, true);
+}
+
 test(
   "the factory layer runs its pinned tools as agent on a minimal Debian image without Node",
   {
@@ -55,6 +106,7 @@ test(
     assert.match(output, /gh version 2\.102\.0/);
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
     assert.match(output, /codex-cli 0\.162\.1/);
+    assertProviderPolicy(image);
     // The relocatable Git release must find its HTTPS helper, not just print a version.
     assert.match(
       execFileSync(
@@ -100,7 +152,14 @@ test(
   },
   async (t) => {
     const image = await buildSandboxImage({
-      dockerfile: "FROM node:24-bookworm\nUSER node\n",
+      // The toolchain's own policy files, which the factory layer replaces.
+      dockerfile:
+        "FROM node:24-bookworm\n" +
+        "RUN mkdir -p /etc/codex /etc/claude-code/managed-settings.d && " +
+        "printf '[features]\\napps = true\\n' > /etc/codex/requirements.toml && " +
+        "echo '{' > /etc/claude-code/managed-settings.d/toolchain.json && " +
+        "chown -R node /etc/codex /etc/claude-code\n" +
+        "USER node\n",
       uid: 1000,
       gid: 1000,
     });
@@ -127,6 +186,7 @@ test(
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
     assert.match(output, /codex-cli 0\.162\.1/);
     assert.match(output, /v24\./);
+    assertProviderPolicy(image);
   },
 );
 

@@ -34,6 +34,19 @@ RUN set -eu; \
     chmod 0755 /usr/local/bin/claude; \
     rm -rf /tmp/factory-tools
 
+# A run's provider login must add no GitHub identity beside the minted token,
+# so the provider policy, system policy that outranks the agent's own
+# configuration and flags, turns off the account's apps and connectors. The
+# layer owns these paths and replaces whatever the toolchain image put there.
+RUN set -eu; \
+    rm -rf /etc/codex /etc/claude-code; \
+    install -d -m 0755 /etc/codex /etc/claude-code; \
+    printf '%s\n' '[features]' 'apps = false' 'enable_mcp_apps = false' \
+      'codex_apps_mcp_2026_07_28 = false' > /etc/codex/requirements.toml; \
+    printf '%s\n' '{ "disableClaudeAiConnectors": true }' \
+      > /etc/claude-code/managed-settings.json; \
+    chmod 0644 /etc/codex/requirements.toml /etc/claude-code/managed-settings.json
+
 RUN set -eu; \
     uid_owner=$(getent passwd "$AGENT_UID" | cut -d: -f1); \
     if [ -n "$uid_owner" ] && [ "$uid_owner" != agent ]; then \

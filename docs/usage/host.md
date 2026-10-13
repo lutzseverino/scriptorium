@@ -145,6 +145,14 @@ whole, so a run longer than a token's lifetime keeps its GitHub access. The
 factory removes the directory when the run's agent exits, so a token outlives
 no run.
 
+That installation token is the sandbox agent's only GitHub identity, so a push
+the GitHub App can't make stays refused. The provider login a run signs in with
+adds none: the image's provider policy turns off ChatGPT apps for Codex and
+claude.ai connectors for Claude Code, which could otherwise act as the
+account's linked GitHub user. The
+[sandbox image contract](sandbox-image.md#factory-agent-layer) gives the
+details.
+
 ## Redaction
 
 The factory replaces with `<REDACTED>` every token the token command printed
