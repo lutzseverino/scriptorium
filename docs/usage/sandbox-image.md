@@ -66,5 +66,4 @@ image's `factory.agent.identity` label and rebuilds that tag if the host's
 identity changes. Images belong to that host's Docker daemon.
 
 A breaking change to this contract requires a new factory major under the
-[release procedure](../development/release.md#choose-the-version). Repo Canon's
-existing sandbox base and check remain in use until the boundary cutover.
+[release procedure](../development/release.md#choose-the-version).

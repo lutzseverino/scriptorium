@@ -5,9 +5,7 @@ starting at 1.0.0 in `factory/package.json`. Its annotated tags are
 `scriptorium-vX.Y.Z`, starting with `scriptorium-v1.0.0`; Repo Canon keeps its
 `vX.Y.Z` tags.
 Nothing under `factory/` is declared by `standards.yaml` or selected as a
-Repo Canon release input. The live `.sandcastle/` runner stays in place until
-the boundary work cuts over; this skeleton alone is not the runnable first
-factory release.
+Repo Canon release input.
 
 ## Owner-only tag setup
 
