@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 export const AGENT_LAYER_VERSION = "1";
+
+// The factory layer's label, which every sandbox container carries from its
+// image.
+const identityLabel = "factory.agent.identity";
 
 export function sandboxImageTag(
   dockerfile: string,
@@ -34,7 +38,7 @@ export async function buildSandboxImage(options: {
     "image",
     "inspect",
     "--format",
-    '{{ index .Config.Labels "factory.agent.identity" }}',
+    `{{ index .Config.Labels "${identityLabel}" }}`,
     image,
   ]).catch(() => "");
   if (existing.trim() === identity) return image;
@@ -61,6 +65,30 @@ export async function buildSandboxImage(options: {
     layer,
   );
   return image;
+}
+
+// Removes every sandbox container on the host, running or not. One factory
+// process runs on a host, so these are its own or an earlier process's.
+export function stopSandboxes(): void {
+  const list = () =>
+    execFileSync(
+      "docker",
+      ["ps", "--all", "--quiet", "--filter", `label=${identityLabel}`],
+      { encoding: "utf8", timeout: 60_000 },
+    )
+      .split("\n")
+      .filter(Boolean);
+  const containers = list();
+  if (containers.length === 0) return;
+  try {
+    execFileSync("docker", ["rm", "--force", ...containers], {
+      stdio: "ignore",
+      timeout: 60_000,
+    });
+  } catch (error) {
+    // A container Sandcastle removed meanwhile is gone all the same.
+    if (list().length > 0) throw error;
+  }
 }
 
 function docker(args: string[], input?: string): Promise<string> {

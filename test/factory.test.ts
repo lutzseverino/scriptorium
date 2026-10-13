@@ -1028,6 +1028,145 @@ test("a retry whose issue is no longer eligible fails it instead", () => {
   );
 });
 
+const interrupted = { interrupted: true } as const;
+
+test("an interrupted run relaunches as the same attempt on its branch without a new claim", () => {
+  const retry = {
+    failure: "the run ended without an open pull request",
+    log: log(4),
+  };
+  assert.deepEqual(
+    decide({
+      issues: [issue(4, claimed), issue(5, claimed)],
+      runs: [
+        run(4, {
+          provider: "codex",
+          model: "gpt-5.5",
+          effort: "low",
+          attempt: 2,
+          retry,
+          ended: interrupted,
+        }),
+        run(5, { ended: interrupted }),
+      ],
+    }),
+    [
+      {
+        kind: "launch",
+        ...at(4),
+        provider: "codex",
+        model: "gpt-5.5",
+        effort: "low",
+        attempt: 2,
+        retry,
+        relaunch: true,
+      },
+      {
+        kind: "launch",
+        ...at(5),
+        provider: "claude-code",
+        model: "claude-sonnet-5-5",
+        effort: "high",
+        attempt: 1,
+        relaunch: true,
+      },
+    ],
+  );
+});
+
+test("an interrupted run continues whatever would now hold its pickup", () => {
+  const decisions = decide({
+    issues: [
+      issue(4, ["factory:running"]),
+      issue(5, claimed, { blockedBy: [{ number: 2, state: "open" }] }),
+      issue(7, claimed, { nativeParent: 8 }),
+      issue(8, [], { subIssues: [{ number: 7, state: "open" }] }),
+    ],
+    runs: [4, 5, 7].map((number) => run(number, { ended: interrupted })),
+  });
+  assert.deepEqual(
+    launches(decisions).map(({ issue, attempt, relaunch }) => ({
+      issue,
+      attempt,
+      relaunch,
+    })),
+    [4, 5, 7].map((issue) => ({ issue, attempt: 1, relaunch: true })),
+  );
+});
+
+test("an interrupted run takes its issue's turn and waits for its gate and its repository", () => {
+  const capped = decide({
+    issues: [issue(4, claimed), issue(2)],
+    runs: [run(4, { ended: interrupted })],
+    settings: { caps: { "claude-code": 1 } },
+  });
+  assert.deepEqual(launched(capped), [`${widgets}#2`]);
+  assert.equal(
+    skipOf(capped, 4),
+    "relaunch waits: claude-code already runs its cap of 1 agent",
+  );
+  const paused = decideFactory(
+    snapshot({
+      repositories: [
+        repository(widgets, [issue(4, claimed)], {
+          paused: "it has no .factory/Dockerfile",
+        }),
+      ],
+      runs: [run(4, { ended: interrupted })],
+    }),
+    registry,
+  );
+  assert.deepEqual(paused, [
+    {
+      kind: "skip",
+      ...at(4),
+      reason:
+        "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
+    },
+  ]);
+});
+
+test("an interrupted run takes no cap slot until it relaunches", () => {
+  assert.deepEqual(
+    launched(
+      decide({
+        issues: [issue(2), issue(4, claimed)],
+        runs: [run(4, { ended: interrupted })],
+        settings: { caps: { "claude-code": 2 } },
+      }),
+    ),
+    [`${widgets}#2`, `${widgets}#4`],
+  );
+});
+
+test("an interrupted run releases its claim once its issue closed or needs input", () => {
+  assert.deepEqual(
+    decide({
+      issues: [issue(5, [...claimed, "factory:needs-input"])],
+      runs: [
+        run(4, { ended: interrupted }),
+        run(5, { attempt: 2, ended: interrupted }),
+      ],
+    }).filter(({ kind }) => kind !== "skip"),
+    [
+      { kind: "release", ...at(5) },
+      { kind: "release", ...at(4) },
+    ],
+  );
+});
+
+test("closing a parent takes precedence over relaunching its interrupted run", () => {
+  assert.deepEqual(
+    decide({
+      issues: [
+        issue(3, claimed, { subIssues: [{ number: 9, state: "closed" }] }),
+      ],
+      runs: [run(3, { ended: interrupted })],
+    }),
+    [{ kind: "close", ...at(3), tickets: [9] }],
+  );
+});
+
 test("unpushable changes fail either attempt without a retry", () => {
   for (const attempt of [1, 2] as const)
     assert.deepEqual(

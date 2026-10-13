@@ -10,6 +10,11 @@ A version of the factory, published from this repository under its own version
 numbers, that a host installs.
 _Avoid_: Repo Canon release, source publication
 
+**Interrupted run**:
+A run whose sandbox a factory restart stopped, which launches again as the same
+attempt on its branch instead of ending with a run outcome.
+_Avoid_: Cancelled run, drained run
+
 **Provider**:
 An agent CLI and the subscription behind it, on which the factory runs a
 model, such as Claude Code or Codex.

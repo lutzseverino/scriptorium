@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { buildSandboxImage } from "../src/sandbox-image.ts";
+import { buildSandboxImage, stopSandboxes } from "../src/sandbox-image.ts";
 
 let dockerAvailable = false;
 try {
@@ -127,5 +127,44 @@ test(
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
     assert.match(output, /codex-cli 0\.162\.1/);
     assert.match(output, /v24\./);
+  },
+);
+
+test(
+  "stopping the sandboxes removes every container of a sandbox image and no other",
+  {
+    skip: !dockerAvailable,
+    timeout: 900_000,
+  },
+  async (t) => {
+    const image = await buildSandboxImage({
+      dockerfile: "FROM debian:bookworm-slim\n",
+      uid: 2345,
+      gid: 3456,
+    });
+    t.after(() =>
+      execFileSync("docker", ["image", "rm", image, `${image}-toolchain`]),
+    );
+    const start = (args: string[]) =>
+      execFileSync("docker", ["run", "--detach", ...args], {
+        encoding: "utf8",
+      }).trim();
+    const sandbox = start([image]);
+    const stopped = start([image]);
+    execFileSync("docker", ["stop", "--time", "0", stopped]);
+    const other = start([`${image}-toolchain`, "sleep", "infinity"]);
+    try {
+      stopSandboxes();
+      const remaining = execFileSync(
+        "docker",
+        ["ps", "--all", "--quiet", "--no-trunc"],
+        { encoding: "utf8" },
+      ).split("\n");
+      assert.equal(remaining.includes(sandbox), false);
+      assert.equal(remaining.includes(stopped), false);
+      assert.equal(remaining.includes(other), true);
+    } finally {
+      execFileSync("docker", ["rm", "--force", other]);
+    }
   },
 );

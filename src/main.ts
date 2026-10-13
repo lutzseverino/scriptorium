@@ -7,7 +7,7 @@ import { tokenCommand } from "./github-token.ts";
 import { createHost } from "./host.ts";
 import { readHostConfiguration } from "./host-configuration.ts";
 import { createRegistry } from "./providers.ts";
-import { buildSandboxImage } from "./sandbox-image.ts";
+import { buildSandboxImage, stopSandboxes } from "./sandbox-image.ts";
 
 const path = process.argv[2];
 if (process.argv.length !== 3) {
@@ -72,9 +72,26 @@ const host = createHost(configuration, registry, {
   readUsage: (provider) => registry.providers.get(provider)!.readUsage(),
   launch: (provider, request) =>
     registry.providers.get(provider)!.launch(request),
+  stopSandboxes,
   now: () => new Date(),
   report,
 });
+
+// A restart doesn't drain: the process records its running runs as
+// interrupted, so they launch again as the same attempts, removes their
+// sandboxes and exits. Registered before any launch, this handler runs before
+// Sandcastle's own, which would exit without those records.
+for (const signal of ["SIGTERM", "SIGINT"] as const)
+  process.once(signal, () => {
+    report(`${signal} received; interrupting the running runs`);
+    try {
+      host.interrupt();
+    } catch (error) {
+      report(`the runs were not fully interrupted: ${error}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  });
 
 for (;;) {
   try {

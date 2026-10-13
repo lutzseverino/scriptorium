@@ -16,17 +16,19 @@ tests in `test/`.
 
 The sandbox image contract tests build and run the factory layer on
 `debian:bookworm-slim` without Node and on `node:24-bookworm` with its existing
-UID and GID 1000. They run in the existing factory CI job, where Docker is
-required; local runs skip them when Docker is unavailable. Run them alone
+UID and GID 1000, and remove sandbox containers by the layer's label. They run
+in the existing factory CI job, where Docker is required; local runs skip them
+when Docker is unavailable. Run them alone
 with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`
 for every edit to `src/agent-layer.Dockerfile`, including tool pins.
 
-The host runner's tests in `test/host.test.ts` drive whole passes with a
-stateful GitHub CLI fake, a fake Sandcastle behind the real provider registry,
-and real Git clones of local bare remotes, so they need Git. The decision core's
-tests in `test/factory.test.ts` drive it with snapshots, and the host
+The host runner's tests in `test/host.test.ts` drive whole passes, stop
+signals and restarts with a stateful GitHub CLI fake, a fake Sandcastle behind
+the real provider registry, a fake sandbox removal, and real Git clones of
+local bare remotes, so they need Git. The decision core's tests in
+`test/factory.test.ts` drive it with snapshots, and the host
 configuration's tests read the fixture files in
 `test/fixtures/host-configuration/`. The token test that runs the GitHub CLI
 against the sandbox's token file skips when `gh` is not installed.

@@ -27,7 +27,8 @@ export type PullRequestState =
   "open" | "merged" | "merged-issue-open" | "closed" | "none";
 
 // A run the host started, in the repository named `<owner>/<name>`. `ended`
-// is null while its sandbox runs.
+// is null while its sandbox runs, and interrupted once a factory restart
+// stopped its sandbox.
 export type Run = {
   repository: string;
   issue: number;
@@ -35,14 +36,19 @@ export type Run = {
   model: string;
   effort: string;
   attempt: 1 | 2;
+  // The first attempt's failure and log a retry launched with.
+  retry?: { failure: string; log: string };
   startedAt: string;
   log: string;
-  ended: null | {
-    timedOut: boolean;
-    pullRequest: PullRequestState;
-    // Paths under the host's unpushable paths in commits the remote lacks.
-    unpushedChanges?: string[];
-  };
+  ended:
+    | null
+    | { interrupted: true }
+    | {
+        timedOut: boolean;
+        pullRequest: PullRequestState;
+        // Paths under the host's unpushable paths in commits the remote lacks.
+        unpushedChanges?: string[];
+      };
 };
 
 // A running-labelled issue that no run on the host holds.
@@ -88,6 +94,8 @@ export type Launch = {
   effort: string;
   attempt: 1 | 2;
   retry?: { failure: string; log: string };
+  // An interrupted run launching again as the same attempt.
+  relaunch?: true;
 };
 
 export type Decision = { repository: string; issue: number } & (
@@ -115,6 +123,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   const decisions: Decision[] = [];
   const running = runningCounts(snapshot);
   const retries = new Map<string, Retry>();
+  const interrupted = new Map<string, Run>();
   const closing = new Set(
     snapshot.repositories.flatMap((repository) =>
       repository.issues
@@ -132,6 +141,8 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const settled = settle(run, snapshot, models);
     if ("failure" in settled)
       retries.set(key(run.repository, run.issue), settled);
+    else if ("interrupted" in settled)
+      interrupted.set(key(run.repository, run.issue), settled.interrupted);
     else decisions.push(...settled);
   }
   for (const repository of snapshot.repositories)
@@ -146,6 +157,12 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         ...at,
         tickets: issue.subIssues.map((ticket) => ticket.number),
       });
+      continue;
+    }
+    const resumed = interrupted.get(key(repository.name, issue.number));
+    if (resumed) {
+      interrupted.delete(key(repository.name, issue.number));
+      decisions.push(...resume(repository, issue, resumed, running, snapshot));
       continue;
     }
     const retry = retries.get(key(repository.name, issue.number));
@@ -190,6 +207,13 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   }
   for (const retry of retries.values())
     decisions.push(unretried(retry, "its issue is no longer open"));
+  // An interrupted run whose issue closed has nothing left to do.
+  for (const run of interrupted.values())
+    decisions.push({
+      kind: "release",
+      repository: run.repository,
+      issue: run.issue,
+    });
   return decisions;
 }
 
@@ -213,12 +237,12 @@ type Retry = { run: Run; failure: string; model: Model };
 // claim once its issue closes and keeps it while the pull request is open. A
 // run needing the owner's input releases its claim without retry or failure.
 // A failed first run may retry once on the retry model; any other failure
-// fails the issue.
+// fails the issue. An interrupted run is not settled: it launches again.
 function settle(
   run: Run,
   snapshot: Snapshot,
   models: Models,
-): Decision[] | Retry {
+): Decision[] | Retry | { interrupted: Run } {
   const at = { repository: run.repository, issue: run.issue };
   const limit = snapshot.settings.timeLimitMinutes;
   const overtime = `the time limit of ${limit} minutes`;
@@ -228,6 +252,7 @@ function settle(
       ? [{ kind: "stop", ...at, reason: `exceeded ${overtime}` }]
       : [];
   }
+  if ("interrupted" in run.ended) return { interrupted: run };
   if (run.ended.pullRequest !== "open" && needsInput(run, snapshot))
     return [{ kind: "release", ...at }];
   if (run.ended.pullRequest === "merged-issue-open")
@@ -282,6 +307,37 @@ function relaunch(
       ...retry.model,
       attempt: 2,
       retry: { failure: retry.failure, log: retry.run.log },
+    },
+  ];
+}
+
+// An interrupted run continues as it would have without the restart: it
+// launches again as the same attempt on its branch, in its issue's turn, and
+// pickup's exclusions don't hold it. It waits for its provider's gate and for
+// its repository to resume, and releases its claim once its issue needs input.
+function resume(
+  repository: Repository,
+  issue: Issue,
+  run: Run,
+  running: Map<string, number>,
+  snapshot: Snapshot,
+): Decision[] {
+  const at = { repository: repository.name, issue: issue.number };
+  if (needsInputExclusion(issue)) return [{ kind: "release", ...at }];
+  const gated = paused(repository) ?? gate(run.provider, running, snapshot);
+  if (gated)
+    return [{ kind: "skip", ...at, reason: `relaunch waits: ${gated}` }];
+  running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
+  return [
+    {
+      kind: "launch",
+      ...at,
+      provider: run.provider,
+      model: run.model,
+      effort: run.effort,
+      attempt: run.attempt,
+      ...(run.retry && { retry: run.retry }),
+      relaunch: true,
     },
   ];
 }

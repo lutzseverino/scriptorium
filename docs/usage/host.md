@@ -19,8 +19,8 @@ node src/main.ts /etc/factory/host.json
 ```
 
 The process needs Node.js 24, Git, the GitHub CLI and Docker on its `PATH`, and
-runs until it is stopped. It builds sandbox images with its own user's UID and
-GID. An unreadable, malformed or invalid host configuration stops it at start
+runs until it is stopped; [restarts](#restarts) describes stopping it. It builds
+sandbox images with its own user's UID and GID. An unreadable, malformed or invalid host configuration stops it at start
 with every problem named. The host keeps its own service setup: the service
 definition and its `PATH`, the provider credential files, and the host
 configuration itself.
@@ -106,18 +106,40 @@ refreshed during a run, so a run that outlasts its token loses GitHub access.
 
 The process owns everything under `stateDirectory`:
 
-| Path                                             | Contents                                                                                                                               |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `status.json`                                    | The status file.                                                                                                                       |
-| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                   |
-| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                           |
-| `repositories/<owner>/<name>/logs/`              | Each run's log, `issue-<n>-attempt-<a>.log`.                                                                                           |
-| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its provider, model, effort, attempt, start, log, base commit, and whether it exited. |
-| `repositories/<owner>/<name>/github/`            | The token directories of runs whose agents are still running.                                                                          |
+| Path                                             | Contents                                                                                                                                                                               |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status.json`                                    | The status file.                                                                                                                                                                       |
+| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                   |
+| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                           |
+| `repositories/<owner>/<name>/logs/`              | Each run's log, `issue-<n>-attempt-<a>.log`.                                                                                                                                           |
+| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, and whether the host settled it. |
+| `repositories/<owner>/<name>/github/`            | The token directories of runs whose agents are still running.                                                                                                                          |
 
 Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
 `.factory/Dockerfile` is read from the clone on every pass.
+
+## Restarts
+
+A restart, such as for a factory upgrade or a changed credential file, never
+spends a run's retry. On `SIGTERM` or `SIGINT` the process stops claiming and
+launching, records each running run as interrupted, removes the sandbox
+containers and exits without waiting for the runs to finish. On startup, before
+it claims or launches anything, it removes every sandbox container an earlier
+process left, then takes up the runs recorded as interrupted.
+
+An interrupted run launches again as the same attempt, with the same model,
+prompt and log, continuing its `factory/issue-<n>` branch and Sandcastle's
+worktree for it, and keeps its claim meanwhile. It takes its issue's turn in
+the queue and waits for its provider's cap and usage gate and for its
+repository to resume. It continues as it would have without the restart, so a
+readiness change or a new blocker does not hold it; it releases its claim
+instead once its issue is closed or carries `factory:needs-input`. Its time
+limit starts again at the relaunch.
+
+A sandbox container is any container from a factory sandbox image, which
+carries the `factory.agent.identity` label, so a host runs one factory process
+and starts no other containers from those images.
 
 ## Repository pauses
 

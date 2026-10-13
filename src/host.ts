@@ -2,8 +2,16 @@
 // lists, asks the decision core what to do across all of them, and carries
 // the decisions out through GitHub, the repositories' clones and the
 // providers' sandboxes.
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { updateClone, unpushedChanges, type Git } from "./clone.ts";
 import { invocation, labels } from "./conventions.ts";
@@ -46,6 +54,8 @@ export type HostPorts = {
   readUsage(provider: string): Promise<number | null>;
   // Resolves or rejects when the run's agent exits.
   launch(provider: string, request: LaunchRequest): Promise<void>;
+  // Removes every sandbox container on the host before it returns.
+  stopSandboxes(): void;
   now(): Date;
   report(line: string): void;
 };
@@ -57,10 +67,16 @@ type HostRun = Run & {
   base: string;
   // The first attempt's start; a retry continues its pull request.
   pullRequestSince: string;
+  // The directory holding the sandbox's token while its agent runs.
+  tokens: string;
   controller: AbortController;
   exited: boolean;
   exitedAt: Date | null;
   stopped: boolean;
+  // A factory restart stopped its sandbox, so it launches again.
+  interrupted: boolean;
+  // The host no longer holds it.
+  settled: boolean;
 };
 
 // One repository as this pass found it. An unreadable repository has no
@@ -80,6 +96,8 @@ export function createHost(
   ports: HostPorts,
 ) {
   const runs: HostRun[] = [];
+  let started = false;
+  let interrupting = false;
   const settings: Settings = {
     defaultModel: configuration.models.default,
     retryModel: configuration.models.retry,
@@ -151,7 +169,7 @@ export function createHost(
     }
     try {
       for (const run of runs.filter(
-        (run) => run.repository === name && run.exited,
+        (run) => run.repository === name && run.exited && !run.interrupted,
       )) {
         run.ended = {
           // Sandcastle's idle timeout can end a run at its limit before the
@@ -235,17 +253,72 @@ export function createHost(
 
   function forget(decision: { repository: string; issue: number }) {
     const run = find(decision);
-    if (run) runs.splice(runs.indexOf(run), 1);
+    if (!run) return;
+    runs.splice(runs.indexOf(run), 1);
+    run.settled = true;
+    record(run);
   }
 
-  async function record(run: HostRun) {
+  // Replaces the run's record whole and at once, so a signal handler can
+  // record it before the process exits.
+  function record(run: HostRun) {
     const { controller: _c, ...recorded } = run;
     const runsDirectory = directory(run.repository).runs;
-    await mkdir(runsDirectory, { recursive: true });
-    await writeFile(
-      join(runsDirectory, `issue-${run.issue}-attempt-${run.attempt}.json`),
-      `${JSON.stringify(recorded, null, 2)}\n`,
+    mkdirSync(runsDirectory, { recursive: true });
+    const path = join(
+      runsDirectory,
+      `issue-${run.issue}-attempt-${run.attempt}.json`,
     );
+    writeFileSync(`${path}.partial`, `${JSON.stringify(recorded, null, 2)}\n`);
+    renameSync(`${path}.partial`, path);
+  }
+
+  // Before anything else, the first pass removes the sandboxes an earlier
+  // process left and takes up the runs it recorded as interrupted.
+  function start() {
+    ports.stopSandboxes();
+    const interrupted: HostRun[] = [];
+    for (const name of configuration.repositories) {
+      const runsDirectory = directory(name).runs;
+      if (!existsSync(runsDirectory)) continue;
+      for (const file of readdirSync(runsDirectory).filter((file) =>
+        file.endsWith(".json"),
+      )) {
+        let recorded;
+        try {
+          recorded = JSON.parse(
+            readFileSync(join(runsDirectory, file), "utf8"),
+          );
+        } catch (error) {
+          ports.report(
+            `the run record ${file} of ${name} is unreadable: ${error}`,
+          );
+          continue;
+        }
+        if (!recorded.interrupted || recorded.settled) continue;
+        interrupted.push({
+          ...recorded,
+          exitedAt: new Date(recorded.exitedAt),
+          controller: new AbortController(),
+        });
+      }
+    }
+    runs.push(...interrupted);
+  }
+
+  // On a stop signal: stop claiming and launching, record every running run
+  // as interrupted, and remove the sandboxes without waiting for the runs.
+  function interrupt() {
+    interrupting = true;
+    for (const run of runs.filter((run) => !run.exited)) {
+      run.exited = true;
+      run.exitedAt = ports.now();
+      run.interrupted = true;
+      run.ended = { interrupted: true };
+      rmSync(run.tokens, { recursive: true, force: true });
+      record(run);
+    }
+    ports.stopSandboxes();
   }
 
   async function launch(decision: Decision & { kind: "launch" }, pass: Pass) {
@@ -255,9 +328,17 @@ export function createHost(
       await ports.git(pass.token!, paths.clone, ["rev-parse", "HEAD"])
     ).trim();
     const previous = find(decision);
-    forget(decision);
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
+    await mkdir(paths.logs, { recursive: true });
+    await mkdir(paths.github, { recursive: true, mode: 0o700 });
+    const tokens = await mkdtemp(join(paths.github, `issue-${issue}-`));
+    const github = await writeSandboxToken(tokens, pass.token!);
+    if (interrupting) {
+      await removeSandboxToken(tokens);
+      return;
+    }
+    forget(decision);
     const run: HostRun = {
       repository,
       base,
@@ -266,21 +347,22 @@ export function createHost(
       model: decision.model,
       effort: decision.effort,
       attempt: decision.attempt,
+      ...(decision.retry && { retry: decision.retry }),
       startedAt,
       pullRequestSince: previous?.pullRequestSince ?? startedAt,
+      // A relaunch appends to its attempt's log.
       log: join(paths.logs, `issue-${issue}-attempt-${decision.attempt}.log`),
       ended: null,
+      tokens,
       controller,
       exited: false,
       exitedAt: null,
       stopped: false,
+      interrupted: false,
+      settled: false,
     };
-    await mkdir(paths.logs, { recursive: true });
-    await mkdir(paths.github, { recursive: true, mode: 0o700 });
-    const tokens = await mkdtemp(join(paths.github, `issue-${issue}-`));
-    const github = await writeSandboxToken(tokens, pass.token!);
     runs.push(run);
-    await record(run);
+    record(run);
     ports
       .launch(run.provider, {
         model: run.model,
@@ -306,12 +388,14 @@ export function createHost(
         ),
       )
       .finally(async () => {
+        // An interrupted run's record and token are already settled.
+        if (run.interrupted) return;
         run.exited = true;
         run.exitedAt = ports.now();
         try {
           // A token outlives no run.
           await removeSandboxToken(tokens);
-          await record(run);
+          record(run);
         } catch (error) {
           ports.report(
             `run for ${repository}#${issue} did not finish its records: ${error}`,
@@ -372,6 +456,11 @@ export function createHost(
   }
 
   async function tick(): Promise<Decision[]> {
+    if (interrupting) return [];
+    if (!started) {
+      start();
+      started = true;
+    }
     const passes: Pass[] = [];
     for (const name of configuration.repositories)
       passes.push(await read(name));
@@ -383,17 +472,18 @@ export function createHost(
       repositories: passes.flatMap((pass) => (pass.read ? [pass.read] : [])),
       runs: runs
         .filter((run) => readable.has(run.repository) || !run.exited)
-        .map(
-          ({
-            controller: _c,
-            exited,
-            exitedAt: _x,
-            stopped: _s,
-            base: _b,
-            pullRequestSince: _p,
-            ...run
-          }) => ({ ...run, ended: exited ? run.ended : null }),
-        ),
+        .map((run): Run => ({
+          repository: run.repository,
+          issue: run.issue,
+          provider: run.provider,
+          model: run.model,
+          effort: run.effort,
+          attempt: run.attempt,
+          ...(run.retry && { retry: run.retry }),
+          startedAt: run.startedAt,
+          log: run.log,
+          ended: run.exited ? run.ended : null,
+        })),
       usage: await readUsage(),
       settings,
     };
@@ -405,6 +495,7 @@ export function createHost(
     // a launch after a claim that did not apply; other repositories continue.
     const stopped = new Set<string>();
     for (const decision of decisions) {
+      if (interrupting) break;
       if (stopped.has(decision.repository)) continue;
       try {
         await apply(
@@ -429,7 +520,7 @@ export function createHost(
     return decisions;
   }
 
-  return { tick };
+  return { tick, interrupt };
 }
 
 export function prompt(
