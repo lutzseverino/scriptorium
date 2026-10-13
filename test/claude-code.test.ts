@@ -58,6 +58,16 @@ test("a Claude Code launch runs the model and effort with the token file's curre
   assert.equal(first.run.idleTimeoutSeconds, request.idleTimeoutSeconds);
 });
 
+test("a Claude Code launch tells the host the token it delivers", async (t) => {
+  const { adapter } = claudeCode(t);
+  const delivered: string[] = [];
+  await adapter.launch({
+    ...request,
+    delivered: (secret) => delivered.push(secret),
+  });
+  assert.deepEqual(delivered, ["sk-ant-oat01-first"]);
+});
+
 test("a Claude Code launch with an empty token file is refused before Sandcastle", async (t) => {
   const { adapter, credential, runs } = claudeCode(t);
   writeFileSync(credential, "\n");

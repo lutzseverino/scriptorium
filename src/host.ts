@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { updateClone, unpushedChanges, type Git } from "./clone.ts";
 import {
@@ -35,12 +35,14 @@ import {
   type RepositoryGitHub,
 } from "./github.ts";
 import {
-  removeSandboxToken,
+  githubTokens,
   sandboxEnvironment,
   writeSandboxToken,
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
+import { createRedactor } from "./redaction.ts";
+import { followRunLog } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
 
 export type HostPorts = {
@@ -48,7 +50,8 @@ export type HostPorts = {
   gh(token: string, args: string[]): Promise<string>;
   // Runs Git in `cwd`, authenticating to GitHub as the token's holder.
   git(token: string, cwd: string, args: string[]): Promise<string>;
-  // The repository's GitHub token, from the host's token command.
+  // Runs the host's token command for the repository and resolves the token
+  // it printed.
   token(repository: string): Promise<string>;
   // The URL the repository is cloned from.
   remoteUrl(repository: string): string;
@@ -61,6 +64,7 @@ export type HostPorts = {
   // Removes every sandbox container on the host before it returns.
   stopSandboxes(): void;
   now(): Date;
+  // Writes a line to the process log.
   report(line: string): void;
 };
 
@@ -73,8 +77,13 @@ type HostRun = Run & {
   base: string;
   // The first attempt's start; a retry continues its pull request.
   pullRequestSince: string;
-  // The directory holding the sandbox's token while its agent runs.
-  tokens: string;
+  // The run's private directory, holding its token directory and the
+  // agent's raw log while its agent runs.
+  sandbox: string;
+  // The token the sandbox's token file holds; it is never recorded.
+  token: string;
+  // Resolves once the run's log is published and its directory removed.
+  finished: Promise<void>;
   controller: AbortController;
   exited: boolean;
   exitedAt: Date | null;
@@ -90,7 +99,6 @@ type HostRun = Run & {
 type Pass = {
   name: string;
   paused: string | null;
-  token: string | null;
   github: RepositoryGitHub | null;
   image: string | null;
   read: Repository | null;
@@ -105,6 +113,11 @@ export function createHost(
   const runs: HostRun[] = [];
   // A bad edit pauses pickup, but runs still settle with the last valid conventions.
   const conventions = new Map<string, FactoryConfiguration>();
+  // Every token the command prints and every provider credential value a
+  // launch delivers stays out of the logs and the status file.
+  const redactor = createRedactor();
+  const tokens = githubTokens(ports.token, ports.now, redactor);
+  const report = (line: string) => ports.report(redactor.redact(line));
   let started = false;
   let interrupting = false;
   const settings: Settings = {
@@ -131,8 +144,8 @@ export function createHost(
       clone: join(root, "clone"),
       logs: join(root, "logs"),
       runs: join(root, "runs"),
-      // Each launch's GitHub CLI configuration, holding its token.
-      github: join(root, "github"),
+      // Each running sandbox's private directory.
+      sandboxes: join(root, "sandboxes"),
     };
   }
 
@@ -140,20 +153,21 @@ export function createHost(
     const pass: Pass = {
       name,
       paused: null,
-      token: null,
       github: null,
       image: null,
       read: null,
       configuration: conventions.get(name) ?? null,
     };
+    const pause = (reason: string) => (pass.paused = redactor.redact(reason));
     try {
-      pass.token = await ports.token(name);
+      await deliver(name, await tokens.get(name));
     } catch (error) {
-      pass.paused = `${error instanceof Error ? error.message : error}`;
+      pause(`${error instanceof Error ? error.message : error}`);
       return pass;
     }
-    const token = pass.token;
-    const git: Git = (cwd, args) => ports.git(token, cwd, args);
+    // Each call takes the token as it stands, so a long pass outlives none.
+    const git: Git = async (cwd, args) =>
+      ports.git(await tokens.get(name), cwd, args);
     const { clone } = directory(name);
     try {
       await updateClone(
@@ -168,36 +182,40 @@ export function createHost(
         );
         conventions.set(name, pass.configuration);
       } catch (error) {
-        pass.paused = `${error instanceof Error ? error.message : error}`;
+        pause(`${error instanceof Error ? error.message : error}`);
       }
       const dockerfile = join(clone, dockerfilePath);
       if (pass.paused === null && !existsSync(dockerfile))
-        pass.paused = `it has no ${dockerfilePath}`;
+        pause(`it has no ${dockerfilePath}`);
       else if (pass.paused === null)
         try {
           pass.image = await ports.buildImage(
             await readFile(dockerfile, "utf8"),
           );
         } catch (error) {
-          pass.paused = `its sandbox image did not build: ${error}`;
+          pause(`its sandbox image did not build: ${error}`);
         }
     } catch (error) {
-      pass.paused = `its clone did not update: ${error}`;
+      pause(`its clone did not update: ${error}`);
     }
     if (!pass.configuration) return pass;
-    const github = repositoryGitHub(name, pass.configuration.labels, (args) =>
-      ports.gh(token, args),
+    const github = repositoryGitHub(
+      name,
+      pass.configuration.labels,
+      async (args) => ports.gh(await tokens.get(name), args),
     );
     pass.github = github;
     try {
       await github.createStateLabels();
     } catch (error) {
-      pass.paused ??= `its state labels could not be created: ${error}`;
+      if (pass.paused === null)
+        pause(`its state labels could not be created: ${error}`);
     }
     try {
       for (const run of runs.filter(
         (run) => run.repository === name && run.exited && !run.interrupted,
       )) {
+        await run.finished;
         run.ended = {
           // Sandcastle's idle timeout can end a run at its limit before the
           // factory stops it, so the time it ran decides, not who ended it.
@@ -238,7 +256,7 @@ export function createHost(
         ),
       };
     } catch (error) {
-      pass.paused = `its GitHub reads failed: ${error}`;
+      pause(`its GitHub reads failed: ${error}`);
     }
     return pass;
   }
@@ -271,7 +289,7 @@ export function createHost(
       try {
         usage[provider] = await ports.readUsage(provider);
       } catch (error) {
-        ports.report(`usage for ${provider} is unreadable: ${error}`);
+        report(`usage for ${provider} is unreadable: ${error}`);
         usage[provider] = null;
       }
     }
@@ -296,7 +314,7 @@ export function createHost(
   // Replaces the run's record whole and at once, so a signal handler can
   // record it before the process exits.
   function record(run: HostRun) {
-    const { controller: _c, ...recorded } = run;
+    const { controller: _c, token: _t, finished: _f, ...recorded } = run;
     const runsDirectory = directory(run.repository).runs;
     mkdirSync(runsDirectory, { recursive: true });
     const path = join(
@@ -324,9 +342,7 @@ export function createHost(
             readFileSync(join(runsDirectory, file), "utf8"),
           );
         } catch (error) {
-          ports.report(
-            `the run record ${file} of ${name} is unreadable: ${error}`,
-          );
+          report(`the run record ${file} of ${name} is unreadable: ${error}`);
           continue;
         }
         if (!recorded.interrupted || recorded.settled) continue;
@@ -335,6 +351,8 @@ export function createHost(
         interrupted.push({
           ...recorded,
           exitedAt: new Date(recorded.exitedAt),
+          token: "",
+          finished: Promise.resolve(),
           controller: new AbortController(),
         });
       }
@@ -351,27 +369,75 @@ export function createHost(
       run.exitedAt = ports.now();
       run.interrupted = true;
       run.ended = { interrupted: true };
-      rmSync(run.tokens, { recursive: true, force: true });
+      // Its published log keeps what was copied; the raw log and the token go
+      // with the sandbox.
+      rmSync(run.sandbox, { recursive: true, force: true });
       record(run);
     }
     ports.stopSandboxes();
   }
 
+  // Rewrites the token file of each of the repository's running sandboxes
+  // that holds another token.
+  async function deliver(repository: string, token: string) {
+    for (const run of runs)
+      if (run.repository === repository && !run.exited && run.token !== token)
+        try {
+          await writeSandboxToken(join(run.sandbox, "github"), token);
+          run.token = token;
+        } catch (error) {
+          // A run that exited meanwhile took its token file with it.
+          if (!run.exited)
+            report(
+              `${repository}#${run.issue}'s token file was not rewritten: ${error}`,
+            );
+        }
+  }
+
+  // Refreshes the token of every repository with a running sandbox, between
+  // passes as well as during them, so a run outlives its first token.
+  async function refreshTokens() {
+    const repositories = new Set(
+      runs.filter((run) => !run.exited).map((run) => run.repository),
+    );
+    for (const repository of repositories)
+      try {
+        await deliver(repository, await tokens.get(repository));
+      } catch (error) {
+        report(`${repository}'s token was not refreshed: ${error}`);
+      }
+  }
+
   async function launch(decision: Decision & { kind: "launch" }, pass: Pass) {
     const { repository, issue } = decision;
     const paths = directory(repository);
+    const token = await tokens.get(repository);
     const base = (
-      await ports.git(pass.token!, paths.clone, ["rev-parse", "HEAD"])
+      await ports.git(token, paths.clone, ["rev-parse", "HEAD"])
     ).trim();
     const previous = find(decision);
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
-    await mkdir(paths.logs, { recursive: true });
-    await mkdir(paths.github, { recursive: true, mode: 0o700 });
-    const tokens = await mkdtemp(join(paths.github, `issue-${issue}-`));
-    const github = await writeSandboxToken(tokens, pass.token!);
+    // A relaunch appends to its attempt's log.
+    const log = join(
+      paths.logs,
+      `issue-${issue}-attempt-${decision.attempt}.log`,
+    );
+    await mkdir(paths.sandboxes, { recursive: true, mode: 0o700 });
+    const sandbox = await mkdtemp(join(paths.sandboxes, `issue-${issue}-`));
+    const raw = join(sandbox, "agent.log");
+    let github, follower;
+    try {
+      await mkdir(join(sandbox, "github"), { mode: 0o700 });
+      github = await writeSandboxToken(join(sandbox, "github"), token);
+      follower = await followRunLog(raw, log, redactor.redact);
+    } catch (error) {
+      await rm(sandbox, { recursive: true, force: true });
+      throw error;
+    }
     if (interrupting) {
-      await removeSandboxToken(tokens);
+      await follower.close();
+      await rm(sandbox, { recursive: true, force: true });
       return;
     }
     forget(decision);
@@ -387,10 +453,11 @@ export function createHost(
       ...(decision.retry && { retry: decision.retry }),
       startedAt,
       pullRequestSince: previous?.pullRequestSince ?? startedAt,
-      // A relaunch appends to its attempt's log.
-      log: join(paths.logs, `issue-${issue}-attempt-${decision.attempt}.log`),
+      log,
       ended: null,
-      tokens,
+      sandbox,
+      token,
+      finished: Promise.resolve(),
       controller,
       exited: false,
       exitedAt: null,
@@ -400,7 +467,7 @@ export function createHost(
     };
     runs.push(run);
     record(run);
-    ports
+    run.finished = ports
       .launch(run.provider, {
         model: run.model,
         effort: run.effort,
@@ -414,28 +481,35 @@ export function createHost(
           decision.retry,
         ),
         branch: runBranch(issue),
-        log: run.log,
+        log: raw,
         idleTimeoutSeconds: settings.timeLimitMinutes * 60,
         mounts: [github],
         env: sandboxEnvironment,
         signal: controller.signal,
+        delivered: redactor.add,
       })
       .catch((error) =>
-        ports.report(
-          `run for ${repository}#${issue} ended with an error: ${error}`,
-        ),
+        report(`run for ${repository}#${issue} ended with an error: ${error}`),
       )
-      .finally(async () => {
-        // An interrupted run's record and token are already settled.
-        if (run.interrupted) return;
+      .then(async () => {
+        // An interrupted run's record and directory are already settled.
+        if (run.interrupted) {
+          await follower.close().catch(() => {});
+          return;
+        }
         run.exited = true;
         run.exitedAt = ports.now();
         try {
+          await follower.close();
+        } catch (error) {
+          report(`run for ${repository}#${issue} lost its log's end: ${error}`);
+        }
+        try {
           // A token outlives no run.
-          await removeSandboxToken(tokens);
+          await rm(sandbox, { recursive: true, force: true });
           record(run);
         } catch (error) {
-          ports.report(
+          report(
             `run for ${repository}#${issue} did not finish its records: ${error}`,
           );
         }
@@ -487,7 +561,7 @@ export function createHost(
         forget(decision);
         return;
       case "skip":
-        ports.report(
+        report(
           `${decision.repository}#${decision.issue} skipped: ${decision.reason}`,
         );
         return;
@@ -528,7 +602,7 @@ export function createHost(
     };
     for (const pass of passes)
       if (pass.paused !== null)
-        ports.report(`${pass.name} is paused: ${pass.paused}`);
+        report(`${pass.name} is paused: ${pass.paused}`);
     const decisions = decideFactory(snapshot, registry);
     // A failed write stops that repository's decisions for this pass, such as
     // a launch after a claim that did not apply; other repositories continue.
@@ -543,7 +617,7 @@ export function createHost(
         );
       } catch (error) {
         stopped.add(decision.repository);
-        ports.report(
+        report(
           `${decision.repository}#${decision.issue} ${decision.kind} failed, so ${decision.repository} waits for the next pass: ${error}`,
         );
       }
@@ -554,12 +628,12 @@ export function createHost(
         hostStatus(snapshot.now, passes, decisions),
       );
     } catch (error) {
-      ports.report(`the status file was not written: ${error}`);
+      report(`the status file was not written: ${error}`);
     }
     return decisions;
   }
 
-  return { tick, interrupt };
+  return { tick, interrupt, refreshTokens, report };
 }
 
 export function prompt(

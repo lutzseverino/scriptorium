@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { RunOptions } from "@ai-hero/sandcastle";
@@ -69,9 +75,11 @@ function remote(t: TestContext, files: Record<string, string>): string {
   return bare;
 }
 
+// GitHub, which accepts only the token the command last printed for each
+// repository.
 function fakeGitHub(
   repositories: Record<string, IssueSpec[]>,
-  tokens: Record<string, string>,
+  tokens: Record<string, string | Error>,
 ) {
   const state = Object.fromEntries(
     Object.entries(repositories).map(([name, issues]) => [
@@ -264,6 +272,19 @@ const value = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 
+// Waits, on real time, for what file I/O finishes, such as a run's cleanup.
+async function until(condition: () => boolean) {
+  for (let wait = 0; wait < 500 && !condition(); wait++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(condition(), "the condition held within 5 seconds");
+}
+
+// The raw log Sandcastle writes for a launch.
+function rawLog(options: RunOptions): string {
+  assert.equal(options.logging?.type, "file");
+  return (options.logging as { path: string }).path;
+}
+
 function host(
   t: TestContext,
   {
@@ -287,18 +308,14 @@ function host(
   const codexLogin = join(root, "codex-auth.json");
   writeFileSync(claudeToken, "claude-secret\n");
   writeFileSync(codexLogin, "{}\n");
-  const tokenOf = Object.fromEntries(
+  // What the token command prints next for each repository.
+  const tokenOf: Record<string, string | Error> = Object.fromEntries(
     Object.keys(repositories).map((name) => [
       name,
       tokens[name] ?? `ghs_${name.replace("/", "_")}`,
     ]),
   );
-  const github = fakeGitHub(
-    repositories,
-    Object.fromEntries(
-      Object.entries(tokenOf).filter(([, token]) => typeof token === "string"),
-    ) as Record<string, string>,
-  );
+  const github = fakeGitHub(repositories, tokenOf);
   const { sandcastle, launched } = fakeSandcastle();
   const resolved: HostConfiguration = {
     repositories: Object.keys(repositories),
@@ -326,6 +343,7 @@ function host(
   });
   const builds: string[] = [];
   const reports: string[] = [];
+  const tokenCommands: string[] = [];
   const clock = { now: new Date("2026-10-09T12:00:00Z") };
   // Sandbox removals and issue edits, in order.
   const events: string[] = [];
@@ -339,6 +357,7 @@ function host(
     },
     git: async (_token, cwd, args) => git(cwd, args),
     async token(repository) {
+      tokenCommands.push(repository);
       const token = tokenOf[repository];
       if (token instanceof Error) throw token;
       return token;
@@ -372,6 +391,8 @@ function host(
     launched,
     builds,
     reports,
+    tokens: tokenOf,
+    tokenCommands,
     clock,
     state,
     clone: (name: string) => join(state, "repositories", name, "clone"),
@@ -430,7 +451,8 @@ test("one process launches each repository's ready issues from that repository's
       agent: options.agent.name,
       prompt: options.prompt,
       branch: options.branchStrategy,
-      log: options.logging,
+      // Sandcastle writes the raw log into the run's private directory.
+      log: rawLog(options).replace(/-\w{6}\/agent\.log$/, "-*/agent.log"),
       image: docker.imageName,
     })),
     [
@@ -440,13 +462,10 @@ test("one process launches each repository's ready issues from that repository's
         agent: "codex",
         prompt: "$implement #3",
         branch: { type: "branch", branch: "factory/issue-3" },
-        log: {
-          type: "file",
-          path: join(
-            run.state,
-            "repositories/acme/gadgets/logs/issue-3-attempt-1.log",
-          ),
-        },
+        log: join(
+          run.state,
+          "repositories/acme/gadgets/sandboxes/issue-3-*/agent.log",
+        ),
         image: "factory-sandbox:2",
       },
       {
@@ -455,13 +474,10 @@ test("one process launches each repository's ready issues from that repository's
         agent: "claude-code",
         prompt: "/implement #4",
         branch: { type: "branch", branch: "factory/issue-4" },
-        log: {
-          type: "file",
-          path: join(
-            run.state,
-            "repositories/acme/widgets/logs/issue-4-attempt-1.log",
-          ),
-        },
+        log: join(
+          run.state,
+          "repositories/acme/widgets/sandboxes/issue-4-*/agent.log",
+        ),
         image: "factory-sandbox:1",
       },
     ],
@@ -503,9 +519,157 @@ test("a sandbox reads its repository's token from a mounted file that outlives n
     false,
   );
   launch.finish();
-  for (let wait = 0; wait < 100 && existsSync(github.hostPath); wait++)
-    await settled();
+  await until(() => !existsSync(github.hostPath));
   assert.equal(existsSync(github.hostPath), false);
+});
+
+test("a repository's token is reused, refreshed before it expires, and rewritten into its running sandbox", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }], "acme/gadgets": [] },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+  });
+  await run.tick();
+  assert.deepEqual(run.tokenCommands, ["acme/widgets", "acme/gadgets"]);
+  const github = run.launched[0].docker.mounts!.find(
+    (mount) => mount.sandboxPath === "/run/factory/github",
+  )!;
+  const hosts = () => readFileSync(join(github.hostPath, "hosts.yml"), "utf8");
+  run.clock.now = new Date("2026-10-09T12:29:59Z");
+  await run.refreshTokens();
+  await run.tick();
+  assert.equal(run.tokenCommands.length, 2, "the cached tokens are reused");
+  run.tokens["acme/widgets"] = "ghs_widgets_refreshed";
+  run.tokens["acme/gadgets"] = "ghs_gadgets_refreshed";
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.refreshTokens();
+  assert.deepEqual(
+    run.tokenCommands.slice(2),
+    ["acme/widgets"],
+    "between passes only a repository with a running sandbox refreshes",
+  );
+  assert.match(hosts(), /oauth_token: "ghs_widgets_refreshed"/);
+  assert.doesNotMatch(hosts(), /ghs_acme_widgets/);
+  // GitHub accepts only the refreshed tokens.
+  await run.tick();
+  assert.deepEqual(run.tokenCommands.slice(3), ["acme/gadgets"]);
+  assert.equal(run.status().repositories[1].state, "running");
+});
+
+test("a token command that fails at refresh holds only its repository", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [
+        { number: 5, blockedBy: [{ number: 9, state: "OPEN" }] },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+  });
+  await run.tick();
+  const github = run.launched[0].docker.mounts!.find(
+    (mount) => mount.sandboxPath === "/run/factory/github",
+  )!;
+  const failure = "the token command for acme/widgets failed with 1";
+  run.tokens["acme/widgets"] = new Error(failure);
+  run.tokens["acme/gadgets"] = "ghs_gadgets_refreshed";
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.refreshTokens();
+  assert.ok(
+    run.reports.includes(
+      `acme/widgets's token was not refreshed: Error: ${failure}`,
+    ),
+    run.reports.join("\n"),
+  );
+  // The sandbox keeps its token, which is still valid, until a refresh works.
+  assert.match(
+    readFileSync(join(github.hostPath, "hosts.yml"), "utf8"),
+    /oauth_token: "ghs_acme_widgets"/,
+  );
+  run.github.find("acme/gadgets", 5).blockedBy = [];
+  await run.tick();
+  assert.deepEqual(run.status().repositories, [
+    {
+      repository: "acme/widgets",
+      state: "paused",
+      reason: failure,
+      held: [],
+    },
+    { repository: "acme/gadgets", state: "running", held: [] },
+  ]);
+  assert.ok(
+    run.reports.includes(`acme/widgets is paused: ${failure}`),
+    run.reports.join("\n"),
+  );
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#4", "acme/gadgets#5"],
+  );
+});
+
+test("every printed token and delivered credential is redacted from the run log, the process log and the status file", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const [launch] = run.launched;
+  const raw = rawLog(launch.options);
+  const published = join(
+    run.state,
+    "repositories/acme/widgets/logs/issue-4-attempt-1.log",
+  );
+  run.tokens["acme/widgets"] = "ghs_second";
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.refreshTokens();
+  appendFileSync(raw, "gh auth token: ghs_acme_widgets\n");
+  // Complete lines reach the published log while the agent runs.
+  await until(
+    () => existsSync(published) && readFileSync(published, "utf8") !== "",
+  );
+  assert.equal(readFileSync(published, "utf8"), "gh auth token: <REDACTED>\n");
+  appendFileSync(raw, "now ghs_second with claude-secret\nlast ghs_second");
+  launch.finish(new Error("push failed for ghs_acme_widgets"));
+  await settled();
+  run.tokens["acme/widgets"] = new Error("ghs_second was revoked");
+  run.clock.now = new Date("2026-10-09T13:00:00Z");
+  await run.tick();
+  // The raw log goes with the run, once its end is published.
+  await until(() => !existsSync(dirname(raw)));
+  assert.equal(
+    readFileSync(published, "utf8"),
+    [
+      "gh auth token: <REDACTED>",
+      "now <REDACTED> with <REDACTED>",
+      "last <REDACTED>",
+    ].join("\n"),
+  );
+  assert.ok(
+    run.reports.includes(
+      "run for acme/widgets#4 ended with an error: Error: push failed for <REDACTED>",
+    ),
+    run.reports.join("\n"),
+  );
+  assert.ok(
+    run.reports.includes("acme/widgets is paused: <REDACTED> was revoked"),
+    run.reports.join("\n"),
+  );
+  assert.equal(run.status().repositories[0].reason, "<REDACTED> was revoked");
+  const written = [
+    ...run.reports,
+    readFileSync(join(run.state, "status.json"), "utf8"),
+    readFileSync(
+      join(run.state, "repositories/acme/widgets/runs/issue-4-attempt-1.json"),
+      "utf8",
+    ),
+  ].join("\n");
+  for (const secret of ["ghs_acme_widgets", "ghs_second", "claude-secret"])
+    assert.equal(written.includes(secret), false, secret);
 });
 
 test("each clone ignores Sandcastle's directory locally and follows its remote", async (t) => {
@@ -681,7 +845,7 @@ test("a failed first run retries with its failure and log tail after the provide
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   await run.tick();
-  const log = (run.launched[0].options.logging as { path: string }).path;
+  const log = rawLog(run.launched[0].options);
   writeFileSync(log, "first line\nlast line\n");
   run.launched[0].finish(new Error("agent crashed"));
   await settled();
@@ -1150,6 +1314,8 @@ test("a stop signal records the running runs as interrupted and removes their sa
   ]);
   assert.equal(launch.removed, true);
   assert.equal(existsSync(tokens), false);
+  // The raw log goes with the run's private directory.
+  assert.equal(existsSync(dirname(rawLog(launch.options))), false);
   const interrupted = {
     attempt: 1,
     ended: { interrupted: true },
@@ -1182,8 +1348,11 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   await run.tick();
-  const firstLog = (run.launched[0].options.logging as { path: string }).path;
-  writeFileSync(firstLog, "first attempt\n");
+  writeFileSync(rawLog(run.launched[0].options), "first attempt\n");
+  const firstLog = join(
+    run.state,
+    "repositories/acme/widgets/logs/issue-4-attempt-1.log",
+  );
   run.launched[0].finish(new Error("agent crashed"));
   await settled();
   await run.tick();
@@ -1221,7 +1390,6 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
     type: "branch",
     branch: "factory/issue-4",
   });
-  assert.deepEqual(relaunched.options.logging, retried.options.logging);
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "ready-for-agent",
     "factory:running",
@@ -1230,6 +1398,11 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
   const record = recordOf(run.state, 4, 2);
   assert.equal(record.attempt, 2);
   assert.equal(record.interrupted, false);
+  // The relaunch publishes to its attempt's log.
+  assert.equal(
+    record.log,
+    join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-2.log"),
+  );
 
   // The relaunch ends as the second attempt, so it fails without a retry.
   relaunched.finish();

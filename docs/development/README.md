@@ -35,8 +35,10 @@ the fixtures in `test/fixtures/factory-configuration/`; run it alone with
 `node --test test/factory-configuration.test.ts`. The host tests also cover
 repository-specific labels and prompts, configuration edits on the default
 branch, and run settling while configuration or the Dockerfile is missing.
-The token test that runs the GitHub CLI
-against the sandbox's token file skips when `gh` is not installed.
+The token tests drive the cache with a fake token command and clock; the one
+that runs the GitHub CLI against the sandbox's token file skips when `gh` is
+not installed. The run log's tests rely on file watching, which the published
+log follows while an agent runs.
 
 Sandcastle is pinned at 0.12.0. Its public types reference
 `@standard-schema/spec` without declaring that dependency, as tracked in

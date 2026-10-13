@@ -35,6 +35,8 @@ export function codexAdapter(
     // The login is mounted read-only as it stands at this launch; the rest of
     // the Codex home stays writable and private to the sandbox.
     async launch(request: LaunchRequest) {
+      for (const secret of await loginSecrets(credential))
+        request.delivered?.(secret);
       await launchAgent(
         ports.sandcastle,
         request,
@@ -44,6 +46,27 @@ export function codexAdapter(
     },
     readUsage: () => readCodexUsage(credential, ports.codexExecutable),
   };
+}
+
+// A Codex login's secret values: its API key and its sign-in tokens. A login
+// that is not JSON can't sign in, so its launch fails before Sandcastle.
+async function loginSecrets(path: string): Promise<string[]> {
+  let login;
+  try {
+    login = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    // A parse error quotes the login, so its message stays out.
+    throw new Error(`the Codex login ${path} is not readable JSON`, {
+      cause: error,
+    });
+  }
+  const tokens = login?.tokens;
+  return [
+    login?.OPENAI_API_KEY,
+    ...(typeof tokens === "object" && tokens !== null
+      ? Object.values(tokens)
+      : []),
+  ].filter((secret): secret is string => typeof secret === "string");
 }
 
 // The Codex app-server's documented rate-limit read, over stdio JSONL. Each

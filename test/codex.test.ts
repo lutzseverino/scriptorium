@@ -55,6 +55,34 @@ test("a Codex launch runs the model and effort and mounts the login read-only in
   });
 });
 
+test("a Codex launch tells the host its login's API key and tokens", async (t) => {
+  const { adapter, credential } = codex(t);
+  writeFileSync(
+    credential,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: "sk-key",
+      tokens: { id_token: "id", access_token: "access", refresh_token: "r" },
+      last_refresh: "2026-10-09T12:00:00Z",
+    }),
+  );
+  const delivered: string[] = [];
+  await adapter.launch({
+    ...request,
+    delivered: (secret) => delivered.push(secret),
+  });
+  assert.deepEqual(delivered, ["sk-key", "id", "access", "r"]);
+});
+
+test("a Codex launch with a login that is not JSON is refused before Sandcastle without quoting it", async (t) => {
+  const { adapter, credential, runs } = codex(t);
+  writeFileSync(credential, "sk-not-json");
+  await assert.rejects(adapter.launch(request), {
+    message: `the Codex login ${credential} is not readable JSON`,
+  });
+  assert.equal(runs.length, 0);
+});
+
 // A stand-in for `codex app-server` that records the Codex home it was given,
 // writes state there as Codex does, and answers, refuses, or never replies.
 function fakeCodex(root: string, behavior: "answer" | "refuse" | "hang") {

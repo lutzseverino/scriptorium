@@ -35,7 +35,8 @@ const credentialHelper =
 
 const registry = createRegistry(configuration.providers);
 
-function report(line: string) {
+// The process log. Every line reaches it through the host, which redacts it.
+function log(line: string) {
   console.log(`${new Date().toISOString()} ${line}`);
 }
 
@@ -74,7 +75,7 @@ const host = createHost(configuration, registry, {
     registry.providers.get(provider)!.launch(request),
   stopSandboxes,
   now: () => new Date(),
-  report,
+  report: log,
 });
 
 // A restart doesn't drain: the process records its running runs as
@@ -83,22 +84,31 @@ const host = createHost(configuration, registry, {
 // Sandcastle's own, which would exit without those records.
 for (const signal of ["SIGTERM", "SIGINT"] as const)
   process.once(signal, () => {
-    report(`${signal} received; interrupting the running runs`);
+    host.report(`${signal} received; interrupting the running runs`);
     try {
       host.interrupt();
     } catch (error) {
-      report(`the runs were not fully interrupted: ${error}`);
+      host.report(`the runs were not fully interrupted: ${error}`);
       process.exit(1);
     }
     process.exit(0);
   });
 
+// Tokens are refreshed every minute, whether or not a pass is running, so a
+// long pass or poll never lets a running sandbox's token expire.
+(async () => {
+  for (;;) {
+    await sleep(60_000);
+    await host.refreshTokens();
+  }
+})();
+
 for (;;) {
   try {
     for (const decision of await host.tick())
-      if (decision.kind !== "skip") report(JSON.stringify(decision));
+      if (decision.kind !== "skip") host.report(JSON.stringify(decision));
   } catch (error) {
-    report(`pass failed: ${error}`);
+    host.report(`pass failed: ${error}`);
   }
   await sleep(configuration.pollSeconds * 1000);
 }

@@ -27,6 +27,7 @@ export function claudeCodeAdapter(
     skillPrefix: "/",
     async launch(request: LaunchRequest) {
       const token = await readToken(credential);
+      request.delivered?.(token);
       await launchAgent(
         ports.sandcastle,
         request,

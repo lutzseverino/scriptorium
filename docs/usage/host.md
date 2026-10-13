@@ -75,13 +75,26 @@ A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 
 ### Token command
 
-Each pass runs `github.tokenCommand` once per repository with `<owner>/<name>`
-appended as its last argument. It must exit 0 and print exactly one token on
-standard output; it is stopped after 60 seconds. The factory uses that token
-for its own GitHub reads and writes and its Git operations in the clone. A
-failing command, or one that prints no single token, pauses that repository
-for the pass without stopping the others. The factory names the failure but
-never logs the command's output.
+The factory runs `github.tokenCommand` with the repository's `<owner>/<name>`
+appended as its last argument. The command must:
+
+- exit 0 and print exactly one token, with no whitespace inside it, on
+  standard output, within 60 seconds, after which it is stopped;
+- print a token that stays valid for at least 45 minutes after it prints it,
+  such as a newly minted GitHub App installation token, which lasts an hour.
+
+The factory caches each repository's token and reuses it for 30 minutes after
+the command printed it, then runs the command again. It refreshes a token when
+a pass needs it, and every minute, between and during passes, for each
+repository with a running sandbox. The token serves the factory's own GitHub
+reads and writes, its Git operations in the clone, and the
+[sandbox's GitHub access](#sandbox-github-access).
+
+A command that fails, or prints no single token, pauses that repository for
+the pass, with the failure as the reason in the process log and the status
+file, and the other repositories continue. A running sandbox keeps its last
+token, which is still valid, and the factory retries the refresh every minute.
+The factory names the failure but never logs the command's output.
 
 ## Repository conventions
 
@@ -98,9 +111,26 @@ configuration readable only by the host's user, into a directory of its own
 for that run, and mounts the directory read-only at `/run/factory/github`.
 The sandbox's environment points the GitHub CLI at that directory
 (`GH_CONFIG_DIR`) and makes Git ask the GitHub CLI for its `github.com`
-credentials, so neither reads the token from an environment variable. The
-factory removes the directory when the run's agent exits. A token is not
-refreshed during a run, so a run that outlasts its token loses GitHub access.
+credentials, so neither reads the token from an environment variable. Each
+time the repository's token is refreshed, the factory replaces the files
+whole, so a run longer than a token's lifetime keeps its GitHub access. The
+factory removes the directory when the run's agent exits, so a token outlives
+no run.
+
+## Redaction
+
+The factory replaces with `<REDACTED>` every token the token command printed
+during the process's lifetime, including replaced ones, and every provider
+credential value a launch delivered: the Claude Code token, and the Codex
+login's API key and tokens. It redacts them from:
+
+- the process log;
+- each run's log, which it copies line by line from the raw log Sandcastle
+  writes into the run's private directory;
+- the status file's reasons.
+
+A restarted process redacts the tokens it printed itself; the earlier
+process redacted its own logs as it wrote them.
 
 ## State directory
 
@@ -111,9 +141,9 @@ The process owns everything under `stateDirectory`:
 | `status.json`                                    | The status file.                                                                                                                                                                                                 |
 | `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                             |
 | `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                     |
-| `repositories/<owner>/<name>/logs/`              | Each run's log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                     |
+| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                            |
 | `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, and whether the host settled it. |
-| `repositories/<owner>/<name>/github/`            | The token directories of runs whose agents are still running.                                                                                                                                                    |
+| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                      |
 
 Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
@@ -124,7 +154,7 @@ Sandbox images live in the host's Docker daemon, tagged as the
 A restart, such as for a factory upgrade or a changed credential file, never
 spends a run's retry. On `SIGTERM` or `SIGINT` the process stops claiming and
 launching, records each running run as interrupted, removes the sandbox
-containers and exits without waiting for the runs to finish. On startup, before
+containers and the runs' private directories, and exits without waiting for the runs to finish. On startup, before
 it claims or launches anything, it removes every sandbox container an earlier
 process left, then takes up the runs recorded as interrupted.
 
@@ -188,4 +218,4 @@ The factory posts no status to GitHub.
 ```
 
 The process also logs each pass's decisions, skip reasons and pauses to
-standard output.
+standard output, [redacted](#redaction).

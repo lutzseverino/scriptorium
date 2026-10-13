@@ -33,7 +33,8 @@ The [factory configuration schema](docs/usage/factory-configuration.md) names
 the required labels, model label prefix and prompt template. Start the process with
 `node src/main.ts <host configuration>`;
 [host installation and configuration](docs/usage/host.md) documents the host
-configuration schema, the state directory and the status file. The package's
+configuration schema, the token command's contract, redaction, the state
+directory and the status file. The package's
 image builder supplies the factory agent layer over each repository's
 toolchain image; the
 [sandbox image contract](docs/usage/sandbox-image.md) describes its Dockerfile

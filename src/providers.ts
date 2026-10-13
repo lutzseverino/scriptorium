@@ -17,7 +17,8 @@ export type Sandcastle = {
 };
 
 // One agent run in a sandbox built from `image`. The host adds its own
-// `mounts` and `env`; the adapter adds its credential.
+// `mounts` and `env`; the adapter adds its credential, and tells `delivered`
+// each secret value of it before the agent starts.
 export type LaunchRequest = {
   model: string;
   effort: string;
@@ -31,6 +32,7 @@ export type LaunchRequest = {
   mounts?: Mount[];
   env?: Record<string, string>;
   signal?: AbortSignal;
+  delivered?: (secret: string) => void;
 };
 
 export type ProviderAdapter = {

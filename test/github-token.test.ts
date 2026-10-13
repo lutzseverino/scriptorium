@@ -2,19 +2,21 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
+  readdirSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-  removeSandboxToken,
+  githubTokens,
   sandboxEnvironment,
   tokenCommand,
   writeSandboxToken,
 } from "../src/github-token.ts";
+import { createRedactor } from "../src/redaction.ts";
 import { directory } from "./fakes.ts";
 
 // A token command that prints what its script says for the repository.
@@ -47,7 +49,68 @@ test("a failing or empty token command is refused without its output", async (t)
   );
 });
 
-test("the sandbox's token file is private to the host's user and mounted read-only", async (t) => {
+// The token cache over a command that prints the next of `printed`, or
+// fails once it has none left.
+function cache(printed: string[]) {
+  const runs: string[] = [];
+  const clock = { now: new Date("2026-10-09T12:00:00Z") };
+  const redactor = createRedactor();
+  const tokens = githubTokens(
+    async (repository) => {
+      runs.push(repository);
+      const token = printed.shift();
+      if (!token) throw new Error(`the token command for ${repository} failed`);
+      return token;
+    },
+    () => clock.now,
+    redactor,
+  );
+  return { tokens, runs, clock, redactor };
+}
+
+test("a repository's token is reused for 30 minutes, then the command runs again", async () => {
+  const { tokens, runs, clock } = cache(["ghs_one", "ghs_two", "ghs_three"]);
+  assert.equal(await tokens.get("acme/widgets"), "ghs_one");
+  clock.now = new Date("2026-10-09T12:29:59.999Z");
+  assert.equal(await tokens.get("acme/widgets"), "ghs_one");
+  assert.equal(await tokens.get("acme/gadgets"), "ghs_two");
+  clock.now = new Date("2026-10-09T12:30:00Z");
+  assert.equal(await tokens.get("acme/widgets"), "ghs_three");
+  assert.deepEqual(runs, ["acme/widgets", "acme/gadgets", "acme/widgets"]);
+});
+
+test("concurrent requests share one run of the command", async () => {
+  const { tokens, runs } = cache(["ghs_one", "ghs_two"]);
+  assert.deepEqual(
+    await Promise.all([tokens.get("acme/widgets"), tokens.get("acme/widgets")]),
+    ["ghs_one", "ghs_one"],
+  );
+  assert.deepEqual(runs, ["acme/widgets"]);
+});
+
+test("a failed refresh caches nothing, so the next request runs the command again", async () => {
+  const { tokens, runs, clock } = cache(["ghs_one"]);
+  await tokens.get("acme/widgets");
+  clock.now = new Date("2026-10-09T12:30:00Z");
+  await assert.rejects(tokens.get("acme/widgets"), {
+    message: "the token command for acme/widgets failed",
+  });
+  await assert.rejects(tokens.get("acme/widgets"));
+  assert.deepEqual(runs, ["acme/widgets", "acme/widgets", "acme/widgets"]);
+});
+
+test("every token the command prints stays redacted after it is replaced", async () => {
+  const { tokens, clock, redactor } = cache(["ghs_one", "ghs_two"]);
+  await tokens.get("acme/widgets");
+  clock.now = new Date("2026-10-09T12:30:00Z");
+  await tokens.get("acme/widgets");
+  assert.equal(
+    redactor.redact("ghs_one then ghs_two"),
+    "<REDACTED> then <REDACTED>",
+  );
+});
+
+test("the sandbox's token file is private to the host's user, mounted read-only, and replaced whole", async (t) => {
   const tokens = join(directory(t), "issue-4");
   mkdirSync(tokens, { mode: 0o700 });
   assert.deepEqual(await writeSandboxToken(tokens, "ghs_token"), {
@@ -57,8 +120,13 @@ test("the sandbox's token file is private to the host's user and mounted read-on
   });
   for (const file of ["config.yml", "hosts.yml"])
     assert.equal(statSync(join(tokens, file)).mode & 0o777, 0o600);
-  await removeSandboxToken(tokens);
-  assert.equal(existsSync(tokens), false);
+  const before = statSync(join(tokens, "hosts.yml")).ino;
+  await writeSandboxToken(tokens, "ghs_refreshed");
+  const hosts = readFileSync(join(tokens, "hosts.yml"), "utf8");
+  assert.match(hosts, /oauth_token: "ghs_refreshed"/);
+  assert.doesNotMatch(hosts, /ghs_token/);
+  assert.notEqual(statSync(join(tokens, "hosts.yml")).ino, before);
+  assert.deepEqual(readdirSync(tokens).sort(), ["config.yml", "hosts.yml"]);
 });
 
 const gh = spawnSync("gh", ["--version"]).status === 0;
