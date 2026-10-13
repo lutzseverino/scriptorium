@@ -1,0 +1,22 @@
+{
+  "name": "@lutzseverino/factory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Host-installed GitHub issue factory",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@ai-hero/sandcastle": "0.12.0"
+  },
+  "devDependencies": {
+    "@standard-schema/spec": "1.1.0",
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3"
+  }
+}
