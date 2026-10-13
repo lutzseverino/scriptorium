@@ -1,7 +1,9 @@
 # Factory release procedure
 
-The factory has its own SemVer, starting at 1.0.0 in `factory/package.json`.
-Its annotated tags are `factory-vX.Y.Z`; Repo Canon keeps its `vX.Y.Z` tags.
+Scriptorium is the factory this repository releases, with its own SemVer
+starting at 1.0.0 in `factory/package.json`. Its annotated tags are
+`scriptorium-vX.Y.Z`, starting with `scriptorium-v1.0.0`; Repo Canon keeps its
+`vX.Y.Z` tags.
 Nothing under `factory/` is declared by `standards.yaml` or selected as a
 Repo Canon release input. The live `.sandcastle/` runner stays in place until
 the boundary work cuts over; this skeleton alone is not the runnable first
@@ -10,7 +12,7 @@ factory release.
 ## Owner-only tag setup
 
 Before the first release or a host installation, the owner must configure an
-active repository **tag ruleset** targeting `factory-v*`. Enable [Restrict creations and Restrict updates](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
+active repository **tag ruleset** targeting `scriptorium-v*`. Enable [Restrict creations and Restrict updates](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
 and add only the owner's account to the bypass list with Always permission.
 GitHub supports [individual users as bypass actors](https://github.blog/changelog/2026-05-07-repository-rulesets-user-bypass-and-branch-renaming/).
 Do not grant that bypass to GitHub Apps, agents, other accounts, or a role that
@@ -80,11 +82,11 @@ Tag that exact merge commit and create an ordinary GitHub Release that is
 
 ```sh
 git diff --exit-code "$factory_reviewed_head" "$factory_merge" -- factory/ &&
-git tag --annotate "factory-v$factory_version" "$factory_merge" \
-  --message "Factory v$factory_version" &&
-  git push origin "factory-v$factory_version" &&
-  gh release create "factory-v$factory_version" --verify-tag --latest=false \
-    --title "Factory v$factory_version" --notes-file "$factory_notes"
+git tag --annotate "scriptorium-v$factory_version" "$factory_merge" \
+  --message "Scriptorium v$factory_version" &&
+  git push origin "scriptorium-v$factory_version" &&
+  gh release create "scriptorium-v$factory_version" --verify-tag --latest=false \
+    --title "Scriptorium v$factory_version" --notes-file "$factory_notes"
 ```
 
 Verify that the remote tag is annotated and peels to the merge commit, the
@@ -92,9 +94,9 @@ release is neither draft nor prerelease, and GitHub's latest release still
 names a Repo Canon `v*` tag:
 
 ```sh
-git ls-remote origin "refs/tags/factory-v$factory_version" \
-  "refs/tags/factory-v$factory_version^{}"
-gh release view "factory-v$factory_version" --json tagName,isDraft,isPrerelease,url
+git ls-remote origin "refs/tags/scriptorium-v$factory_version" \
+  "refs/tags/scriptorium-v$factory_version^{}"
+gh release view "scriptorium-v$factory_version" --json tagName,isDraft,isPrerelease,url
 gh api repos/lutzseverino/repo-canon/releases/latest --jq .tag_name
 ```
 

@@ -1,8 +1,8 @@
-# Factory
+# Scriptorium
 
-The factory is a host-installed GitHub issue runner, with its own release
-stream and version numbers. One process serves every repository listed in the
-operator's host configuration, with one oldest-first queue and host-wide
+Scriptorium is the host-installed factory that runs GitHub issues, with its own
+release stream (`scriptorium-vX.Y.Z` tags) and version numbers. One process serves
+every repository listed in the operator's host configuration, with one oldest-first queue and host-wide
 provider caps. The live factory still runs from `.sandcastle/` until the
 remaining
 [factory boundary work](https://github.com/lutzseverino/repo-canon/issues/334)

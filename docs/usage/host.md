@@ -8,10 +8,11 @@ provider caps and usage gates apply across all of them.
 
 ## Install and start
 
-The owner must set up the `factory-v*` tag ruleset before the first host
+The owner must set up the `scriptorium-v*` tag ruleset before the first host
 installation, as the [release procedure](../development/release.md) describes.
-Check out a factory release tag, then from its `factory/` directory install the
-runtime dependencies and start the process with the host configuration's path:
+Check out a Scriptorium release tag (`scriptorium-vX.Y.Z`), then from its
+`factory/` directory install the runtime dependencies and start the process
+with the host configuration's path:
 
 ```sh
 npm ci --omit=dev

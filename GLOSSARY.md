@@ -5,6 +5,12 @@ lists, and has its own release stream.
 
 ## Language
 
+**Scriptorium**:
+The product name under which this repository releases the factory, its
+`@lutzseverino/scriptorium` package and its `scriptorium-vX.Y.Z` tags. Use
+"factory" for the role.
+_Avoid_: Scriptorium when referring to the generic factory role
+
 **Factory release**:
 A version of the factory, published from this repository under its own version
 numbers, that a host installs.
