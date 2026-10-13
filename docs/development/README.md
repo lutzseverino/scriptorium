@@ -14,6 +14,15 @@ output. The typecheck uses strict TypeScript, Node module resolution, explicit
 `.ts` imports, and erasable syntax only. Source modules belong in `src/` and
 tests in `test/`.
 
+The sandbox image contract tests build and run the factory layer on
+`debian:bookworm-slim` without Node and on `node:24-bookworm` with its existing
+UID and GID 1000. They run in the existing factory CI job, where Docker is
+required; local runs skip them when Docker is unavailable. Run them alone
+with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
+`node --test test/sandbox-image.test.ts`. Image builds download the pinned
+release binaries and need network access. Increment `AGENT_LAYER_VERSION`
+for every edit to `src/agent-layer.Dockerfile`, including tool pins.
+
 Sandcastle is pinned at 0.12.0. Its public types reference
 `@standard-schema/spec` without declaring that dependency, as tracked in
 [Sandcastle #864](https://github.com/mattpocock/sandcastle/issues/864).

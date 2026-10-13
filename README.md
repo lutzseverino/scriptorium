@@ -29,7 +29,10 @@ and [contribution guidelines](../CONTRIBUTING.md) for delivery.
 The operator owns the host configuration; each repository owns its factory
 configuration and sandbox Dockerfile. Their schemas and the host runner are
 later tickets in the boundary work, so this skeleton has no runnable host
-command or configuration loader yet. The boundary decisions live in
+command or configuration loader yet. The package's image builder supplies
+the factory agent layer over each repository's toolchain image; the
+[sandbox image contract](docs/usage/sandbox-image.md) describes its Dockerfile
+requirements and pinned tools. The boundary decisions live in
 [ADR 0013](../docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
 and [ADR 0014](../docs/adr/0014-name-every-factory-convention-in-configuration.md).
 
