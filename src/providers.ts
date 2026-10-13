@@ -17,7 +17,7 @@ export type Sandcastle = {
 };
 
 // One agent run in a sandbox built from `image`. The host adds its own
-// `mounts`; the adapter adds its credential.
+// `mounts` and `env`; the adapter adds its credential.
 export type LaunchRequest = {
   model: string;
   effort: string;
@@ -29,6 +29,7 @@ export type LaunchRequest = {
   log: string;
   idleTimeoutSeconds: number;
   mounts?: Mount[];
+  env?: Record<string, string>;
   signal?: AbortSignal;
 };
 
@@ -71,6 +72,9 @@ const adapters: Record<
   "claude-code": claudeCodeAdapter,
   codex: codexAdapter,
 };
+
+// The providers a host configuration can name.
+export const adapterNames = Object.keys(adapters);
 
 // The host configuration's `providers.<name>`, as far as the registry reads it.
 export type ProviderSettings = { credential: string };

@@ -1,0 +1,15 @@
+{
+  "repositories": ["acme/widgets"],
+  "providers": {
+    "codex": { "cap": 1, "credential": "/etc/factory/codex-auth.json" }
+  },
+  "models": { "default": "claude-sonnet-5-5", "retry": "codex/gpt-5.5@max" },
+  "timeLimitMinutes": 240,
+  "usageThreshold": 80,
+  "pollSeconds": 300,
+  "readiness": { "authorizedRoles": ["admin"] },
+  "unpushablePaths": [],
+  "stateDirectory": "/var/lib/factory",
+  "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
+  "github": { "tokenCommand": ["/usr/local/bin/factory-token"] }
+}

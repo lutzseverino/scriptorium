@@ -2,7 +2,7 @@ import type { AgentProvider } from "@ai-hero/sandcastle";
 import type { LaunchRequest, Mount, Sandcastle } from "../providers.ts";
 
 // Runs one agent through Sandcastle in a Docker sandbox with the host's mounts
-// and the adapter's credential mounts.
+// and environment, and the adapter's credential mounts.
 export async function launchAgent(
   sandcastle: Sandcastle,
   request: LaunchRequest,
@@ -16,6 +16,7 @@ export async function launchAgent(
     sandbox: sandcastle.docker({
       imageName: request.image,
       mounts: [...(request.mounts ?? []), ...credentialMounts],
+      ...(request.env && { env: request.env }),
     }),
     prompt: request.prompt,
     branchStrategy: { type: "branch", branch: request.branch },

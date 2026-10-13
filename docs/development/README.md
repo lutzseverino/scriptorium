@@ -23,6 +23,14 @@ with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`
 for every edit to `src/agent-layer.Dockerfile`, including tool pins.
 
+The host runner's tests in `test/host.test.ts` drive whole passes with a
+stateful GitHub CLI fake, a fake Sandcastle behind the real provider registry,
+and real Git clones of local bare remotes, so they need Git. The decision core's
+tests in `test/factory.test.ts` drive it with snapshots, and the host
+configuration's tests read the fixture files in
+`test/fixtures/host-configuration/`. The token test that runs the GitHub CLI
+against the sandbox's token file skips when `gh` is not installed.
+
 Sandcastle is pinned at 0.12.0. Its public types reference
 `@standard-schema/spec` without declaring that dependency, as tracked in
 [Sandcastle #864](https://github.com/mattpocock/sandcastle/issues/864).

@@ -8,6 +8,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "start": "node src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts"
   },

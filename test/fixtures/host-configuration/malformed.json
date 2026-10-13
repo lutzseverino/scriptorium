@@ -1,0 +1,13 @@
+{
+  "repositories": ["acme/widgets", "ACME/Widgets", "widgets"],
+  "providers": { "claude-code": { "cap": -1, "credential": "claude-token" } },
+  "models": { "default": "claude-sonnet-5-5", "retry": 5 },
+  "timeLimitMinutes": 0,
+  "usageThreshold": 120,
+  "pollSeconds": "300",
+  "readiness": { "authorizedRoles": ["owner", "admin", "admin"] },
+  "unpushablePaths": ["/etc", "../outside", ""],
+  "stateDirectory": "state",
+  "gitIdentity": { "name": "", "email": "factory@example.com" },
+  "github": { "tokenCommand": [] }
+}

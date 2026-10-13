@@ -26,7 +26,8 @@ uid, gid })`. The host supplies the repository Dockerfile's contents and its
 positive numeric UID and GID. Docker must be available on the host. The
 builder first builds the toolchain image, then builds the factory's
 `src/agent-layer.Dockerfile` from that local image. Neither build has a context.
-The host runner that calls this module arrives in later boundary work.
+The host runner builds each repository's image from its `.factory/Dockerfile`
+on every pass.
 
 As root, the layer installs the tools below from pinned release binaries,
 plus their distribution-provided runtime dependencies. It requires no Node.js

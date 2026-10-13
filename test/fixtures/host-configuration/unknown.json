@@ -1,0 +1,21 @@
+{
+  "repositories": ["acme/widgets"],
+  "providers": {
+    "claude-code": {
+      "cap": 2,
+      "credential": "/etc/factory/claude-token",
+      "env": "CLAUDE_CODE_OAUTH_TOKEN"
+    },
+    "cursor": { "cap": 1, "credential": "/etc/factory/cursor" }
+  },
+  "models": { "default": "claude-sonnet-5-5", "retry": "claude-opus-5-5" },
+  "timeLimitMinutes": 240,
+  "usageThreshold": 80,
+  "pollSeconds": 300,
+  "readiness": { "authorizedRoles": ["admin"] },
+  "unpushablePaths": [".github/workflows/"],
+  "stateDirectory": "/var/lib/factory",
+  "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
+  "github": { "tokenCommand": ["/usr/local/bin/factory-token"] },
+  "labels": { "ready": "ready-for-agent" }
+}

@@ -1,9 +1,10 @@
 # Factory
 
 The factory is a host-installed GitHub issue runner, with its own release
-stream and version numbers. One process will serve the repositories listed in
-the operator's host configuration. This package is the skeleton for that
-runner; the live factory still runs from `.sandcastle/` until the remaining
+stream and version numbers. One process serves every repository listed in the
+operator's host configuration, with one oldest-first queue and host-wide
+provider caps. The live factory still runs from `.sandcastle/` until the
+remaining
 [factory boundary work](https://github.com/lutzseverino/repo-canon/issues/334)
 lands.
 
@@ -26,11 +27,13 @@ and [contribution guidelines](../CONTRIBUTING.md) for delivery.
 
 ## Configuration
 
-The operator owns the host configuration; each repository owns its factory
-configuration and sandbox Dockerfile. Their schemas and the host runner are
-later tickets in the boundary work, so this skeleton has no runnable host
-command or configuration loader yet. The package's image builder supplies
-the factory agent layer over each repository's toolchain image; the
+The operator owns the host configuration; each repository owns its sandbox
+Dockerfile, `.factory/Dockerfile`. Start the process with
+`node src/main.ts <host configuration>`;
+[host installation and configuration](docs/usage/host.md) documents the host
+configuration schema, the state directory and the status file. The package's
+image builder supplies the factory agent layer over each repository's
+toolchain image; the
 [sandbox image contract](docs/usage/sandbox-image.md) describes its Dockerfile
 requirements and pinned tools. The boundary decisions live in
 [ADR 0013](../docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
