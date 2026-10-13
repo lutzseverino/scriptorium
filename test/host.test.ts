@@ -4,7 +4,9 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -601,6 +603,55 @@ test("one process launches each repository's ready issues from that repository's
   );
   assert.equal(record.attempt, 1);
   assert.equal(record.exited, false);
+});
+
+test("a failed launch record leaves no sandbox or cap slot and its orphaned claim retries next pass", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: {
+      models: { default: "claude-sonnet-5-5", retry: "claude-sonnet-5-5" },
+    },
+    caps: { "claude-code": 1, codex: 1 },
+  });
+  const paths = join(run.state, "repositories/acme/widgets");
+  const blocked = join(paths, "runs/issue-4-attempt-1.json.partial");
+  mkdirSync(blocked, { recursive: true });
+
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.ok(
+    run.reports.some((line) =>
+      line.includes(
+        "acme/widgets#4 launch failed, so acme/widgets waits for the next pass",
+      ),
+    ),
+  );
+  assert.deepEqual(readdirSync(join(paths, "sandboxes")), []);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "ready-for-agent",
+    "factory:running",
+  ]);
+
+  rmSync(blocked, { recursive: true });
+  const decisions = await run.tick();
+  assert.deepEqual(decisions, [
+    {
+      kind: "launch",
+      repository: "acme/widgets",
+      issue: 4,
+      provider: "claude-code",
+      model: "claude-sonnet-5-5",
+      effort: "high",
+      attempt: 2,
+      retry: {
+        failure: "no factory run or open pull request holds its claim",
+        log: "",
+      },
+    },
+  ]);
+  assert.equal(run.launched.length, 1);
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
 });
 
 test("a sandbox reads its repository's token from a mounted file that outlives no run", async (t) => {

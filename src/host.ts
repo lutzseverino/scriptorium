@@ -512,8 +512,14 @@ export function createHost(
       interrupted: false,
       settled: false,
     };
+    try {
+      record(run);
+    } catch (error) {
+      await follower.close().catch(() => {});
+      await rm(sandbox, { recursive: true, force: true });
+      throw error;
+    }
     runs.push(run);
-    record(run);
     run.finished = ports
       .launch(run.provider, {
         model: run.model,
