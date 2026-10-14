@@ -27,7 +27,9 @@ test("each complete raw line is published redacted as it arrives, and closing pu
   const log = await followRunLog(raw, published, redactor.redact);
   assert.equal(statSync(raw).mode & 0o777, 0o600);
   appendFileSync(raw, "token ghs_one\nhalf a li");
-  await until(() => existsSync(published));
+  await until(
+    () => existsSync(published) && readFileSync(published, "utf8") !== "",
+  );
   assert.equal(readFileSync(published, "utf8"), "token <REDACTED>\n");
   // A secret learned during the run is redacted from what follows.
   redactor.add("ghs_two");
