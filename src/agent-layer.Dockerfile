@@ -29,6 +29,11 @@ RUN set -eu; \
       -o /tmp/factory-tools/codex.tar.gz; \
     tar -xzf /tmp/factory-tools/codex.tar.gz -C /tmp/factory-tools; \
     install -m 0755 "/tmp/factory-tools/codex-${codex_arch}-unknown-linux-musl" /usr/local/bin/codex; \
+    curl -fsSL "https://github.com/openai/codex/releases/download/rust-v0.162.1/codex-code-mode-host-${codex_arch}-unknown-linux-musl.tar.gz" \
+      -o /tmp/factory-tools/codex-code-mode-host.tar.gz; \
+    tar -xzf /tmp/factory-tools/codex-code-mode-host.tar.gz -C /tmp/factory-tools; \
+    install -m 0755 "/tmp/factory-tools/codex-code-mode-host-${codex_arch}-unknown-linux-musl" \
+      /usr/local/bin/codex-code-mode-host; \
     curl -fsSL "https://downloads.claude.ai/claude-code-releases/2.1.287/linux-${claude_arch}/claude" \
       -o /usr/local/bin/claude; \
     chmod 0755 /usr/local/bin/claude; \

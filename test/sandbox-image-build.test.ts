@@ -72,6 +72,58 @@ function assertProviderPolicy(image: string): void {
   assert.equal(settings.disableClaudeAiConnectors, true);
 }
 
+// Asserts as agent that Codex finds its code-mode host, without which the
+// factory's code-mode-only Codex models have no tools. Codex looks for the host
+// beside its own resolved executable and reports code mode before the turn
+// reaches the provider, so a provider on a dead loopback port needs no
+// credentials; sed ends each run at `turn.started`.
+function assertCodeModeHost(image: string): void {
+  const asAgent = (script: string) =>
+    execFileSync(
+      "docker",
+      ["run", "--rm", "--entrypoint", "sh", image, "-ec", script],
+      { encoding: "utf8", timeout: 120_000 },
+    );
+  assert.match(
+    asAgent(
+      'codex=$(readlink -f "$(command -v codex)"); host="${codex%/*}/codex-code-mode-host"; ' +
+        'test "$(stat -c "%F %U:%G:%a" "$host")" = "regular file root:root:755"; ' +
+        '"$host" --help',
+    ),
+    /--listen/,
+  );
+  const startupMessages = (...flags: string[]) => {
+    const events = asAgent(
+      "timeout 60 codex exec --skip-git-repo-check --json -m gpt-6.1-sol " +
+        "-c model_provider=probe -c 'model_providers.probe.name=\"probe\"' " +
+        "-c 'model_providers.probe.base_url=\"http://127.0.0.1:9/v1\"' " +
+        "-c 'model_providers.probe.wire_api=\"responses\"' " +
+        "-c model_providers.probe.request_max_retries=0 " +
+        `-c model_providers.probe.stream_max_retries=0 ${flags.join(" ")} ok ` +
+        '</dev/null 2>/dev/null | sed \'/"type":"turn.started"/q\'',
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(events.at(-1)?.type, "turn.started");
+    return events.map((event) => event.item?.message ?? event.message ?? "");
+  };
+  const unavailable = /Code Mode is unavailable/;
+  const started = startupMessages();
+  assert.equal(
+    started.filter((message) => unavailable.test(message)).length,
+    0,
+    started.join("\n"),
+  );
+  // The control fails if Codex renames the message or the model stops being
+  // code-mode-only, which would let the check above pass silently.
+  assert.ok(
+    startupMessages("-c features.code_mode_host=false").some((message) =>
+      unavailable.test(message),
+    ),
+  );
+}
+
 test(
   "the factory layer runs its pinned tools as agent on a minimal Debian image without Node",
   {
@@ -107,6 +159,7 @@ test(
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
     assert.match(output, /codex-cli 0\.162\.1/);
     assertProviderPolicy(image);
+    assertCodeModeHost(image);
     // The relocatable Git release must find its HTTPS helper, not just print a version.
     assert.match(
       execFileSync(
@@ -187,6 +240,7 @@ test(
     assert.match(output, /codex-cli 0\.162\.1/);
     assert.match(output, /v24\./);
     assertProviderPolicy(image);
+    assertCodeModeHost(image);
   },
 );
 
