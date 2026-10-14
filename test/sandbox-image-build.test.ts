@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { buildSandboxImage, stopSandboxes } from "../src/sandbox-image.ts";
 
@@ -18,6 +20,68 @@ test(
   },
   () => {
     assert.ok(dockerAvailable, "CI must build and run the sandbox images");
+  },
+);
+
+test(
+  "an altered amd64 digest fails at Git's checksum and tags no image",
+  { skip: !dockerAvailable, timeout: 900_000 },
+  (t) => {
+    const image = `factory-digest-mismatch:${randomUUID()}`;
+    t.after(() => spawnSync("docker", ["image", "rm", "--force", image]));
+    const layer = readFileSync(
+      new URL("../src/agent-layer.Dockerfile", import.meta.url),
+      "utf8",
+    );
+    const altered = layer.replace(
+      /git_sha256_amd64=[0-9a-f]{64};/,
+      `git_sha256_amd64=${"0".repeat(64)};`,
+    );
+    assert.notEqual(altered, layer, "the test alters the Git amd64 pin");
+    const build = spawnSync(
+      "docker",
+      [
+        "build",
+        "--platform",
+        "linux/amd64",
+        "--progress",
+        "plain",
+        "--tag",
+        image,
+        "--build-arg",
+        "TOOLCHAIN_IMAGE=debian:bookworm-slim",
+        "--build-arg",
+        "AGENT_UID=2345",
+        "--build-arg",
+        "AGENT_GID=3456",
+        "-",
+      ],
+      {
+        input: altered,
+        encoding: "utf8",
+        timeout: 840_000,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+    assert.ifError(build.error);
+    assert.notEqual(build.status, 0, "the image build must fail");
+    assert.match(
+      build.stdout + build.stderr,
+      /\/tmp\/factory-tools\/git.tar.gz: FAILED/,
+    );
+    assert.match(
+      build.stdout + build.stderr,
+      /computed checksum did NOT match/,
+    );
+    const inspect = spawnSync("docker", ["image", "inspect", image], {
+      encoding: "utf8",
+    });
+    assert.ifError(inspect.error);
+    assert.notEqual(
+      inspect.status,
+      0,
+      "the failed build must not tag an image",
+    );
   },
 );
 

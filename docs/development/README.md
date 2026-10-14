@@ -5,7 +5,11 @@ This directory explains how to develop and release the factory package.
 ## Setup and validation
 
 Follow the repository's [shared setup](../../../docs/development/README.md)
-and [contribution guidelines](../../../CONTRIBUTING.md). From `factory/`, run
+and [contribution guidelines](../../../CONTRIBUTING.md). Install GitHub CLI
+and authenticate it with your existing GitHub login before running package
+tests: the upstream digest comparison uses authenticated `gh api` requests
+for public release metadata. Missing CLI or authentication fails that check;
+only an unavailable local network may skip it. From `factory/`, run
 `npm ci --include=dev`, `npm run typecheck`, and `npm test`. CI runs both package
 checks on Node.js 24 beside the repository checks.
 
@@ -23,6 +27,38 @@ with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`
 for every edit to `src/agent-layer.Dockerfile`, including tool pins.
+
+The fast `test/agent-layer.test.ts` guard executes the install commands with
+spies, without Docker or network access, for both architectures. It rejects
+missing or malformed pins and extraction or installation before verification.
+`test/agent-layer-upstream.test.ts` compares all ten pins against upstream
+metadata using `gh api` and Claude Code's manifest. CI passes its read-only
+GitHub token to the factory test step; only local runs may skip when the
+network is unavailable. The image suite also alters Git's amd64 digest and
+asserts that its checksum fails and no image is tagged.
+
+## Bump an agent-layer tool
+
+Keep the tool's version and its amd64 and arm64 SHA-256 values together in
+`src/agent-layer.Dockerfile`. For Git, the GitHub CLI, Codex and
+`codex-code-mode-host`, take each tarball's digest from the matching GitHub
+release asset's `digest` field. The GitHub CLI release's `checksums.txt` must
+agree with both asset digests. Codex and its code-mode host share one version
+and have separate digest pairs.
+
+For Claude Code, first check that version's `manifest.json.sig` against
+Anthropic's release-signing key at
+`https://downloads.claude.ai/keys/claude-code.asc`, verifying fingerprint
+`31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE`. Verify the detached
+signature with GPG before trusting `manifest.json`, then take the `checksum`
+for `linux-x64` and `linux-arm64`. These signature and checksum-file checks
+happen during the bump; the image build downloads only the pinned tool assets.
+
+Update both architectures' digests and increment `AGENT_LAYER_VERSION` in
+`src/sandbox-image.ts`. Run the fast guard, upstream comparison, both image
+builds, package typecheck and tests, and the shared checks above.
+
+## Host and adapter tests
 
 The host runner's tests in `test/host.test.ts` drive whole passes, stop
 signals and restarts with a stateful GitHub CLI fake, a fake Sandcastle behind

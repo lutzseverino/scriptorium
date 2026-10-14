@@ -35,6 +35,12 @@ in the toolchain image and supports Linux amd64 and arm64. Binaries and Git's
 helpers are installed system-wide, ahead of the toolchain's executables in
 `PATH`.
 
+Before extracting or installing a download, the layer checks the exact
+downloaded tarball or bare Claude Code binary against a hand-pinned SHA-256
+for the selected architecture. A mismatch fails the build with `sha256sum`'s
+mismatch output; the failed file never reaches an install location. The
+checks use the base image's `sha256sum` and fetch no extra files or tools.
+
 | Tool        | Pinned version                                  | Release binary source                                                                                         |
 | ----------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Git         | 2.53.0, Dugite release v2.53.0-4, build 4098283 | [GitHub Desktop's native Git release](https://github.com/desktop/dugite-native/releases/tag/v2.53.0-4)        |
