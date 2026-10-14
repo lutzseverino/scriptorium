@@ -1716,7 +1716,8 @@ test("readiness counts only from a user whose role, read once a pass, the host a
       .map((args) => args[1]);
   await run.tick();
   assert.deepEqual(
-    run.launched.map(({ options }) => options.name),
+    // The two Claude Code token reads can finish in either order.
+    run.launched.map(({ options }) => options.name).sort(),
     ["acme/widgets#1", "acme/widgets#6"],
   );
   const authorized =
@@ -1762,8 +1763,8 @@ test("readiness counts only from a user whose role, read once a pass, the host a
   roles.casey = "admin";
   await run.tick();
   assert.deepEqual(
-    run.launched.map(({ options }) => options.name),
-    ["acme/widgets#1", "acme/widgets#6", "acme/widgets#2"],
+    run.launched.slice(2).map(({ options }) => options.name),
+    ["acme/widgets#2"],
   );
   assert.match(held(run, 5)!, /^claude-code already runs its cap of 3/);
   assert.equal(lookups().length, 6);
