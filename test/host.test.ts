@@ -580,16 +580,19 @@ test("one process launches each repository's ready issues from that repository's
     "factory:running",
   ]);
   assert.deepEqual(
-    run.launched.map(({ options, docker }) => ({
-      name: options.name,
-      cwd: options.cwd,
-      agent: options.agent.name,
-      prompt: options.prompt,
-      branch: options.branchStrategy,
-      // Sandcastle writes the raw log into the run's private directory.
-      log: rawLog(options).replace(/-\w{6}\/agent\.log$/, "-*/agent.log"),
-      image: docker.imageName,
-    })),
+    run.launched
+      .map(({ options, docker }) => ({
+        name: options.name,
+        cwd: options.cwd,
+        agent: options.agent.name,
+        prompt: options.prompt,
+        branch: options.branchStrategy,
+        // Sandcastle writes the raw log into the run's private directory.
+        log: rawLog(options).replace(/-\w{6}\/agent\.log$/, "-*/agent.log"),
+        image: docker.imageName,
+      }))
+      // The adapters' credential reads can finish in either order.
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")),
     [
       {
         name: "acme/gadgets#3",
