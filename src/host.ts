@@ -44,8 +44,10 @@ import type { HostConfiguration } from "./host-configuration.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
 import type { PullRequestState } from "./run-outcome.ts";
 import { createRedactor } from "./redaction.ts";
+import { pauseDeadline } from "./pause.ts";
 import { followRunLog, readLogEnd } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
+import { createUsage } from "./usage.ts";
 
 export type HostPorts = {
   // Runs the GitHub CLI as the token's holder.
@@ -60,6 +62,8 @@ export type HostPorts = {
   // Builds the sandbox image over the repository's toolchain Dockerfile and
   // resolves its tag.
   buildImage(dockerfile: string): Promise<string>;
+  // The provider's usage as its adapter reads it, rejecting with a
+  // `UsageReadError` when the provider refuses the read.
   readUsage(provider: string): Promise<number | null>;
   // Resolves or rejects when the run's agent exits.
   launch(provider: string, request: LaunchRequest): Promise<void>;
@@ -136,6 +140,13 @@ export function createHost(
     timeLimitMinutes: configuration.timeLimitMinutes,
     authorizedRoles: configuration.readiness.authorizedRoles,
   };
+  const usage = createUsage({
+    providers: Object.keys(configuration.providers),
+    read: ports.readUsage,
+    now: ports.now,
+    report,
+    path: join(configuration.stateDirectory, "usage.json"),
+  });
 
   // Everything the process owns for a repository lives under its directory.
   function directory(repository: string) {
@@ -332,19 +343,6 @@ export function createHost(
     );
   }
 
-  async function readUsage() {
-    const usage: Record<string, number | null> = {};
-    for (const provider of Object.keys(configuration.providers)) {
-      try {
-        usage[provider] = await ports.readUsage(provider);
-      } catch (error) {
-        report(`usage for ${provider} is unreadable: ${error}`);
-        usage[provider] = null;
-      }
-    }
-    return usage;
-  }
-
   function find(decision: { repository: string; issue: number }) {
     return runs.find(
       (run) =>
@@ -405,7 +403,7 @@ export function createHost(
           ended: recorded.interrupted
             ? { interrupted: true }
             : pausedEnding(recorded)
-              ? recorded.ended
+              ? recoveredPause(recorded)
               : { timedOut: false, pullRequest: "none", orphaned: true },
           token: "",
           finished: Promise.resolve(),
@@ -571,14 +569,18 @@ export function createHost(
           const limit = registry.providers
             .get(run.provider)!
             .usageLimit(await readLogEnd(raw));
-          if (limit)
+          if (limit) {
+            const reset = limit.reset && redactor.redact(limit.reset);
             run.ended = {
               paused: {
                 cause: "usage limit",
-                reset: limit.reset && redactor.redact(limit.reset),
+                reset,
+                at: run.exitedAt.toISOString(),
+                until: pauseDeadline(reset, run.exitedAt).toISOString(),
               },
               commented: false,
             };
+          }
         } catch (error) {
           report(
             `run for ${repository}#${issue} could not read its raw log's end: ${error}`,
@@ -698,7 +700,7 @@ export function createHost(
           log: run.log,
           ended: run.exited ? run.ended : null,
         })),
-      usage: await readUsage(),
+      usage: await usage.read(),
       settings,
     };
     for (const pass of passes)
@@ -776,6 +778,29 @@ function pausedEnding(
   run: Pick<Run, "ended">,
 ): { paused: Pause; commented: boolean } | null {
   return run.ended && "paused" in run.ended ? run.ended : null;
+}
+
+// A recovered paused run keeps the pause time and deadline it recorded. A
+// record from before they were recorded pauses at its exit, or, lacking that,
+// at its start, so its deadline counts from then and never from the restart.
+function recoveredPause(recorded: {
+  ended: { paused: Partial<Pause> & Pick<Pause, "reset">; commented: boolean };
+  exitedAt?: string | null;
+  startedAt: string;
+}): { paused: Pause; commented: boolean } {
+  const { paused, commented } = recorded.ended;
+  if (typeof paused.at === "string" && typeof paused.until === "string")
+    return { paused: paused as Pause, commented };
+  const at = new Date(recorded.exitedAt ?? recorded.startedAt);
+  return {
+    paused: {
+      cause: "usage limit",
+      reset: paused.reset,
+      at: at.toISOString(),
+      until: pauseDeadline(paused.reset, at).toISOString(),
+    },
+    commented,
+  };
 }
 
 // Each pause tells its issue once; it names no log output.

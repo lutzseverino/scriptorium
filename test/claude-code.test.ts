@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createRegistry } from "../src/providers.ts";
+import { UsageReadError } from "../src/providers/usage.ts";
 import { command, directory, fakePorts, rawRunLog, request } from "./fakes.ts";
 
 const usage = readFileSync(
@@ -109,9 +110,8 @@ test("Claude Code usage is read from its endpoint with the token file, not the e
   ]);
 });
 
-test("Claude Code usage is unreadable when the endpoint refuses or omits the windows", async (t) => {
+test("Claude Code usage is unknown when the endpoint's answer omits the windows", async (t) => {
   for (const [response, expected] of [
-    [new Response("{}", { status: 401 }), null],
     [new Response('{"five_hour":null,"seven_day":null}'), null],
     [new Response('"unexpected"'), null],
     [new Response('{"seven_day":{"utilization":64}}'), 64],
@@ -119,6 +119,62 @@ test("Claude Code usage is unreadable when the endpoint refuses or omits the win
     const ports = fakePorts({ fetch: async () => response });
     assert.equal(await claudeCode(t, ports).adapter.readUsage(), expected);
   }
+});
+
+test("a refused Claude Code usage read names its status and Retry-After, never its body or the token", async (t) => {
+  for (const [status, retryAfter] of [
+    [401, undefined],
+    [429, "1148"],
+    [429, "Thu, 15 Oct 2026 16:25:00 GMT"],
+    [503, undefined],
+  ] as const) {
+    const ports = fakePorts({
+      fetch: async () =>
+        new Response('{"error":{"message":"sk-ant-oat01-first is limited"}}', {
+          status,
+          headers:
+            retryAfter === undefined ? {} : { "retry-after": retryAfter },
+        }),
+    });
+    await assert.rejects(
+      claudeCode(t, ports).adapter.readUsage(),
+      (error: unknown) => {
+        assert.ok(error instanceof UsageReadError);
+        assert.equal(
+          error.message,
+          `the usage endpoint answered HTTP ${status}`,
+        );
+        assert.equal(error.status, status);
+        assert.equal(error.retryAfter, retryAfter);
+        assert.doesNotMatch(String(error), /sk-ant|limited/);
+        return true;
+      },
+    );
+  }
+});
+
+test("a Claude Code usage answer that is not JSON fails without quoting it", async (t) => {
+  const ports = fakePorts({
+    fetch: async () =>
+      new Response("sk-ant-oat01-first <html>", { status: 200 }),
+  });
+  await assert.rejects(claudeCode(t, ports).adapter.readUsage(), (error) => {
+    assert.ok(error instanceof UsageReadError);
+    assert.equal(error.message, "the usage endpoint's answer is not JSON");
+    assert.equal(error.retryAfter, undefined);
+    return true;
+  });
+});
+
+test("a Claude Code usage read that cannot reach the endpoint fails as it failed", async (t) => {
+  const ports = fakePorts({
+    fetch: async () => {
+      throw new TypeError("fetch failed");
+    },
+  });
+  await assert.rejects(claudeCode(t, ports).adapter.readUsage(), {
+    message: "fetch failed",
+  });
 });
 
 const working = [

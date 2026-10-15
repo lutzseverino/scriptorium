@@ -131,7 +131,7 @@ async function readRateLimits(
       const request = pending.get(message.id);
       if (!request) return;
       pending.delete(message.id);
-      if (message.error) request.reject(new Error(message.error.message));
+      if (message.error) request.reject(rpcError(message.error));
       else request.resolve(message.result);
     })
     .on("close", () =>
@@ -164,6 +164,14 @@ async function readRateLimits(
     // removes that home only afterwards.
     if (server.pid !== undefined) await exited;
   }
+}
+
+// A JSON-RPC error reply, with its code when the server sent one.
+function rpcError(error: { code?: unknown; message?: unknown }): Error {
+  const code = typeof error.code === "number" ? ` (code ${error.code})` : "";
+  return new Error(
+    `codex app-server refused the read${code}: ${error.message}`,
+  );
 }
 
 function timeout(): never {

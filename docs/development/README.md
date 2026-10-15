@@ -73,7 +73,9 @@ repository-specific labels and prompts, configuration edits on the default
 branch, run settling while configuration or the Dockerfile is missing, and
 paused runs: their label writes, single comment, recovery and resume. Each
 provider adapter's tests read raw logs shaped like Sandcastle's file display
-for its usage-limit errors.
+for its usage-limit errors. `test/usage.test.ts` drives the host's usage
+reads on a fake clock, covering `Retry-After`, reading freshness and the usage
+record, and `test/pause.test.ts` covers the pause deadline.
 The GitHub CLI fake serves each issue's timeline from one fixture shape (label
 events with their actors, body and title edits, comments and sub-issue links)
 and each account's repository role, so the host tests drive the adapter's

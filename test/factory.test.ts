@@ -9,6 +9,7 @@ import {
   type Run,
   type Settings,
   type Snapshot,
+  type Usage,
 } from "../src/factory.ts";
 import { createRegistry } from "../src/providers.ts";
 import type { Actor } from "../src/readiness.ts";
@@ -79,7 +80,7 @@ function repository(
 }
 
 // A snapshot of one repository, acme/widgets, unless `repositories` names
-// several.
+// several. A usage given as a number was read at `now`.
 function snapshot({
   issues = [],
   runs = [],
@@ -92,14 +93,19 @@ function snapshot({
   runs?: Run[];
   claims?: Claim[];
   repositories?: Repository[];
-  usage?: Snapshot["usage"];
+  usage?: Record<string, number | Usage | null>;
   settings?: Partial<Settings>;
 } = {}): Snapshot {
   return {
     now,
     repositories: repositories ?? [repository(widgets, issues, { claims })],
     runs,
-    usage,
+    usage: Object.fromEntries(
+      Object.entries(usage).map(([provider, reading]) => [
+        provider,
+        typeof reading === "number" ? { used: reading, at: now } : reading,
+      ]),
+    ),
     settings: {
       defaultModel: "claude-sonnet-5-5",
       retryModel: "claude-opus-5-5@xhigh",
@@ -1404,7 +1410,13 @@ test("closing a parent takes precedence over relaunching its interrupted run", (
   );
 });
 
-const limit = { cause: "usage limit", reset: "12:50pm (UTC)" } as const;
+// A pause half an hour before `now`, whose reset is later that day.
+const limit = {
+  cause: "usage limit",
+  reset: "12:50pm (UTC)",
+  at: "2026-10-09T11:30:00.000Z",
+  until: "2026-10-09T12:50:00.000Z",
+} as const;
 const pausing = { paused: limit, commented: false };
 const pausedRun = { paused: limit, commented: true };
 const pausedLabels = ["ready-for-agent", "factory:paused"];
@@ -1447,7 +1459,7 @@ test("a paused run resumes as the same attempt only once its provider's usage re
     log: log(4),
   };
   const paused = (
-    usage: Snapshot["usage"],
+    usage: Record<string, number | null>,
     reset: string | null = limit.reset,
   ) =>
     decide({
@@ -1466,11 +1478,11 @@ test("a paused run resumes as the same attempt only once its provider's usage re
     });
   assert.equal(
     skipOf(paused({}), 4),
-    "relaunch waits: codex hit its usage limit (resets 12:50pm (UTC)); its usage is unreadable",
+    "relaunch waits: codex hit its usage limit (resets 12:50pm (UTC)); its usage is unreadable, so it waits until 2026-10-09T12:50:00.000Z at most",
   );
   assert.equal(
     skipOf(paused({ codex: null }, null), 4),
-    "relaunch waits: codex hit its usage limit; its usage is unreadable",
+    "relaunch waits: codex hit its usage limit; its usage is unreadable, so it waits until 2026-10-09T12:50:00.000Z at most",
   );
   assert.equal(
     skipOf(paused({ codex: 80 }), 4),
@@ -1489,6 +1501,86 @@ test("a paused run resumes as the same attempt only once its provider's usage re
       relaunch: true,
     },
   ]);
+});
+
+// Whether a run launches, for each usage: below, at and above the 80%
+// threshold, and unknown.
+const usages = [79, 80, 95, null] as const;
+
+test("a fresh launch is held only by known usage at or above the threshold", () => {
+  for (const used of usages)
+    assert.equal(
+      launched(decide({ issues: [issue(4)], usage: { "claude-code": used } }))
+        .length,
+      used === null || used < 80 ? 1 : 0,
+      String(used),
+    );
+});
+
+test("a paused run waits on unknown usage only until its deadline, and on high usage past it", () => {
+  const decideAt = (time: string, usage: Snapshot["usage"]) =>
+    decideFactory(
+      {
+        ...snapshot({
+          issues: [issue(4, pausedLabels)],
+          runs: [run(4, { ended: pausedRun })],
+        }),
+        now: time,
+        usage,
+      },
+      registry,
+    );
+  const before = "2026-10-09T12:49:59.999Z";
+  const deadline = limit.until;
+  const after = "2026-10-10T09:00:00.000Z";
+  for (const time of [before, deadline, after])
+    for (const used of usages) {
+      // Read at the pass itself, after the pause.
+      const usage = {
+        "claude-code": used === null ? null : { used, at: time },
+      };
+      const relaunched = launched(decideAt(time, usage)).length === 1;
+      const expected = used === null ? time !== before : used < 80;
+      assert.equal(relaunched, expected, `${used} at ${time}`);
+    }
+  assert.equal(
+    skipOf(decideAt(after, { "claude-code": { used: 95, at: after } }), 4),
+    "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 95% is at or above the 80% threshold",
+  );
+});
+
+test("a low reading from before the pause cannot release it early, while a high one still holds it", () => {
+  const decideAt = (time: string, used: number) =>
+    decideFactory(
+      {
+        ...snapshot({
+          issues: [issue(4, pausedLabels)],
+          runs: [run(4, { ended: pausedRun })],
+        }),
+        now: time,
+        usage: { "claude-code": { used, at: "2026-10-09T11:29:00.000Z" } },
+      },
+      registry,
+    );
+  assert.equal(
+    skipOf(decideAt(now, 10), 4),
+    "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); its usage was last read before the pause, so it waits until 2026-10-09T12:50:00.000Z at most",
+  );
+  assert.equal(launched(decideAt(limit.until, 10)).length, 1);
+  assert.match(
+    skipOf(decideAt(limit.until, 90), 4)!,
+    /usage 90% is at or above the 80% threshold$/,
+  );
+  // A fresh launch counts the same reading as its provider's usage.
+  assert.equal(
+    launched(
+      decide({
+        issues: [issue(5)],
+        usage: { "claude-code": { used: 10, at: "2026-10-09T11:29:00.000Z" } },
+      }),
+    ).length,
+    1,
+  );
 });
 
 test("a paused run also waits for its provider's cap and its repository", () => {

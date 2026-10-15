@@ -38,7 +38,14 @@ export type Issue = {
 
 // Why the factory paused a run, which it resumes by itself, and the reset the
 // cause stated, if any. A provider's usage limit is the only cause so far.
-export type Pause = { cause: "usage limit"; reset: string | null };
+// `at` is when the run paused, and `until` when it stops waiting for its
+// provider's usage to read, both fixed once as it pauses.
+export type Pause = {
+  cause: "usage limit";
+  reset: string | null;
+  at: string;
+  until: string;
+};
 
 // A run the host started, in the repository named `<owner>/<name>`. `ended`
 // is null while its sandbox runs, interrupted once a factory restart stopped
@@ -96,13 +103,18 @@ export type Settings = {
   authorizedRoles: string[];
 };
 
+// A provider's usage reading recent enough to trust: its fullest window's
+// percentage, and when it was read.
+export type Usage = { used: number; at: string };
+
 // Runs of a repository this pass could not read are present only while their
-// sandboxes run, so caps and the time limit still apply to them.
+// sandboxes run, so caps and the time limit still apply to them. A provider's
+// usage is null or absent while unknown.
 export type Snapshot = {
   now: string;
   repositories: Repository[];
   runs: Run[];
-  usage: Record<string, number | null>;
+  usage: Record<string, Usage | null>;
   settings: Settings;
 };
 
@@ -433,8 +445,7 @@ function relaunch(
 // pickup's exclusions don't hold it. It waits for its provider's gate and for
 // its repository to resume, and releases its claim once its issue needs input.
 // A paused run first tells its issue, once, then resumes the same way, under
-// the running label again, and only on its provider's readable usage below
-// the threshold.
+// the running label again, once its usage limit no longer holds it.
 function resume(
   repository: Repository,
   issue: Issue,
@@ -480,20 +491,39 @@ function unretried({ run, failure }: Retry, reason: string): Decision {
   };
 }
 
-// A paused run's usage limit holds it until its provider's usage reads below
-// the threshold; an unreadable usage holds it too, so a failed read cannot
-// relaunch it into its limit.
+// A paused run's usage limit holds it while its provider's usage is at or
+// above the threshold, and releases it once a reading taken since the pause
+// is below it. Unlike a fresh launch, which unknown usage doesn't hold, the
+// pause is evidence of exhaustion: unknown usage, or a reading from before
+// the pause, holds it until the pause's deadline, and no longer, so a provider
+// whose usage stays unreadable cannot hold it forever.
 function limited(
   provider: string,
   pause: Pause,
-  { settings, usage }: Snapshot,
+  snapshot: Snapshot,
 ): string | null {
+  const { settings } = snapshot;
   const limit = `${provider} hit its usage limit${pause.reset === null ? "" : ` (resets ${pause.reset})`}`;
-  const used = usage[provider];
-  if (typeof used !== "number") return `${limit}; its usage is unreadable`;
-  if (used >= settings.usageThreshold)
-    return `${limit}; usage ${used}% is at or above the ${settings.usageThreshold}% threshold`;
-  return null;
+  const reading = snapshot.usage[provider];
+  const over = overThreshold(reading, settings);
+  if (over) return `${limit}; ${over}`;
+  if (reading && Date.parse(reading.at) >= Date.parse(pause.at)) return null;
+  if (Date.parse(snapshot.now) >= Date.parse(pause.until)) return null;
+  const unknown = reading
+    ? "its usage was last read before the pause"
+    : "its usage is unreadable";
+  return `${limit}; ${unknown}, so it waits until ${pause.until} at most`;
+}
+
+// Why a reading the snapshot trusts is at or above the threshold, or null
+// when it is below it or the usage is unknown.
+function overThreshold(
+  reading: Usage | null | undefined,
+  settings: Settings,
+): string | null {
+  return reading && reading.used >= settings.usageThreshold
+    ? `usage ${reading.used}% is at or above the ${settings.usageThreshold}% threshold`
+    : null;
 }
 
 function carriesPaused(repository: Repository, number: number): boolean {
@@ -511,7 +541,7 @@ function paused(repository: Repository): string | null {
 }
 
 // A launch needs fewer running sandboxes than the provider's cap and, when
-// its usage is readable, usage below the threshold.
+// its usage is known, usage below the threshold.
 function gate(
   provider: string,
   running: Map<string, number>,
@@ -521,10 +551,8 @@ function gate(
   if (cap === undefined) return `the host sets no cap for ${provider}`;
   if ((running.get(provider) ?? 0) >= cap)
     return `${provider} already runs its cap of ${cap} agent${cap === 1 ? "" : "s"}`;
-  const used = usage[provider];
-  if (typeof used === "number" && used >= settings.usageThreshold)
-    return `${provider} usage ${used}% is at or above the ${settings.usageThreshold}% threshold`;
-  return null;
+  const over = overThreshold(usage[provider], settings);
+  return over && `${provider} ${over}`;
 }
 
 function issueModel(

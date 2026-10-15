@@ -17,6 +17,7 @@ import { sandboxEnvironment } from "../src/github-token.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
 import { createRegistry } from "../src/providers.ts";
+import { UsageReadError } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
 
 // The host runner, run against a stateful GitHub CLI fake, real Git clones
@@ -411,8 +412,9 @@ function host(
     configuration?: Partial<HostConfiguration>;
     caps?: { "claude-code": number; codex: number };
     imageFailures?: Error[];
-    // Each provider's usage as the next read finds it; absent is unreadable.
-    usage?: Record<string, number | null>;
+    // Each provider's usage as the next read finds it: absent or null has no
+    // usage window, and an error is thrown.
+    usage?: Record<string, number | null | Error>;
   },
 ) {
   const root = directory(t);
@@ -460,6 +462,7 @@ function host(
   // Sandbox removals and issue edits, in order.
   const events: string[] = [];
   const starts: (() => void)[] = [];
+  const usageReads: string[] = [];
   const ports: HostPorts = {
     async gh(token, args) {
       if (args[0] === "issue" && args[1] === "edit")
@@ -481,7 +484,12 @@ function host(
       if (imageFailures.length > 0) throw imageFailures.shift();
       return `factory-sandbox:${builds.length}`;
     },
-    readUsage: async (provider) => usage[provider] ?? null,
+    async readUsage(provider) {
+      usageReads.push(provider);
+      const answer = usage[provider];
+      if (answer instanceof Error) throw answer;
+      return answer ?? null;
+    },
     async launch(provider, request) {
       // No provider starts until the real pass has returned.
       await new Promise<void>((resolve) => starts.push(resolve));
@@ -528,6 +536,7 @@ function host(
     tokenCommands,
     clock,
     usage,
+    usageReads,
     state,
     clone: (name: string) => join(state, "repositories", name, "clone"),
     status: () => JSON.parse(readFileSync(join(state, "status.json"), "utf8")),
@@ -2125,6 +2134,13 @@ for (const ended of [
     );
     const [first] = run.launched;
     const issue = run.github.find("acme/widgets", 4);
+    // The pause is the agent's exit, and its deadline that day's 12:50pm, or
+    // the next day's once the time limit stopped it at 16:01.
+    const timing =
+      ended === "at the time limit"
+        ? { at: "2026-10-09T16:01:00.000Z", until: "2026-10-10T12:50:00.000Z" }
+        : { at: "2026-10-09T12:00:00.000Z", until: "2026-10-09T12:50:00.000Z" };
+    const pause = { cause: "usage limit", reset: "12:50pm (UTC)", ...timing };
     endOnLimit(first);
     if (ended === "with an open pull request") issue.pullRequests.push("OPEN");
     if (ended === "at the time limit") {
@@ -2136,19 +2152,12 @@ for (const ended of [
 
     assert.deepEqual(
       (await run.tick()).filter(({ kind }) => kind !== "skip"),
-      [
-        {
-          kind: "pause",
-          repository: "acme/widgets",
-          issue: 4,
-          pause: { cause: "usage limit", reset: "12:50pm (UTC)" },
-        },
-      ],
+      [{ kind: "pause", repository: "acme/widgets", issue: 4, pause }],
     );
     assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
     assert.deepEqual(issue.comments, [pauseComment]);
     assert.deepEqual(recordOf(run.state, 4, 1).ended, {
-      paused: { cause: "usage limit", reset: "12:50pm (UTC)" },
+      paused: pause,
       commented: true,
     });
 
@@ -2157,7 +2166,7 @@ for (const ended of [
     await run.tick();
     assert.equal(
       held(run, 4),
-      "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); its usage is unreadable",
+      `relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); its usage is unreadable, so it waits until ${timing.until} at most`,
     );
     run.usage["claude-code"] = 100;
     await run.tick();
@@ -2245,9 +2254,17 @@ test("a paused run stays paused across a restart, untold again, and resumes unde
   ]);
   assert.deepEqual(issue.comments, [pauseComment]);
   assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+  // The high reading holds it until it expires, then unknown usage holds it
+  // until the reset.
   run.usage["claude-code"] = null;
   await restarted.tick();
-  assert.match(held(run, 4)!, /its usage is unreadable$/);
+  assert.match(held(run, 4)!, /usage 100% is at or above the 80% threshold$/);
+  run.clock.now = new Date("2026-10-09T12:21:00Z");
+  await restarted.tick();
+  assert.match(
+    held(run, 4)!,
+    /its usage is unreadable, so it waits until 2026-10-09T12:50:00.000Z at most$/,
+  );
   run.usage["claude-code"] = 0;
   const launch = (await restarted.tick()).find(
     (decision) => decision.kind === "launch",
@@ -2403,3 +2420,187 @@ test("paused-labelled issues no run holds settle as orphaned claims and lose the
     /First attempt failure: no factory run/,
   );
 });
+
+test("a throttled usage read is reported with its status and not repeated before its Retry-After, even across a restart", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    usage: {
+      "claude-code": new UsageReadError(
+        "the usage endpoint answered HTTP 429",
+        { status: 429, retryAfter: "1148" },
+      ),
+      codex: 20,
+    },
+  });
+  await run.tick();
+  assert.ok(
+    run.reports.includes(
+      "usage for claude-code is unreadable: UsageReadError: the usage endpoint answered HTTP 429; it is next read at 2026-10-09T12:19:08.000Z",
+    ),
+  );
+  assert.ok(!run.reports.some((line) => line.includes("claude-secret")));
+  const reads = (provider: string) =>
+    run.usageReads.filter((read) => read === provider).length;
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(reads("claude-code"), 1);
+  assert.equal(reads("codex"), 2);
+  run.clock.now = new Date("2026-10-09T12:20:00Z");
+  run.usage["claude-code"] = 15;
+  await restarted.tick();
+  assert.equal(reads("claude-code"), 2);
+});
+
+// Codex's usage-limit error as the raw log ends with it, with a reset.
+function endOnCodexLimit(launch: { options: RunOptions }, reset: string) {
+  const error = `You've hit your usage limit. Try again at ${reset}.`;
+  appendFileSync(
+    rawLog(launch.options),
+    [
+      "Working on the issue.",
+      "Agent invocation failed: codex exited with code 1:",
+      error,
+      "",
+    ].join("\n"),
+  );
+}
+
+// Rewrites a run record as a release before pause timing would have left it.
+function legacy(
+  state: string,
+  issue: number,
+  attempt: number,
+  keepExit = true,
+) {
+  const path = join(
+    state,
+    `repositories/acme/widgets/runs/issue-${issue}-attempt-${attempt}.json`,
+  );
+  const record = JSON.parse(readFileSync(path, "utf8"));
+  const { cause, reset } = record.ended.paused;
+  record.ended.paused = { cause, reset };
+  if (!keepExit) delete record.exitedAt;
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
+}
+
+test("an overdue legacy paused record relaunches after a restart with usage still unknown, as the same attempt", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  run.clock.now = new Date("2026-10-14T14:00:00Z");
+  await run.tick();
+  writeFileSync(rawLog(run.launched[0].options), "first attempt\n");
+  run.launched[0].finish(new Error("agent crashed"));
+  await settled();
+  await run.tick();
+  const retried = run.launched[1];
+  // The incident's pause: 15:03:29 UTC, resetting at 5:50pm (UTC).
+  run.clock.now = new Date("2026-10-14T15:03:29Z");
+  endOnCodexLimit(retried, "5:50pm (UTC)");
+  retried.finish(new Error("codex exited with code 1"));
+  await settled();
+  await until(() => recordOf(run.state, 4, 2).exited);
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+  assert.equal(issue.comments.length, 1);
+  legacy(run.state, 4, 2);
+
+  // Restarts before the reset hold it to the deadline the pause fixes.
+  run.clock.now = new Date("2026-10-14T17:00:00Z");
+  const early = run.restart();
+  await early.tick();
+  assert.equal(
+    held(run, 4),
+    "relaunch waits: codex hit its usage limit (resets 5:50pm (UTC)); its usage is unreadable, so it waits until 2026-10-14T17:50:00.000Z at most",
+  );
+  early.interrupt();
+
+  run.clock.now = new Date("2026-10-15T16:05:00Z");
+  const restarted = run.restart();
+  const decisions = await restarted.tick();
+  assert.deepEqual(
+    decisions.filter(({ kind }) => kind !== "skip"),
+    [
+      { kind: "unpause", repository: "acme/widgets", issue: 4 },
+      {
+        kind: "launch",
+        repository: "acme/widgets",
+        issue: 4,
+        provider: "codex",
+        model: "gpt-5.5",
+        effort: "high",
+        attempt: 2,
+        retry: {
+          failure: "the run ended without an open pull request",
+          log: join(
+            run.state,
+            "repositories/acme/widgets/logs/issue-4-attempt-1.log",
+          ),
+        },
+        relaunch: true,
+      },
+    ],
+  );
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
+  assert.equal(issue.comments.length, 1);
+  const resumed = run.launched[2];
+  assert.equal(resumed.options.prompt, retried.options.prompt);
+  assert.deepEqual(resumed.options.branchStrategy, {
+    type: "branch",
+    branch: "factory/issue-4",
+  });
+  assert.equal(
+    recordOf(run.state, 4, 2).log,
+    join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-2.log"),
+  );
+
+  // Another limit is a new pause with its own deadline.
+  run.clock.now = new Date("2026-10-15T16:10:00Z");
+  endOnCodexLimit(resumed, "5:50pm (UTC)");
+  resumed.finish(new Error("codex exited with code 1"));
+  await settled();
+  await until(() => recordOf(run.state, 4, 2).exited);
+  await restarted.tick();
+  assert.deepEqual(recordOf(run.state, 4, 2).ended, {
+    paused: {
+      cause: "usage limit",
+      reset: "5:50pm (UTC)",
+      at: "2026-10-15T16:10:00.000Z",
+      until: "2026-10-15T17:50:00.000Z",
+    },
+    commented: true,
+  });
+  assert.equal(issue.comments.length, 2);
+});
+
+for (const keepExit of [true, false])
+  test(`a legacy paused record ${keepExit ? "pauses at its exit" : "without its exit pauses at its start"}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    // Started at 12:00 and exited at 13:00, after the 12:50pm reset.
+    run.clock.now = new Date("2026-10-09T13:00:00Z");
+    endOnLimit(run.launched[0]);
+    run.launched[0].finish(new Error("claude-code exited with code 1"));
+    await settled();
+    await until(() => recordOf(run.state, 4, 1).exited);
+    await run.tick();
+    legacy(run.state, 4, 1, keepExit);
+    run.clock.now = new Date("2026-10-09T14:00:00Z");
+    const restarted = run.restart();
+    const launched = (await restarted.tick()).some(
+      ({ kind }) => kind === "launch",
+    );
+    assert.equal(launched, !keepExit);
+    if (keepExit)
+      assert.match(
+        held(run, 4)!,
+        /so it waits until 2026-10-10T12:50:00.000Z at most$/,
+      );
+  });

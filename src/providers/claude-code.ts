@@ -8,7 +8,7 @@ import type {
 } from "../providers.ts";
 import { launchAgent } from "./launch.ts";
 import { limitError } from "./limit.ts";
-import { fullest } from "./usage.ts";
+import { fullest, UsageReadError } from "./usage.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 const efforts: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -38,7 +38,8 @@ export function claudeCodeAdapter(
         }),
       );
     },
-    // Claude Code publishes no usage read; this one is best-effort.
+    // Claude Code publishes no usage read; this one is best-effort. A refusal
+    // names its status and passes on its `Retry-After`, never its body.
     async readUsage() {
       const response = await ports.fetch(usageEndpoint, {
         headers: {
@@ -47,7 +48,26 @@ export function claudeCodeAdapter(
         },
         signal: AbortSignal.timeout(30_000),
       });
-      return response.ok ? claudeUsage(await response.json()) : null;
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new UsageReadError(
+          `the usage endpoint answered HTTP ${response.status}`,
+          {
+            status: response.status,
+            retryAfter: response.headers.get("retry-after") ?? undefined,
+          },
+        );
+      }
+      let result;
+      try {
+        result = await response.json();
+      } catch {
+        // A parse error quotes the answer, so its message stays out.
+        throw new UsageReadError("the usage endpoint's answer is not JSON", {
+          status: response.status,
+        });
+      }
+      return claudeUsage(result);
     },
     usageLimit: (log) => limitError(log, claudeLimitErrors),
   };

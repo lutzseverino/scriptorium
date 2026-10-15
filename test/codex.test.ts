@@ -110,7 +110,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   if (message.method === "initialize") reply({ id: 0, result: {} });
   else if (message.method !== "account/rateLimits/read") return;
   else if (${JSON.stringify(behavior)} === "refuse")
-    reply({ id: 1, error: { message: "not signed in" } });
+    reply({ id: 1, error: { code: -32600, message: "not signed in" } });
   else reply({ id: 1, result: {
     rateLimits: {
       limitId: "codex",
@@ -162,7 +162,10 @@ test("each Codex usage read signs in from a private copy of the current login th
 test("a Codex usage read removes its login copy after an error or a timeout", async (t) => {
   const root = directory(t);
   for (const [behavior, message] of [
-    ["refuse", /not signed in/],
+    [
+      "refuse",
+      /^codex app-server refused the read \(code -32600\): not signed in$/,
+    ],
     ["hang", /timed out/],
   ] as const) {
     const fake = fakeCodex(root, behavior);
