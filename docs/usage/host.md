@@ -251,6 +251,10 @@ resumes on it. Unlike an interrupted run, its usage limit holds it:
   run is, because its pause shows that the provider ran out, but only until the
   deadline, so a provider whose usage stays unreadable cannot hold it forever.
 
+The deadline bounds only the hold caused by unknown usage. A usable high
+reading still holds it after the deadline; the deadline promises no launch
+despite capacity or repository holds and sets no spending quota.
+
 It also waits for its provider's cap and for its repository to resume, however
 long those take. Before it launches, the factory swaps the paused label back for the
 running label; if that write fails, the run does not launch that pass.
@@ -263,24 +267,56 @@ carrying the paused label is never picked up as a fresh attempt.
 
 ### Usage reads
 
-Each pass reads each configured provider's usage, unless the provider asked
-for time. A provider that refuses a read, such as Claude Code's usage endpoint
-answering HTTP 429, a read that fails, and an answer without a usage window are
-each written to the process log with the provider, the HTTP status or error,
-and when the provider is next read. The log never holds the credential or the
-answer's body, and nothing is posted on an issue.
+Each pass reads each configured provider's usage unless its read deadline
+has not arrived. Claude Code's `/api/oauth/usage` is undocumented and
+best-effort. The [documented long-lived token](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)
+from `claude setup-token` supports model requests and launches, but should not
+be expected to permit usage reads. Successful launches do not establish that
+permission. HTTP 403 may mean the token lacks usage-read permission; the status
+alone does not prove a scope error. HTTP 429 means the usage read was throttled,
+which does not establish permission either. Backoff does not grant permission.
+
+The first unavailable read is written to the process log with the provider,
+the numeric HTTP status or safe failure category, when it is next read, and
+the effect on the percentage gate. Repeated unchanged failures and cooldown
+skips stay quiet, including after restart. A different status or failure
+category produces an updated diagnostic. The next successful numeric reading
+reports recovery once and rearms failure reporting; an answer without a usage
+window is not recovery. No credential, raw error or response body is logged or
+kept in the episode state, and nothing is posted on an issue.
 
 When a refusal carries `Retry-After`, as seconds from the answer or as an HTTP
 date, the factory does not read that provider's usage again before then, and
 reads it on the first pass at or after that time. Other providers are read
-as usual meanwhile. A missing, malformed or past value lets the next pass read.
-This waiting holds back only usage reads, never launches.
+as usual meanwhile.
+For HTTP 403, a missing, malformed or past header instead gives a one-hour
+fallback; for HTTP 429 it gives a separate 20-minute fallback, each measured
+from response receipt. Other failures retain normal next-pass polling without
+a usable header. These deadlines apply per provider across every repository
+and survive restarts. This waiting holds back only usage reads, never launches.
 
 The factory keeps each provider's last good reading with the time it was read,
 and uses it for 20 minutes from then: a failed or skipped read neither discards
 it nor makes it younger. After that the usage is unknown, whether the reading
-was low or high. The readings and read deadlines are kept in `usage.json`, so a
-restart neither reads too early nor loses them.
+was low or high. Unknown usage permits fresh launches without the
+`usageThreshold` percentage gate. Provider concurrency caps, run time limits,
+and the provider's actual limit still apply. A confirmed limit exit pauses its
+run for the finite unknown-usage hold described in [Paused runs](#paused-runs):
+the first reliably parsed UTC reset relative to the pause, capped at 24 hours,
+or the 24-hour fallback. This does not cap repeated genuine pauses.
+The readings, read deadlines and safe episode categories are kept in
+`usage.json`, so a restart neither reads too early nor loses them or repeats
+the same warning. Older records without episode metadata still load normally.
+
+The host keeps supplying one credential file, read at each launch and eligible
+usage probe. Replacing it takes effect at the next eligible probe without
+deleting `usage.json`; the factory neither inspects token scopes nor manages a
+new login or refresh flow. For this service, evaluating a permitted
+usage-capable credential and its renewal or rotation belongs in
+`lutzseverino/homelab`, which owns credential provisioning. An interactive login
+may have broader scopes but a different lifetime and refresh contract; copying
+a short-lived access token alone is not a durable fix. Factory refusal handling
+works independently of that separate host decision.
 
 ## Restarts
 

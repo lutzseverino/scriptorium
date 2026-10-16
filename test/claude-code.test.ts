@@ -124,6 +124,10 @@ test("Claude Code usage is unknown when the endpoint's answer omits the windows"
 test("a refused Claude Code usage read names its status and Retry-After, never its body or the token", async (t) => {
   for (const [status, retryAfter] of [
     [401, undefined],
+    [403, undefined],
+    [403, "1148"],
+    [403, "Thu, 15 Oct 2026 16:25:00 GMT"],
+    [403, "malformed"],
     [429, "1148"],
     [429, "Thu, 15 Oct 2026 16:25:00 GMT"],
     [503, undefined],

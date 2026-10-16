@@ -2421,37 +2421,60 @@ test("paused-labelled issues no run holds settle as orphaned claims and lose the
   );
 });
 
-test("a throttled usage read is reported with its status and not repeated before its Retry-After, even across a restart", async (t) => {
-  const run = host(t, {
-    repositories: { "acme/widgets": [] },
-    remotes: { "acme/widgets": remote(t, factoryFiles) },
-    usage: {
-      "claude-code": new UsageReadError(
-        "the usage endpoint answered HTTP 429",
-        { status: 429, retryAfter: "1148" },
+for (const [status, retryAfter, nextRead, retryTime] of [
+  [403, undefined, "2026-10-09T13:00:00.000Z", "2026-10-09T13:00:00Z"],
+  [429, undefined, "2026-10-09T12:20:00.000Z", "2026-10-09T12:20:00Z"],
+  [403, "1148", "2026-10-09T12:19:08.000Z", "2026-10-09T12:20:00Z"],
+  [429, "1148", "2026-10-09T12:19:08.000Z", "2026-10-09T12:20:00Z"],
+] as const) {
+  test(`HTTP ${status} with Retry-After ${retryAfter ?? "absent"} backs off quietly across a host restart and reports recovery`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      usage: {
+        "claude-code": new UsageReadError(
+          `the usage endpoint answered HTTP ${status}`,
+          { status, retryAfter },
+        ),
+        codex: 20,
+      },
+    });
+    await run.tick();
+    assert.ok(
+      run.reports.some((line) =>
+        line.includes(
+          `usage for claude-code is unreadable: the usage endpoint answered HTTP ${status}; it is next read at ${nextRead}`,
+        ),
       ),
-      codex: 20,
-    },
+    );
+    assert.ok(!run.reports.some((line) => line.includes("claude-secret")));
+    const reads = (provider: string) =>
+      run.usageReads.filter((read) => read === provider).length;
+    run.clock.now = new Date("2026-10-09T12:10:00Z");
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(reads("claude-code"), 1);
+    assert.equal(reads("codex"), 2);
+    assert.equal(
+      run.reports.filter((line) => line.startsWith("usage for claude-code"))
+        .length,
+      1,
+    );
+    run.clock.now = new Date(retryTime);
+    run.usage["claude-code"] = 15;
+    await restarted.tick();
+    assert.equal(reads("claude-code"), 2);
+    assert.equal(reads("codex"), 3);
+    assert.equal(
+      run.reports.filter((line) => line.startsWith("usage for claude-code"))
+        .length,
+      2,
+    );
+    assert.ok(
+      run.reports.includes("usage for claude-code is readable again: 15% used"),
+    );
   });
-  await run.tick();
-  assert.ok(
-    run.reports.includes(
-      "usage for claude-code is unreadable: UsageReadError: the usage endpoint answered HTTP 429; it is next read at 2026-10-09T12:19:08.000Z",
-    ),
-  );
-  assert.ok(!run.reports.some((line) => line.includes("claude-secret")));
-  const reads = (provider: string) =>
-    run.usageReads.filter((read) => read === provider).length;
-  run.clock.now = new Date("2026-10-09T12:10:00Z");
-  const restarted = run.restart();
-  await restarted.tick();
-  assert.equal(reads("claude-code"), 1);
-  assert.equal(reads("codex"), 2);
-  run.clock.now = new Date("2026-10-09T12:20:00Z");
-  run.usage["claude-code"] = 15;
-  await restarted.tick();
-  assert.equal(reads("claude-code"), 2);
-});
+}
 
 // Codex's usage-limit error as the raw log ends with it, with a reset.
 function endOnCodexLimit(launch: { options: RunOptions }, reset: string) {

@@ -1,7 +1,7 @@
 // The host's view of provider usage: each provider's last good reading and
-// when the provider may be read again, kept across passes and restarts. Each
-// pass reads every provider whose read is due and hands the decision core only
-// readings recent enough to trust.
+// when the provider may be read again and its unavailable episode, kept across
+// passes and restarts. Each pass reads every provider whose read is due and
+// hands the decision core only readings recent enough to trust.
 import {
   existsSync,
   mkdirSync,
@@ -17,9 +17,19 @@ import { UsageReadError } from "./providers/usage.ts";
 // and skipped reads don't renew it.
 export const usageFreshMinutes = 20;
 
-// A provider's reading and the earliest time its usage may be read again,
-// when the provider asked for one.
-type ProviderUsage = { reading: Usage | null; nextRead: string | null };
+// Refusals without a usable Retry-After still give the endpoint time. A 403
+// may be a permission refusal, rather than temporary throttling.
+const forbiddenRetryMinutes = 60;
+const throttledRetryMinutes = 20;
+
+// Only safe categories identify an unavailable episode; no raw error, response
+// or credential is kept in the record or used to decide whether to report.
+type UsageFailure = `http:${number}` | "read-error" | "no-window";
+type ProviderUsage = {
+  reading: Usage | null;
+  nextRead: string | null;
+  failure: UsageFailure | null;
+};
 
 export type UsagePorts = {
   providers: readonly string[];
@@ -55,6 +65,7 @@ export function createUsage(ports: UsagePorts) {
       loaded[provider] = {
         reading: validReading(entry?.reading),
         nextRead: validTime(entry?.nextRead),
+        failure: validFailure(entry?.failure),
       };
     }
     return loaded;
@@ -74,24 +85,70 @@ export function createUsage(ports: UsagePorts) {
     }
   }
 
+  function unavailable(
+    provider: string,
+    current: ProviderUsage,
+    failure: UsageFailure,
+    reason: string,
+  ) {
+    if (current.failure === failure) return;
+    current.failure = failure;
+    const permission =
+      provider === "claude-code" && failure === "http:403"
+        ? "; the documented long-lived setup token may lack usage-read permission"
+        : "";
+    ports.report(
+      `usage for ${provider} is unreadable: ${reason}; ${current.nextRead ? `it is next read at ${current.nextRead}` : "it is read again next pass"}${permission}; a recent cached reading can still apply, but once it expires fresh launches proceed without the percentage gate`,
+    );
+  }
+
   async function attempt(provider: string, current: ProviderUsage) {
     try {
       const used = await ports.read(provider);
       current.nextRead = null;
-      if (used === null)
-        ports.report(
-          `usage for ${provider} is unreadable: its answer holds no usage window; it is read again next pass`,
+      if (used === null || !Number.isFinite(used))
+        unavailable(
+          provider,
+          current,
+          "no-window",
+          "its answer holds no usage window",
         );
-      else current.reading = { used, at: ports.now().toISOString() };
+      else {
+        current.reading = { used, at: ports.now().toISOString() };
+        if (current.failure !== null)
+          ports.report(
+            `usage for ${provider} is readable again: ${used}% used`,
+          );
+        current.failure = null;
+      }
     } catch (error) {
       // The answer's receipt is what a delay in seconds counts from.
+      const receivedAt = ports.now();
+      const fallbackMinutes =
+        error instanceof UsageReadError
+          ? error.status === 403
+            ? forbiddenRetryMinutes
+            : error.status === 429
+              ? throttledRetryMinutes
+              : null
+          : null;
       const next =
         error instanceof UsageReadError
-          ? retryAt(error.retryAfter, ports.now())
+          ? (retryAt(error.retryAfter, receivedAt) ??
+            (fallbackMinutes === null
+              ? null
+              : new Date(receivedAt.getTime() + fallbackMinutes * 60_000)))
           : null;
       current.nextRead = next?.toISOString() ?? null;
-      ports.report(
-        `usage for ${provider} is unreadable: ${error}; ${next ? `it is next read at ${current.nextRead}` : "it is read again next pass"}`,
+      const status = error instanceof UsageReadError ? error.status : undefined;
+      const failure = validFailure(`http:${status}`) ?? "read-error";
+      unavailable(
+        provider,
+        current,
+        failure,
+        failure === "read-error"
+          ? "the usage read failed"
+          : `the usage endpoint answered HTTP ${status}`,
       );
     }
   }
@@ -106,15 +163,13 @@ export function createUsage(ports: UsagePorts) {
       const entry = (current[provider] = state[provider] ?? {
         reading: null,
         nextRead: null,
+        failure: null,
       });
       if (
-        entry.nextRead !== null &&
-        ports.now().getTime() < Date.parse(entry.nextRead)
+        entry.nextRead === null ||
+        ports.now().getTime() >= Date.parse(entry.nextRead)
       )
-        ports.report(
-          `usage for ${provider} is not read before ${entry.nextRead}, as its provider asked`,
-        );
-      else await attempt(provider, entry);
+        await attempt(provider, entry);
       usage[provider] = fresh(entry.reading, ports.now());
     }
     state = current;
@@ -136,7 +191,8 @@ export function fresh(reading: Usage | null, now: Date): Usage | null {
 
 // When a `Retry-After` value lets the provider be read again: a delay in
 // seconds from the answer's receipt or an HTTP date, as RFC 9110 defines
-// them. A missing, malformed or past value is null, so the next pass reads.
+// them. A missing, malformed or past value is null, so the caller can choose
+// its fallback policy.
 export function retryAt(
   value: string | undefined,
   receivedAt: Date,
@@ -146,8 +202,10 @@ export function retryAt(
   const at = /^\d+$/.test(trimmed)
     ? receivedAt.getTime() + Number(trimmed) * 1000
     : httpDate(trimmed, receivedAt);
-  return at !== null && Number.isFinite(at) && at > receivedAt.getTime()
-    ? new Date(at)
+  const date = new Date(at ?? NaN);
+  return Number.isFinite(date.getTime()) &&
+    date.getTime() > receivedAt.getTime()
+    ? date
     : null;
 }
 
@@ -232,5 +290,13 @@ function validReading(value: unknown): Usage | null {
 function validTime(value: unknown): string | null {
   return typeof value === "string" && Number.isFinite(Date.parse(value))
     ? value
+    : null;
+}
+
+function validFailure(value: unknown): UsageFailure | null {
+  return value === "read-error" ||
+    value === "no-window" ||
+    (typeof value === "string" && /^http:[1-5]\d{2}$/.test(value))
+    ? (value as UsageFailure)
     : null;
 }
