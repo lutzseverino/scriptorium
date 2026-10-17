@@ -78,7 +78,7 @@ field is refused, and nothing comes from environment variables.
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
-[package README](../../README.md#providers) describes the grammar.
+[providers](#providers) section describes the grammar.
 
 ### Token command
 
@@ -102,6 +102,40 @@ the pass, with the failure as the reason in the process log and the status
 file, and the other repositories continue. A running sandbox keeps its last
 token, which is still valid, and the factory retries the refresh every minute.
 The factory names the failure but never logs the command's output.
+
+## Providers
+
+The provider registry in `src/providers.ts` holds one adapter per provider the
+host configuration names: Claude Code and Codex. Each adapter launches its
+agent through Sandcastle, lists its reasoning efforts, routes bare model slugs
+by its vendor prefix (`claude-*` or `gpt-*`), supplies the prompt's
+`{skillPrefix}` (`/` or `$`), reads its usage, and recognizes its own
+usage-limit error at the end of an ended run's raw log. Its one credential is a
+host file, read again at every launch and usage read: the Claude Code token
+file from `claude setup-token`, or the Codex login (`auth.json`) the host keeps
+renewing. No provider credential comes from an environment variable.
+
+Claude Code's documented setup token supports launches but should not be
+expected to read its undocumented, best-effort usage endpoint. A 403 can be a
+permission refusal; a 429 means throttling. Neither waiting nor a successful
+launch establishes usage permission. The factory backs off refused reads and
+reports an unavailable episode once, with updates for changed failures and
+numeric recovery. A good cached reading still applies for 20 minutes from its
+observation; after it expires, fresh launches proceed without the percentage
+gate. Provider caps, run time limits and the provider's actual limit still
+apply. A confirmed limit pauses its run until a usable low reading or its
+fixed unknown-usage deadline: the first reliably parsed UTC reset relative to
+the pause, capped at 24 hours, or a 24-hour fallback. A usable high reading
+continues to hold it; capacity and repository holds can also delay launch.
+That deadline is no spending quota or cap on repeated pauses.
+[Usage reads](#usage-reads) describes backoff, recovery and the separate
+`lutzseverino/homelab` responsibility for credential provisioning and renewal.
+
+A model is `<slug>` or `<provider>/<slug>`, optionally followed by
+`@<effort>`; a model label is the same under the repository's model label
+prefix. A model on a provider the host does not configure, an effort the
+provider does not list, or a bare slug no configured provider routes is refused
+with the reason.
 
 ## Repository conventions
 

@@ -15,8 +15,8 @@ repository root, run `npm ci --include=dev`, `npm run typecheck`, and
 request. CI's `Test` job, in `.github/workflows/ci.yml`, runs the same install,
 typecheck and tests on Node.js 24 for every pull request and push to `main`.
 
-The package runs TypeScript through Node.js type stripping and emits no build
-output. The typecheck uses strict TypeScript, Node module resolution, explicit
+The package runs TypeScript through Node.js 24 type stripping and emits no
+build output. The typecheck uses strict TypeScript, Node module resolution, explicit
 `.ts` imports, and erasable syntax only. Source modules belong in `src/` and
 tests in `test/`.
 
@@ -39,7 +39,7 @@ GitHub token to the test step; only local runs may skip when the
 network is unavailable. The image suite also alters Git's amd64 digest and
 asserts that its checksum fails and no image is tagged.
 
-## Bump an agent-layer tool
+### Bump an agent-layer tool
 
 Keep the tool's version and its amd64 and arm64 SHA-256 values together in
 `src/agent-layer.Dockerfile`. For Git, the GitHub CLI, Codex and
@@ -60,7 +60,7 @@ Update both architectures' digests and increment `AGENT_LAYER_VERSION` in
 `src/sandbox-image.ts`. Run the fast guard, upstream comparison, both image
 builds, package typecheck and tests, and the shared checks above.
 
-## Host and adapter tests
+### Host and adapter tests
 
 The host runner's tests in `test/host.test.ts` drive whole passes, stop
 signals and restarts with a stateful GitHub CLI fake, a fake Sandcastle behind
@@ -88,7 +88,9 @@ that runs the GitHub CLI against the sandbox's token file skips when `gh` is
 not installed. The run log's tests rely on file watching, which the published
 log follows while an agent runs.
 
-Sandcastle is pinned at 0.12.0. Its public types reference
+Sandcastle is a pinned runtime dependency, at 0.12.0; the smoke test in
+`test/sandcastle.test.ts` constructs its agent and sandbox configurations
+without launching a container or an agent. Its public types reference
 `@standard-schema/spec` without declaring that dependency, as tracked in
 [Sandcastle #864](https://github.com/mattpocock/sandcastle/issues/864).
 The package pins it as a development dependency so `tsc --noEmit` checks the

@@ -51,7 +51,7 @@ paused the run and resumes it by itself; see
 
 The host's default model applies when an issue has no model label. Multiple
 model labels, an unknown provider or model, and an unsupported effort hold
-that issue with a reason; see the [provider grammar](../../README.md#providers).
+that issue with a reason; see the [provider grammar](host.md#providers).
 
 ## Prompts and pauses
 
