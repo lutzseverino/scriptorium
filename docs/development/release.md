@@ -6,8 +6,8 @@ began in [`lutzseverino/repo-canon`](https://github.com/lutzseverino/repo-canon)
 which published `scriptorium-v1.0.0` through `scriptorium-v1.0.5` with the
 package under `factory/`. Those tags and releases stay there, at their original
 objects. This repository continues the same stream from `scriptorium-v1.0.6`.
-A version published in either repository is never published again: each
-release takes a version above the newest one published in either.
+A version published in either repository is never published again, and
+releases here start above `scriptorium-v1.0.5`.
 
 ## Owner-only tag setup
 
@@ -17,8 +17,8 @@ and add only the owner's account to the bypass list with Always permission.
 GitHub supports [individual users as bypass actors](https://github.blog/changelog/2026-05-07-repository-rulesets-user-bypass-and-branch-renaming/).
 Do not grant that bypass to GitHub Apps, agents, other accounts, or a role that
 includes them. Restricting deletion keeps a published tag permanent. Verify
-that the owner can create a matching tag and no other actor can create or
-update one. This ruleset is a setup requirement, not something a release agent
+that the owner can create a matching tag and no other actor can create,
+update or delete one. This ruleset is a setup requirement, not something a release agent
 may bypass. A factory tag selects code the host runs, so only the owner's
 account creates and pushes it.
 
