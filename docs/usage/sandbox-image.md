@@ -14,10 +14,14 @@ no user or home directory except `agent` and `/home/agent`. `COPY` and `ADD`
 cannot read repository files because Docker receives only the Dockerfile on
 stdin. Remote downloads in the Dockerfile can install the toolchain. Existing
 users and groups are allowed, including the `node` user in
-`node:24-bookworm`; the factory replaces a user holding the host's UID and
-reuses a group holding its GID. Toolchain installation must therefore not
+`node:24-bookworm` or `node:26-bookworm`; the factory replaces a user holding
+the host's UID and reuses a group holding its GID. Toolchain installation must therefore not
 depend on those accounts or their homes. A toolchain Dockerfile may end with
 a non-root `USER`; the factory switches back to root for its layer.
+
+For a Node.js toolchain, use stable Node.js 24 or 26. This repository keeps
+`node:24-bookworm` as its default in `.factory/Dockerfile`; a repository
+whose toolchain needs no Node.js can keep a base without it.
 
 ## Factory agent layer
 

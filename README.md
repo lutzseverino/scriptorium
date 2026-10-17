@@ -3,7 +3,7 @@
   <p>A self-hosted service that implements ready GitHub issues with coding agents in sandboxes, for maintainers who run it on their own machine.</p>
   <p>
     <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
-    <img src="https://img.shields.io/badge/Node.js-24-5FA04E?logo=node.js&logoColor=white" alt="Node.js 24">
+    <img src="https://img.shields.io/badge/Node.js-24%20%7C%2026-5FA04E?logo=node.js&logoColor=white" alt="Node.js 24 or 26">
   </p>
 </div>
 
@@ -19,7 +19,7 @@ conventions this repository follows, where Scriptorium lived until
 
 ## Installation
 
-On a Linux host with Node.js 24, Git, the GitHub CLI and Docker, check out the
+On a Linux host with Node.js 24 or 26, Git, the GitHub CLI and Docker, check out the
 latest release and start the process with the host configuration's path:
 
 ```sh

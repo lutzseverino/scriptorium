@@ -4,27 +4,40 @@ This directory explains how to develop and release the factory package.
 
 ## Setup and validation
 
-Use Node.js 24 with npm, Git, and Docker for the sandbox image tests, and
-follow the [contribution guidelines](../../CONTRIBUTING.md) for delivery.
+Use stable Node.js 24 or 26 with npm, Git, and Docker for the sandbox image
+tests. Node.js 24 remains the default toolchain.
+Follow the [contribution guidelines](../../CONTRIBUTING.md) for delivery.
 Install GitHub CLI and authenticate it with your existing GitHub login before
 running package tests: the upstream digest comparison uses authenticated
 `gh api` requests for public release metadata. Missing CLI or authentication
 fails that check; only an unavailable local network may skip it. From the
 repository root, run `npm ci --include=dev`, `npm run typecheck`, and
 `npm test`. Run `git diff --check` over the change before opening a pull
-request. CI's `Test` job, in `.github/workflows/ci.yml`, runs the same install,
-typecheck and tests on Node.js 24 for every pull request and push to `main`.
+request. Run these commands with each supported major before requesting review.
+CI's `Test (Node.js 24)` and `Test (Node.js 26)` jobs, in
+`.github/workflows/ci.yml`, run the same install, typecheck and tests for every
+pull request and push to `main`. The required `Test` check passes only when
+both jobs succeed; the required `PR metadata` check keeps its Node.js 24 default.
 
-The package runs TypeScript through Node.js 24 type stripping and emits no
-build output. The typecheck uses strict TypeScript, Node module resolution, explicit
-`.ts` imports, and erasable syntax only. Source modules belong in `src/` and
-tests in `test/`.
+The package runs TypeScript through Node.js type stripping on both majors and
+emits no build output. The typecheck uses strict TypeScript, Node module
+resolution, explicit `.ts` imports, type-only imports, and erasable syntax only.
+Keep `@types/node` on the lowest supported major, 24, as the API baseline.
+Source modules belong in `src/` and tests in `test/`.
+
+[Node.js 26's TypeScript documentation](https://github.com/nodejs/node/blob/v26.12.0/doc/api/typescript.md)
+keeps execution limited to erasable syntax and ignores `tsconfig.json`
+transformations. It removes `--experimental-transform-types`; the
+[module API](https://github.com/nodejs/node/blob/v26.12.0/doc/api/module.md#modulestriptypescripttypescode-options)
+also removes the `stripTypeScriptTypes` transform and source-map options. Do
+not add enums, runtime namespaces, parameter properties, import aliases, a
+transformation flag, or a build step.
 
 The sandbox image contract tests build and run the factory layer on
-`debian:bookworm-slim` without Node and on `node:24-bookworm` with its existing
-UID and GID 1000, and remove sandbox containers by the layer's label. They run
-in CI's `Test` job, where Docker is required; local runs skip them when Docker
-is unavailable. Run them alone
+`debian:bookworm-slim` without Node and on both `node:24-bookworm` and
+`node:26-bookworm` with their existing UID and GID 1000, and remove sandbox
+containers by the layer's label. They run in both CI runtime jobs, where Docker
+is required; local runs skip them when Docker is unavailable. Run them alone
 with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`

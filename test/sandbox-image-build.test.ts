@@ -261,52 +261,54 @@ test(
   },
 );
 
-test(
-  "the factory layer replaces node's UID 1000 and reuses its GID on node:24-bookworm",
-  {
-    skip: !dockerAvailable,
-    timeout: 900_000,
-  },
-  async (t) => {
-    const image = await buildSandboxImage({
-      // The toolchain's own policy files, which the factory layer replaces.
-      dockerfile:
-        "FROM node:24-bookworm\n" +
-        "RUN mkdir -p /etc/codex /etc/claude-code/managed-settings.d && " +
-        "printf '[features]\\napps = true\\n' > /etc/codex/requirements.toml && " +
-        "echo '{' > /etc/claude-code/managed-settings.d/toolchain.json && " +
-        "chown -R node /etc/codex /etc/claude-code\n" +
-        "USER node\n",
-      uid: 1000,
-      gid: 1000,
-    });
-    t.after(() =>
-      execFileSync("docker", ["image", "rm", image, `${image}-toolchain`]),
-    );
-    const output = execFileSync(
-      "docker",
-      [
-        "run",
-        "--rm",
-        "--entrypoint",
-        "sh",
-        image,
-        "-ec",
-        'test "$(id -un)" = agent; test "$(id -u)" = 1000; test "$(id -g)" = 1000; ' +
-          'test "$HOME" = /home/agent; test -w "$HOME"; ' +
-          "git --version; gh --version; claude --version; codex --version; node --version",
-      ],
-      { encoding: "utf8", timeout: 60_000 },
-    );
-    assert.match(output, /git version 2\.53\.0/);
-    assert.match(output, /gh version 2\.102\.0/);
-    assert.match(output, /2\.1\.287 \(Claude Code\)/);
-    assert.match(output, /codex-cli 0\.162\.1/);
-    assert.match(output, /v24\./);
-    assertProviderPolicy(image);
-    assertCodeModeHost(image);
-  },
-);
+for (const major of [24, 26]) {
+  test(
+    `the factory layer replaces node's UID 1000 and reuses its GID on node:${major}-bookworm`,
+    {
+      skip: !dockerAvailable,
+      timeout: 900_000,
+    },
+    async (t) => {
+      const image = await buildSandboxImage({
+        // The toolchain's own policy files, which the factory layer replaces.
+        dockerfile:
+          `FROM node:${major}-bookworm\n` +
+          "RUN mkdir -p /etc/codex /etc/claude-code/managed-settings.d && " +
+          "printf '[features]\\napps = true\\n' > /etc/codex/requirements.toml && " +
+          "echo '{' > /etc/claude-code/managed-settings.d/toolchain.json && " +
+          "chown -R node /etc/codex /etc/claude-code\n" +
+          "USER node\n",
+        uid: 1000,
+        gid: 1000,
+      });
+      t.after(() =>
+        execFileSync("docker", ["image", "rm", image, `${image}-toolchain`]),
+      );
+      const output = execFileSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--entrypoint",
+          "sh",
+          image,
+          "-ec",
+          'test "$(id -un)" = agent; test "$(id -u)" = 1000; test "$(id -g)" = 1000; ' +
+            'test "$HOME" = /home/agent; test -w "$HOME"; ' +
+            "git --version; gh --version; claude --version; codex --version; node --version",
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+      assert.match(output, /git version 2\.53\.0/);
+      assert.match(output, /gh version 2\.102\.0/);
+      assert.match(output, /2\.1\.287 \(Claude Code\)/);
+      assert.match(output, /codex-cli 0\.162\.1/);
+      assert.match(output, new RegExp(`^v${major}\\.`, "m"));
+      assertProviderPolicy(image);
+      assertCodeModeHost(image);
+    },
+  );
+}
 
 test(
   "stopping the sandboxes removes every container of a sandbox image and no other",
