@@ -4,13 +4,15 @@ This directory explains how to develop and release the factory package.
 
 ## Setup and validation
 
-Follow the repository's [shared setup](../../../docs/development/README.md)
-and [contribution guidelines](../../../CONTRIBUTING.md). Install GitHub CLI
-and authenticate it with your existing GitHub login before running package
-tests: the upstream digest comparison uses authenticated `gh api` requests
-for public release metadata. Missing CLI or authentication fails that check;
-only an unavailable local network may skip it. From `factory/`, run
-`npm ci --include=dev`, `npm run typecheck`, and `npm test`. CI runs both package
+Use Node.js 24 with npm, Git, and Docker for the sandbox image tests, and
+follow the [contribution guidelines](../../CONTRIBUTING.md) for delivery.
+Install GitHub CLI and authenticate it with your existing GitHub login before
+running package tests: the upstream digest comparison uses authenticated
+`gh api` requests for public release metadata. Missing CLI or authentication
+fails that check; only an unavailable local network may skip it. From the
+repository root, run `npm ci --include=dev`, `npm run typecheck`, and
+`npm test`. Run `git diff --check` over the change before opening a pull
+request. CI runs both package
 checks on Node.js 24 beside the repository checks.
 
 The package runs TypeScript through Node.js type stripping and emits no build
