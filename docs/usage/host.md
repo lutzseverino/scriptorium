@@ -25,9 +25,10 @@ checkout of one of those tags installs and starts from `factory/` instead. A
 host that updates on its own lists the releases of `lutzseverino/scriptorium`
 for newer versions, since later releases are published only there.
 
-The process needs Node.js 24, Git, the GitHub CLI and Docker on its `PATH`, and
-runs until it is stopped; [restarts](#restarts) describes stopping it. It builds
-sandbox images with its own user's UID and GID. An unreadable, malformed or invalid host configuration stops it at start
+The process needs stable Node.js 24 or 26 (24 is the default), Git, the GitHub
+CLI and Docker on its `PATH`, and runs until it is stopped;
+[restarts](#restarts) describes stopping it. It builds sandbox images with its
+own user's UID and GID. An unreadable, malformed or invalid host configuration stops it at start
 with every problem named. The host keeps its own service setup: the service
 definition and its `PATH`, the provider credential files, and the host
 configuration itself.

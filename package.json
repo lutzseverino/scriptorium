@@ -5,7 +5,7 @@
   "description": "Host-installed GitHub issue factory",
   "type": "module",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24 <25 || >=26 <27"
   },
   "scripts": {
     "start": "node src/main.ts",
