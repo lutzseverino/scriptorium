@@ -10,14 +10,20 @@ provider caps and usage gates apply across all of them.
 
 The owner must set up the `scriptorium-v*` tag ruleset before the first host
 installation, as the [release procedure](../development/release.md) describes.
-Check out a Scriptorium release tag (`scriptorium-vX.Y.Z`), then from its
-`factory/` directory install the runtime dependencies and start the process
-with the host configuration's path:
+Check out a Scriptorium release tag (`scriptorium-vX.Y.Z`) of
+`lutzseverino/scriptorium`, then from the checkout's root install the runtime
+dependencies and start the process with the host configuration's path:
 
 ```sh
 npm ci --omit=dev
 node src/main.ts /etc/factory/host.json
 ```
+
+Releases up to `scriptorium-v1.0.5` were published from
+`lutzseverino/repo-canon`, with the package in its `factory/` directory; a
+checkout of one of those tags installs and starts from `factory/` instead. A
+host that updates on its own lists the releases of `lutzseverino/scriptorium`
+for newer versions, since later releases are published only there.
 
 The process needs Node.js 24, Git, the GitHub CLI and Docker on its `PATH`, and
 runs until it is stopped; [restarts](#restarts) describes stopping it. It builds
