@@ -13,7 +13,9 @@ each one's agent in a sandbox, a container built from the repository's own
 toolchain image with the factory's agent layer of Git, the GitHub CLI and the
 agent CLIs on top. A provider is an agent CLI and the subscription behind it,
 such as Claude Code or Codex. Releases are published here as
-`scriptorium-vX.Y.Z` tags, continuing the stream that began in Repo Canon.
+`scriptorium-vX.Y.Z` tags. The stream began in Repo Canon, the shared repository
+conventions this repository follows, where Scriptorium lived until
+`scriptorium-v1.0.5`.
 
 ## Installation
 
@@ -27,6 +29,10 @@ git checkout "$(gh release view --repo lutzseverino/scriptorium --json tagName -
 npm ci --omit=dev
 node src/main.ts /etc/factory/host.json
 ```
+
+`scriptorium-v1.0.5` and earlier install from
+[Repo Canon's releases](https://github.com/lutzseverino/repo-canon/releases)
+instead, from the checkout's `factory/` directory.
 
 [Host installation and configuration](docs/usage/host.md) covers the host
 configuration, the token command, the state directory and restarts; the host
