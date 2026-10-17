@@ -7,7 +7,7 @@ provider caps.
 
 ## Development
 
-From `factory/`, install the pinned dependencies and run the package checks:
+From the repository root, install the pinned dependencies and run the package checks:
 
 ```sh
 npm ci --include=dev
@@ -19,8 +19,8 @@ TypeScript executes through Node.js 24 type stripping, with no build step.
 Sandcastle is a pinned runtime dependency; the smoke test constructs its
 agent and sandbox configurations without launching a container or an agent.
 
-Use the repository's [shared setup and validation](../docs/development/README.md)
-and [contribution guidelines](../CONTRIBUTING.md) for delivery.
+The [development guide](docs/development/README.md) covers setup and
+validation, and the [contribution guidelines](CONTRIBUTING.md) cover delivery.
 
 ## Configuration
 
@@ -35,9 +35,9 @@ directory and the status file. The package's
 image builder supplies the factory agent layer over each repository's
 toolchain image; the
 [sandbox image contract](docs/usage/sandbox-image.md) describes its Dockerfile
-requirements and pinned tools. The boundary decisions live in
-[ADR 0013](../docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
-and [ADR 0014](../docs/adr/0014-name-every-factory-convention-in-configuration.md).
+requirements and pinned tools. The boundary decisions live in Repo Canon's
+[ADR 0013](https://github.com/lutzseverino/repo-canon/blob/v0.14.0/docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
+and [ADR 0014](https://github.com/lutzseverino/repo-canon/blob/v0.14.0/docs/adr/0014-name-every-factory-convention-in-configuration.md).
 
 ## Providers
 
@@ -77,6 +77,5 @@ with the reason.
 ## Documentation
 
 [Factory documentation](docs/README.md) covers package development, release,
-and architecture decisions. Factory terms live in the package
-[glossary](GLOSSARY.md), located by the repository's
-[glossary map](../GLOSSARY-MAP.md).
+and architecture decisions. Factory terms live in the
+[glossary](GLOSSARY.md).
