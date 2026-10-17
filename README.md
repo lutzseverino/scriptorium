@@ -1,81 +1,72 @@
-# Scriptorium
+<div align="center">
+  <h1>Scriptorium</h1>
+  <p>A self-hosted service that implements ready GitHub issues with coding agents in sandboxes, for maintainers who run it on their own machine.</p>
+  <p>
+    <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+    <img src="https://img.shields.io/badge/Node.js-24-5FA04E?logo=node.js&logoColor=white" alt="Node.js 24">
+  </p>
+</div>
 
-Scriptorium is the host-installed factory that runs GitHub issues, with its own
-release stream (`scriptorium-vX.Y.Z` tags) and version numbers. One process serves
-every repository listed in the operator's host configuration, with one oldest-first queue and host-wide
-provider caps.
+Scriptorium is a factory: one process on a host serves every repository its
+host configuration lists. It picks up issues a person marked ready and runs
+each one's agent in a sandbox built from that repository's toolchain image. A
+provider is an agent CLI and the subscription behind it, such as Claude Code or
+Codex. Releases are this repository's `scriptorium-vX.Y.Z` tags.
 
-## Development
+## Installation
 
-From the repository root, install the pinned dependencies and run the package checks:
+On a Linux host with Node.js 24, Git, the GitHub CLI and Docker, check out a
+release tag and start the process with the host configuration's path:
 
 ```sh
-npm ci --include=dev
-npm run typecheck
-npm test
+git clone https://github.com/lutzseverino/scriptorium.git
+cd scriptorium
+git checkout <release tag>
+npm ci --omit=dev
+node src/main.ts /etc/factory/host.json
 ```
 
-TypeScript executes through Node.js 24 type stripping, with no build step.
-Sandcastle is a pinned runtime dependency; the smoke test constructs its
-agent and sandbox configurations without launching a container or an agent.
+[Host installation and configuration](docs/usage/host.md) covers the service,
+the credentials and updates.
 
-The [development guide](docs/development/README.md) covers setup and
-validation, and the [contribution guidelines](CONTRIBUTING.md) cover delivery.
+## Features
+
+- Serves many repositories from one process, with one oldest-first queue.
+- Accepts readiness only from a person holding a role the host authorizes.
+- Builds each sandbox from the repository's `.factory/Dockerfile` and its own agent layer.
+- Caps each provider's concurrent sandboxes and holds launches at high usage.
+- Pauses a run that hits its provider's usage limit and resumes it unattended.
+- Retries a failed first attempt once, on the host's retry model.
+- Restarts without spending a run's retry.
+
+## Usage
+
+In a repository the host serves, a maintainer marks an issue ready and picks
+its model:
+
+```sh
+gh issue edit 42 --add-label ready-for-agent --add-label model:claude-opus-5-5
+```
+
+On its next pass the factory labels the issue `factory:running`, runs the
+agent on branch `factory/issue-42`, and keeps the claim while the agent's pull
+request is open.
 
 ## Configuration
 
-The operator owns the host configuration; each repository owns its factory
-configuration, `.factory/config.json`, and sandbox Dockerfile, `.factory/Dockerfile`.
-The [factory configuration schema](docs/usage/factory-configuration.md) names
-the required labels, model label prefix and prompt template. Start the process with
-`node src/main.ts <host configuration>`;
-[host installation and configuration](docs/usage/host.md) documents the host
-configuration schema, the token command's contract, redaction, the state
-directory and the status file. The package's
-image builder supplies the factory agent layer over each repository's
-toolchain image; the
-[sandbox image contract](docs/usage/sandbox-image.md) describes its Dockerfile
-requirements and pinned tools. The boundary decisions live in Repo Canon's
-[ADR 0013](https://github.com/lutzseverino/repo-canon/blob/v0.14.0/docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
-and [ADR 0014](https://github.com/lutzseverino/repo-canon/blob/v0.14.0/docs/adr/0014-name-every-factory-convention-in-configuration.md).
-
-## Providers
-
-The provider registry in `src/providers.ts` holds one adapter per provider the
-host configuration names: Claude Code and Codex. Each adapter launches its
-agent through Sandcastle, lists its reasoning efforts, routes bare model slugs
-by its vendor prefix (`claude-*` or `gpt-*`), supplies the prompt's
-`{skillPrefix}` (`/` or `$`), reads its usage, and recognizes its own
-usage-limit error at the end of an ended run's raw log. Its one credential is a
-host file, read again at every launch and usage read: the Claude Code token
-file from `claude setup-token`, or the Codex login (`auth.json`) the host keeps
-renewing. No provider credential comes from an environment variable.
-
-Claude Code's documented setup token supports launches but should not be
-expected to read its undocumented, best-effort usage endpoint. A 403 can be a
-permission refusal; a 429 means throttling. Neither waiting nor a successful
-launch establishes usage permission. The factory backs off refused reads and
-reports an unavailable episode once, with updates for changed failures and
-numeric recovery. A good cached reading still applies for 20 minutes from its
-observation; after it expires, fresh launches proceed without the percentage
-gate. Provider caps, run time limits and the provider's actual limit still
-apply. A confirmed limit pauses its run until a usable low reading or its
-fixed unknown-usage deadline: the first reliably parsed UTC reset relative to
-the pause, capped at 24 hours, or a 24-hour fallback. A usable high reading
-continues to hold it; capacity and repository holds can also delay launch.
-That deadline is no spending quota or cap on repeated pauses. The host guide's
-[usage reads](docs/usage/host.md#usage-reads) describes backoff, recovery and the
-separate `lutzseverino/homelab` responsibility for credential provisioning and
-renewal.
-
-A model is `<slug>` or `<provider>/<slug>`, optionally followed by
-`@<effort>`; a model label is the same under the repository's model label
-prefix. A model on a provider the host does not configure, an effort the
-provider does not list, or a bare slug no configured provider routes is refused
-with the reason.
+The operator owns the [host configuration](docs/usage/host.md#host-configuration).
+Each repository owns its [factory configuration](docs/usage/factory-configuration.md),
+`.factory/config.json`, and its toolchain image, `.factory/Dockerfile`, under
+the [sandbox image contract](docs/usage/sandbox-image.md).
 
 ## Documentation
 
-[Factory documentation](docs/README.md) covers package development, release,
-and architecture decisions. Factory terms live in the
-[glossary](GLOSSARY.md).
+[Documentation](docs/README.md)
+
+## Contributing
+
+[Contribution guidelines](CONTRIBUTING.md)
+
+## License
+
+[MIT License](LICENSE)
