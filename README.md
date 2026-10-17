@@ -9,31 +9,34 @@
 
 Scriptorium is a factory: one process on a host serves every repository its
 host configuration lists. It picks up issues a person marked ready and runs
-each one's agent in a sandbox built from that repository's toolchain image. A
-provider is an agent CLI and the subscription behind it, such as Claude Code or
-Codex. Releases are this repository's `scriptorium-vX.Y.Z` tags.
+each one's agent in a sandbox, a container built from the repository's own
+toolchain image with the factory's agent layer of Git, the GitHub CLI and the
+agent CLIs on top. A provider is an agent CLI and the subscription behind it,
+such as Claude Code or Codex. Releases are published here as
+`scriptorium-vX.Y.Z` tags, continuing the stream that began in Repo Canon.
 
 ## Installation
 
-On a Linux host with Node.js 24, Git, the GitHub CLI and Docker, check out a
-release tag and start the process with the host configuration's path:
+On a Linux host with Node.js 24, Git, the GitHub CLI and Docker, check out the
+latest release and start the process with the host configuration's path:
 
 ```sh
 git clone https://github.com/lutzseverino/scriptorium.git
 cd scriptorium
-git checkout <release tag>
+git checkout "$(gh release view --repo lutzseverino/scriptorium --json tagName --jq .tagName)"
 npm ci --omit=dev
 node src/main.ts /etc/factory/host.json
 ```
 
-[Host installation and configuration](docs/usage/host.md) covers the service,
-the credentials and updates.
+[Host installation and configuration](docs/usage/host.md) covers the host
+configuration, the token command, the state directory and restarts; the host
+keeps its own service definition and credential files.
 
 ## Features
 
 - Serves many repositories from one process, with one oldest-first queue.
 - Accepts readiness only from a person holding a role the host authorizes.
-- Builds each sandbox from the repository's `.factory/Dockerfile` and its own agent layer.
+- Builds each toolchain image from the repository's `.factory/Dockerfile`.
 - Caps each provider's concurrent sandboxes and holds launches at high usage.
 - Pauses a run that hits its provider's usage limit and resumes it unattended.
 - Retries a failed first attempt once, on the host's retry model.

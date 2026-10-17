@@ -10,3 +10,5 @@ This directory maps the factory's documentation categories.
   factory and their rationale.
 - [Agent configuration](agents/README.md): the skill setup files agents read
   as this repository's workflow configuration.
+
+The factory's terms are defined in the [glossary](../GLOSSARY.md).

@@ -12,7 +12,7 @@
     },
     "profile": "factory"
   },
-  "inspection": "sha256:78e2a2f6696fe825a05086f636240843910ad43fd9444ca542e9d113e0ae39ce",
+  "inspection": "sha256:6f2725839e3c93bf8d397e7d742f38f59b08baa57cb6f2dc293f063c10f3d10a",
   "files": {
     "docs/agents/README.md": {
       "sha256": "a78a8a4934c9de37cfcd11be23ce3dd58462108fa53b6cdaead4af18ca7e773b",
@@ -811,7 +811,7 @@
       "executable": false
     },
     ".repo-standards/inputs/scope-history.json": {
-      "sha256": "8fbca4734ee4185bda1a575e4274d69ee1cb7a467cb9ec2ab545dde76f6815c2",
+      "sha256": "11d58acb0f133d275828b61c6186776d94ec20eabb1b626d78b205b6e175f237",
       "executable": false
     },
     ".repo-standards/rules/documentation.md": {
@@ -864,7 +864,7 @@
     }
   },
   "state": {
-    "sha256": "69e0979a42a0e7c0073844563817f8a684827adcbb54e3072825251f3cdbe972",
+    "sha256": "a4c1e49606e7e6a25a7eac7c58854f7fc467635de17bc2c96dafb18ef126eea0",
     "executable": false
   }
 }
