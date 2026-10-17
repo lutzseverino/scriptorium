@@ -15,12 +15,12 @@ users, or add `ENTRYPOINT` or `CMD`.
 Start from a Debian or Ubuntu base where `apt-get` is available, install the
 toolchain system-wide, and assume no user or home directory other than `agent`
 and `/home/agent`. The factory's layer adds no Node.js. The image must provide
-Node.js at the major the installed `babysit` scripts support, currently Node.js
-24, because the installed delivery workflow runs those scripts to wait for
+Node.js at a major the installed `babysit` scripts support, currently stable Node.js
+24 or 26, because the installed delivery workflow runs those scripts to wait for
 checks and merge pull requests. This applies even when the development guide
 names no Node.js. Start from a Debian-based Node image, such as
-`node:24-bookworm`, or install Node.js 24 system-wide. A toolchain that already
-provides that major needs nothing extra.
+`node:24-bookworm`, or install stable Node.js 24 or 26 system-wide. A toolchain that already
+provides either supported major needs nothing extra.
 
 The factory builds the image without a build context, so install with `RUN`
 from package sources, not `COPY` or `ADD` from the repository. Leave the

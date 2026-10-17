@@ -1,5 +1,5 @@
 {
-  "description": "The standard profile plus the factory's repository files, for a repository a factory serves",
+  "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
   "declarations": [
     {
       "id": "agent-configuration-index",
@@ -55,7 +55,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 30
         }
@@ -115,6 +115,18 @@
       "exact": ".github/workflows/sandbox-image.yml"
     },
     {
+      "id": "factory-workflow",
+      "checks": [],
+      "fixes": [],
+      "kind": "repository",
+      "guidance": "guidance/factory-workflow.md",
+      "rules": "rules/factory-workflow.md",
+      "targets": {
+        "paths": [],
+        "directories": []
+      }
+    },
+    {
       "id": "feature-request-template",
       "checks": [],
       "fixes": [],
@@ -139,7 +151,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 30
         }
@@ -166,7 +178,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 30,
           "remote-setup": {
@@ -183,7 +195,7 @@
                 "version-arguments": [
                   "--version"
                 ],
-                "version": ">=24.0.0 <25.0.0"
+                "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
               },
               "timeout-seconds": 30
             }
@@ -203,7 +215,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 30,
           "remote-setup": {
@@ -220,7 +232,7 @@
                 "version-arguments": [
                   "--version"
                 ],
-                "version": ">=24.0.0 <25.0.0"
+                "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
               },
               "timeout-seconds": 30
             }
@@ -384,7 +396,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 30
         }
@@ -444,7 +456,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 30
         }
