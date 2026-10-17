@@ -15,9 +15,15 @@ glossary that context map lists. Paths other declarations own, including
 Repository Standards reserves, stay out, and so does every `README.md` outside
 the documentation roots, which the documentation check would read as a root's
 index; such a README cannot enter this scope, even as a move source. If it is a
-Project README, the `project-readmes` declaration's proposal covers it. During
-an update from Repository Standards 6.x, the retired `adopt-standards` and
-`standards-updates` skills stay out too, because the same run removes them.
+Project README, the `project-readmes` declaration's proposal covers it.
+
+Directories named `adopt-standards` or `standards-updates` at either
+`.agents/skills/` or `.claude/skills/` receive ordinary handling under these
+rules and the selected declarations' ownership. Their Markdown outside a
+documentation root enters the ordinary membership questions, whether it is an
+unedited leftover from Repository Standards CLI 6.x, an edited copy, or a
+project-owned skill. The drafter makes no removal claim. An adopter updating
+from CLI 6.x may see one extra membership question, once.
 
 Decide only the cases in its unresolved questions, resolving genuine membership
 questions with the maintainer, and remove each question from the entry once it
@@ -35,19 +41,37 @@ is decided:
 - What becomes of a directory under a root without a file that Git keeps, a
   symbolic link under a root, or an entry that blocks a root or an index, such
   as a file named `docs`.
-- Whether to commit the first content of a documentation root or of a directory
-  under one that has none, in a separate reviewed change, so that its new index
-  has the evidence Repository Standards requires.
+
+An update drafts afresh: the drafter cannot see the previous confirmed scope,
+so its draft asks again every question that scope may have settled. That scope
+holds the maintainer's earlier decisions. Find it in the retained
+`.repo-standards/inputs/scope-history.json`, format
+`repo-standards/scope-history/v5`, which `inspect --json` reports as
+`historicalScope`: the `documentation` entry of its discovery proposal, with its
+candidates and coverage. Answer each unresolved question it decides as it
+decided:
+
+- A root it included stays a root, with its files and a new index for each of
+  its directories without one.
+- A Markdown file it included or excluded keeps that decision, and so does a
+  file added since to a directory whose Markdown its coverage includes or
+  excludes as a whole.
+- A glossary or context map it included stays included.
+
+Also keep each path it included that still exists and that no rule now assigns
+elsewhere. `docs/agents/project.md` stays out even if it included it: the
+`project-agent-guidance` declaration now owns that path, and removing it from
+documentation scope preserves its content. Show the carried answers to the
+maintainer with the inspection, each naming the earlier decision it comes from,
+and ask them only the questions the previous scope does not decide, such as one
+about a directory added since. `adopt` accepts the entry only once every
+question is answered.
 
 Then add each intended new path that the work needs and the draft cannot know: a
 move destination, with the index of any new directory; and a file whose link to
 documentation needs repair. Keep all declarations' paths disjoint: a Project
 README under a documentation root belongs to one declaration only. A move
 requires authority for its source, destination, and affected link repairs.
-
-If an update's previous documentation scope includes `docs/agents/project.md`,
-use the fresh draft without it. The `project-agent-guidance` declaration now
-owns that path; removing it from documentation scope preserves its content.
 
 The draft does not decide membership by itself. The maintainer's request to
 adopt or update is consent to the drafted and reviewed scope. Ask them to
