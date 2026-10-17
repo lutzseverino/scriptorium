@@ -1,7 +1,7 @@
 {
   "format": "repo-standards/scope-history/v5",
   "evidence": "historical",
-  "inspection": "sha256:6f2725839e3c93bf8d397e7d742f38f59b08baa57cb6f2dc293f063c10f3d10a",
+  "inspection": "sha256:f56edc1d5ae302a6ae4e3773a6f782cb546a877f2b79289a89526c9000fb68af",
   "resolved": {
     "description": "The standard profile plus the factory's repository files, for a repository a factory serves",
     "declarations": [
@@ -1243,7 +1243,7 @@
     ]
   },
   "discovery": {
-    "identity": "sha256:e081baa1ecbbedcfcfb6234879bfeb2d3ed2c2ac0e2823cb89e99c648b860757",
+    "identity": "sha256:7384206ee5df0fb11fb7dfb2a518c3b959c725c654e7d6d7681d9374ea942bcd",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
@@ -1398,7 +1398,7 @@
         },
         "docs/README.md": {
           "type": "file",
-          "sha256": "d4f63b9f095b98cf7d811c78a50872ada2b47c0c6b94bd8c29704d897197c944",
+          "sha256": "187a222c2dfa7e2edc1a9a5a44218ae5e0f0dbdd39997cc8341967b1eea9fc55",
           "executable": false
         },
         "docs/adr/0001-keep-the-package-outside-repo-canon-release-inputs.md": {
@@ -1428,7 +1428,7 @@
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "4d1f6ef1a5eb5ddddd30128269411392016961a7fbc377b9a5d48a52b3dbbeff",
+          "sha256": "cfd4e0ce16fe502c403b9718ad72cf2daf684469d7517d185535c8acc3416da5",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
@@ -1452,7 +1452,7 @@
       {
         "id": "documentation",
         "source": "discovery/documentation.md",
-        "sha256": "30809f225f7c71cd138e7cac835b350e85950b271aad9352aa94808c93864765",
+        "sha256": "0e84c6f5a53f8799568bef21f593c9544a7177428bbda6c8d5be0c594af1f9f7",
         "executable": false
       },
       {
@@ -1866,6 +1866,11 @@
           "sha256": "7dcc5881eef1c342a08519750b9beae700f4620d1fdf23c2eb0d9b2dfaec5fd0",
           "executable": false
         },
+        ".github/pull-request-reviewer.json": {
+          "type": "file",
+          "sha256": "78c1125ebb681ef048b189b4419f2d56f12a4bccd251d6491b58626d6539021f",
+          "executable": false
+        },
         ".github/scripts/validate-pr-metadata.mjs": {
           "type": "file",
           "sha256": "967c93f5cb5057d50e1fd7b7315fd520ae10558e47f45ef5d286e79ab5fadcf0",
@@ -1918,12 +1923,12 @@
         },
         "README.md": {
           "type": "file",
-          "sha256": "7a9023bd57a7b5024ca67298ad13294ada4260ed12f91dc63be2618d9afe37d4",
+          "sha256": "4c41fe7acd87f72b819822789ae6d1af698cdae96f411939beae3fff51e1de4e",
           "executable": false
         },
         "docs/README.md": {
           "type": "file",
-          "sha256": "d4f63b9f095b98cf7d811c78a50872ada2b47c0c6b94bd8c29704d897197c944",
+          "sha256": "187a222c2dfa7e2edc1a9a5a44218ae5e0f0dbdd39997cc8341967b1eea9fc55",
           "executable": false
         },
         "docs/adr/0001-keep-the-package-outside-repo-canon-release-inputs.md": {
@@ -1973,7 +1978,7 @@
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "4d1f6ef1a5eb5ddddd30128269411392016961a7fbc377b9a5d48a52b3dbbeff",
+          "sha256": "cfd4e0ce16fe502c403b9718ad72cf2daf684469d7517d185535c8acc3416da5",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
@@ -2576,6 +2581,7 @@
         ".github": [
           ".github/ISSUE_TEMPLATE",
           ".github/PULL_REQUEST_TEMPLATE.md",
+          ".github/pull-request-reviewer.json",
           ".github/scripts",
           ".github/workflows"
         ],

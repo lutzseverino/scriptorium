@@ -213,6 +213,30 @@ export function apiEndpoint(identity, suffix = "") {
   return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}${suffix}`;
 }
 
+function repositoryReadFailure(operationName, identity, outcome) {
+  // Keep host/account details and variable HTTP traces out of inspection
+  // identities and deferred setup records. Only classify gh's error text.
+  const httpError = outcome.stderr.match(/^gh: (.*) \(HTTP (\d{3})\)/m);
+  const status = httpError?.[2];
+  const diagnostic = `For full details, run gh api ${apiEndpoint(identity)}.`;
+  if (!status) {
+    return `${operationName} could not reach GitHub to verify ${identity}; check the connection and retry. ${diagnostic}`;
+  }
+  let next = "Retry later.";
+  if (status === "404") {
+    next =
+      "Confirm the repository exists and the signed-in gh account can read it.";
+  } else if (status === "401") {
+    next = "Sign in again with gh auth login --hostname github.com.";
+  } else if (
+    status === "429" ||
+    (status === "403" && /rate[ -]limit/i.test(httpError[1]))
+  ) {
+    next = "Retry after the GitHub API rate limit resets.";
+  }
+  return `${operationName} could not verify ${identity}: GitHub returned HTTP ${status}. ${next} ${diagnostic}`;
+}
+
 export function prepareGithubRepository(request, operationName) {
   const nodeVersion = versionFrom(process.versions.node);
   if (!nodeVersion || nodeVersion[0] !== 24) {
@@ -259,6 +283,15 @@ export function prepareGithubRepository(request, operationName) {
     githubApi([apiEndpoint(inferred.identity)], request.projectRoot),
   );
   if (repositoryResponse.error) {
+    if (!repositoryResponse.outcome.ok) {
+      return {
+        blocked: repositoryReadFailure(
+          operationName,
+          inferred.identity,
+          repositoryResponse.outcome,
+        ),
+      };
+    }
     return {
       blocked: `${operationName} could not verify ${inferred.identity}; repository access is incomplete (${repositoryResponse.error}).`,
     };
