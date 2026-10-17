@@ -238,9 +238,9 @@ function repositoryReadFailure(operationName, identity, outcome) {
 }
 
 export function prepareGithubRepository(request, operationName) {
-  const nodeVersion = versionFrom(process.versions.node);
-  if (!nodeVersion || nodeVersion[0] !== 24) {
-    return { blocked: `${operationName} requires Node.js 24.` };
+  const nodeVersion = process.versions.node.match(/^(24|26)\.\d+\.\d+$/);
+  if (!nodeVersion) {
+    return { blocked: `${operationName} requires stable Node.js 24 or 26.` };
   }
 
   const gitVersion = run("git", ["--version"], request.projectRoot);

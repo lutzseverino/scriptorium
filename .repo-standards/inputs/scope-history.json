@@ -1,9 +1,9 @@
 {
   "format": "repo-standards/scope-history/v5",
   "evidence": "historical",
-  "inspection": "sha256:f56edc1d5ae302a6ae4e3773a6f782cb546a877f2b79289a89526c9000fb68af",
+  "inspection": "sha256:d6f497fae612fb6a3deb3260c3c4e5700d553c74a50bdde6dbcfb7925d64689e",
   "resolved": {
-    "description": "The standard profile plus the factory's repository files, for a repository a factory serves",
+    "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
       {
         "id": "agent-configuration-index",
@@ -59,7 +59,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -119,6 +119,18 @@
         "exact": ".github/workflows/sandbox-image.yml"
       },
       {
+        "id": "factory-workflow",
+        "checks": [],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/factory-workflow.md",
+        "rules": "rules/factory-workflow.md",
+        "targets": {
+          "paths": [],
+          "directories": []
+        }
+      },
+      {
         "id": "feature-request-template",
         "checks": [],
         "fixes": [],
@@ -143,7 +155,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -170,7 +182,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30,
             "remote-setup": {
@@ -187,7 +199,7 @@
                   "version-arguments": [
                     "--version"
                   ],
-                  "version": ">=24.0.0 <25.0.0"
+                  "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
                 },
                 "timeout-seconds": 30
               }
@@ -207,7 +219,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30,
             "remote-setup": {
@@ -224,7 +236,7 @@
                   "version-arguments": [
                     "--version"
                   ],
-                  "version": ">=24.0.0 <25.0.0"
+                  "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
                 },
                 "timeout-seconds": 30
               }
@@ -388,7 +400,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -448,7 +460,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -622,7 +634,7 @@
     ]
   },
   "sourceResolved": {
-    "description": "The standard profile plus the factory's repository files, for a repository a factory serves",
+    "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
       {
         "id": "agent-configuration-index",
@@ -678,7 +690,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -707,7 +719,7 @@
             "version-arguments": [
               "--version"
             ],
-            "version": ">=24.0.0 <25.0.0"
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           },
           "timeout-seconds": 60
         }
@@ -746,6 +758,15 @@
         "exact": ".github/workflows/sandbox-image.yml"
       },
       {
+        "id": "factory-workflow",
+        "checks": [],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/factory-workflow.md",
+        "rules": "rules/factory-workflow.md",
+        "discovery": "discovery/factory-workflow.md"
+      },
+      {
         "id": "feature-request-template",
         "checks": [],
         "fixes": [],
@@ -770,7 +791,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -797,7 +818,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30,
             "remote-setup": {
@@ -814,7 +835,7 @@
                   "version-arguments": [
                     "--version"
                   ],
-                  "version": ">=24.0.0 <25.0.0"
+                  "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
                 },
                 "timeout-seconds": 30
               }
@@ -834,7 +855,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30,
             "remote-setup": {
@@ -851,7 +872,7 @@
                   "version-arguments": [
                     "--version"
                   ],
-                  "version": ">=24.0.0 <25.0.0"
+                  "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
                 },
                 "timeout-seconds": 30
               }
@@ -1012,7 +1033,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -1069,7 +1090,7 @@
               "version-arguments": [
                 "--version"
               ],
-              "version": ">=24.0.0 <25.0.0"
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             },
             "timeout-seconds": 30
           }
@@ -1243,7 +1264,7 @@
     ]
   },
   "discovery": {
-    "identity": "sha256:7384206ee5df0fb11fb7dfb2a518c3b959c725c654e7d6d7681d9374ea942bcd",
+    "identity": "sha256:06107139d674312de0f333ec2701d3607ea7c96dc2e129aec0056c7eb73e3202",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
@@ -1375,6 +1396,12 @@
           "unresolved": []
         },
         {
+          "id": "factory-workflow",
+          "coverage": "Intentionally empty content scope. The factory workflow declaration governs work throughout this factory-profile repository, including tracker work that changes no files. .factory/config.json stays owned by its separate exact declaration.",
+          "candidates": [],
+          "unresolved": []
+        },
+        {
           "id": "github-repository-configuration",
           "coverage": "Intentionally empty: this declaration changes remote GitHub configuration through its canonical-labels and pull-request-integration fixes and checks optional repository-owned reviewer data without writing it, so it covers no project-content paths. The repository is lutzseverino/scriptorium, the only github.com repository its Git remotes name; `gh repo view --json visibility` reports PUBLIC, and `gh variable list` reports no repository-level variables, so REPO_CANON_RUNS_ON is unset (the hosted default). The repository is owned by a user account, so no organization-level variable can supply a value. The owner authorized configuring this repository's GitHub settings through gh with this session's admin credentials.",
           "candidates": [],
@@ -1418,7 +1445,7 @@
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "72947b4ee0a7f5c82302476fc8642aa910e059ed0098fd39f048e2daa32a166c",
+          "sha256": "6b4b1a05d6eab56b2626dd296cf05ade69487791f91db95fd09dc5b1d920247c",
           "executable": false
         },
         "docs/development/release.md": {
@@ -1438,12 +1465,12 @@
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "ac808adb0292ea55b4ab7d6e19a0807b9ae0a10ffcdd2e3409ef0cc6b55b25dd",
+          "sha256": "25254c67bd890b905da3b90d56d12728861de45f63406cc2ea14952a39f9bd88",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "5f13327ccee9e9762e2ead8ce6c6e151b2d0f9ef1541b9cef833d5b43b58cc2b",
+          "sha256": "1296c2e6bb8fc460f89471313764400b6ed6f091217aed371e3eb22e706542f4",
           "executable": false
         }
       }
@@ -1453,6 +1480,12 @@
         "id": "documentation",
         "source": "discovery/documentation.md",
         "sha256": "0e84c6f5a53f8799568bef21f593c9544a7177428bbda6c8d5be0c594af1f9f7",
+        "executable": false
+      },
+      {
+        "id": "factory-workflow",
+        "source": "discovery/factory-workflow.md",
+        "sha256": "6f8e546cfa909fd4fd090d8555de882d8a786975c088d649a490192f30ad3b7a",
         "executable": false
       },
       {
@@ -1652,7 +1685,7 @@
         },
         ".agents/skills/repository-standards/SKILL.md": {
           "type": "file",
-          "sha256": "d181a5dd3e3e2e5d5d5a3c5c86f170da4361d567321b8f82340a128920ad388d",
+          "sha256": "4e331d32a27f003027cfbcfce376f49c8e0743142dc6cd653fe7e31052f61450",
           "executable": false
         },
         ".agents/skills/repository-standards/agents/openai.yaml": {
@@ -1878,7 +1911,7 @@
         },
         ".github/workflows/ci.yml": {
           "type": "file",
-          "sha256": "2106958318edb8d2877c434518d418244e97c73b1fb587a8e40aae6e292a776a",
+          "sha256": "319c5ca7618ac6c31799e55b4df18080ee88447c6a8f6c9f42bdaba2fc339204",
           "executable": false
         },
         ".github/workflows/issue-contracts.yml": {
@@ -1923,7 +1956,7 @@
         },
         "README.md": {
           "type": "file",
-          "sha256": "4c41fe7acd87f72b819822789ae6d1af698cdae96f411939beae3fff51e1de4e",
+          "sha256": "4862bd1558d6b917001bb7cdbf58affcb1a882777c067ba1e4d8df32378a4e6f",
           "executable": false
         },
         "docs/README.md": {
@@ -1968,7 +2001,7 @@
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "72947b4ee0a7f5c82302476fc8642aa910e059ed0098fd39f048e2daa32a166c",
+          "sha256": "6b4b1a05d6eab56b2626dd296cf05ade69487791f91db95fd09dc5b1d920247c",
           "executable": false
         },
         "docs/development/release.md": {
@@ -1988,12 +2021,12 @@
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "ac808adb0292ea55b4ab7d6e19a0807b9ae0a10ffcdd2e3409ef0cc6b55b25dd",
+          "sha256": "25254c67bd890b905da3b90d56d12728861de45f63406cc2ea14952a39f9bd88",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "5f13327ccee9e9762e2ead8ce6c6e151b2d0f9ef1541b9cef833d5b43b58cc2b",
+          "sha256": "1296c2e6bb8fc460f89471313764400b6ed6f091217aed371e3eb22e706542f4",
           "executable": false
         },
         "operations/lib/rendered-markdown.mjs": {
@@ -2003,12 +2036,12 @@
         },
         "package-lock.json": {
           "type": "file",
-          "sha256": "133f70e8cdf9adc0beafc55842e4a80e82118e0847bce3823b31fbba0d375269",
+          "sha256": "87252b60bbbff6de54e381ef26feb24e0dfcba08223a05a1dd37703567895df0",
           "executable": false
         },
         "package.json": {
           "type": "file",
-          "sha256": "95ac55d487943b2400b0ee025dffff4f51a5c8601ba941c5a71b5366e5a7bc6d",
+          "sha256": "19687ef6f20b6958c47d4d69668e6569c7269a8d9d614c3de744671f945c32c3",
           "executable": false
         },
         "scripts/validate-issue-contract.mjs": {
@@ -2293,7 +2326,7 @@
         },
         "test/sandbox-image-build.test.ts": {
           "type": "file",
-          "sha256": "8de7c8444e1deff5967253229cd9005e9c0be6364a70c0ca8aa80594bc8b47b0",
+          "sha256": "5e2d0ec737d1438bdc33f7f0454fa380ef67f0f2bba5c0d90e7a046415ac544c",
           "executable": false
         },
         "test/sandbox-image.test.ts": {

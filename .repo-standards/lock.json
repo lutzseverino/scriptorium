@@ -3,16 +3,16 @@
   "selection": {
     "cli": {
       "package": "@lutzseverino/repo-standards",
-      "version": "7.1.0"
+      "version": "7.2.0"
     },
     "standards": {
       "repository": "https://github.com/lutzseverino/repo-canon",
-      "version": "v0.14.1",
-      "commit": "091289e64b77e3b5d703fda6a99422c4d7018a2c"
+      "version": "v0.15.0",
+      "commit": "803ebec5a180f5a0df852ebb1954d93fffc50e5b"
     },
     "profile": "factory"
   },
-  "inspection": "sha256:f56edc1d5ae302a6ae4e3773a6f782cb546a877f2b79289a89526c9000fb68af",
+  "inspection": "sha256:d6f497fae612fb6a3deb3260c3c4e5700d553c74a50bdde6dbcfb7925d64689e",
   "files": {
     "docs/agents/README.md": {
       "sha256": "a78a8a4934c9de37cfcd11be23ce3dd58462108fa53b6cdaead4af18ca7e773b",
@@ -27,7 +27,7 @@
       "executable": false
     },
     "CONTRIBUTING.md": {
-      "sha256": "a1e6d09d5957e84812609c295f5a0fdbf9777ac9e005338758b74940c4bec7cc",
+      "sha256": "4ed2b1336f77e4af7bc8c86b9497d6696c14a38b5d7a98f5a97df4d0c71aedd2",
       "executable": false
     },
     "docs/agents/domain.md": {
@@ -115,7 +115,7 @@
       "executable": false
     },
     ".agents/skills/babysit/SKILL.md": {
-      "sha256": "f17de7f5068281d3ef188e08861d106d9ef3aff377f76e62f792284d9c89feca",
+      "sha256": "5e3a33c571b8d09983b6a18600ecf7b218b487c5ea111712728fe1a808241387",
       "executable": false
     },
     ".agents/skills/babysit/merge.mjs": {
@@ -355,7 +355,7 @@
       "executable": false
     },
     ".repo-standards/inputs/source/CONTRIBUTING.md": {
-      "sha256": "a1e6d09d5957e84812609c295f5a0fdbf9777ac9e005338758b74940c4bec7cc",
+      "sha256": "4ed2b1336f77e4af7bc8c86b9497d6696c14a38b5d7a98f5a97df4d0c71aedd2",
       "executable": false
     },
     ".repo-standards/inputs/source/guidance/documentation.md": {
@@ -423,7 +423,7 @@
       "executable": false
     },
     ".repo-standards/inputs/source/standards.yaml": {
-      "sha256": "60bce564e748a3d0a0da41613135c4680a7c6df6a344de02b3668fc659a8c2b5",
+      "sha256": "9c8ef68a8d93f114f33b8f7ed1017b2336c8ca1a799160560a33ed58eae59d8c",
       "executable": false
     },
     ".repo-standards/inputs/source/vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/domain.md": {
@@ -439,11 +439,23 @@
       "executable": false
     },
     ".repo-standards/inputs/source/rules/factory-sandbox-image.md": {
-      "sha256": "a84deea1d4652ea987796764fe2454acd83a1e76a5df5f4261a12560444db66d",
+      "sha256": "a9139d625539ef858bb1c23524322ddf7da8127100e923808a839f2dd224a2b5",
       "executable": false
     },
     ".repo-standards/inputs/source/.github/workflows/sandbox-image.yml": {
       "sha256": "598ab9931a8cfc63a3e1d2487fb151eca9b134a5e9a4e3bfa20d4b87b96399b3",
+      "executable": false
+    },
+    ".repo-standards/inputs/source/guidance/factory-workflow.md": {
+      "sha256": "41f077815b16fb3d9ff3bac40aab8faf4793c1cdf60bf1095e833c5144d200e3",
+      "executable": false
+    },
+    ".repo-standards/inputs/source/discovery/factory-workflow.md": {
+      "sha256": "6f8e546cfa909fd4fd090d8555de882d8a786975c088d649a490192f30ad3b7a",
+      "executable": false
+    },
+    ".repo-standards/inputs/source/rules/factory-workflow.md": {
+      "sha256": "40cc000c8d7b61140cbb597757f3c6ddc97cfe77536aeed514d9607d75ce4397",
       "executable": false
     },
     ".repo-standards/inputs/source/.github/ISSUE_TEMPLATE/feature-request.yml": {
@@ -459,7 +471,7 @@
       "executable": false
     },
     ".repo-standards/inputs/source/rules/github-repository-configuration.md": {
-      "sha256": "00449184bfeb45528f90d9227e38718cf9213929ecdf842dd318c5110c7780f0",
+      "sha256": "d40bff6ca87da9dd5222bdd52b6fb572904d40f1e621f2407e1e8d28acc87c8b",
       "executable": false
     },
     ".repo-standards/inputs/source/operations/setup-github-labels.mjs": {
@@ -467,7 +479,7 @@
       "executable": false
     },
     ".repo-standards/inputs/source/operations/lib/github-operation.mjs": {
-      "sha256": "44ff106ba882174779780047a8b6ba64cb3fc3f609d977739743a1831b89c45f",
+      "sha256": "b393276e6a8a33ec45ca6dc450136f4ec8368815679db9a6b99b17c3f9cbab20",
       "executable": false
     },
     ".repo-standards/inputs/source/LICENSE": {
@@ -579,7 +591,7 @@
       "executable": false
     },
     ".repo-standards/inputs/source/.agents/skills/babysit/SKILL.md": {
-      "sha256": "f17de7f5068281d3ef188e08861d106d9ef3aff377f76e62f792284d9c89feca",
+      "sha256": "5e3a33c571b8d09983b6a18600ecf7b218b487c5ea111712728fe1a808241387",
       "executable": false
     },
     ".repo-standards/inputs/source/.agents/skills/babysit/merge.mjs": {
@@ -799,19 +811,19 @@
       "executable": false
     },
     ".repo-standards/inputs/standards.yaml": {
-      "sha256": "21eaef0fe5eb089cd234b5fe61151c2895467cc75bafff8674851976e4125597",
+      "sha256": "3e277841ee8619c7f9b6d48d8781249607f493704c0f229f5ff4cfeba52dbefc",
       "executable": false
     },
     ".repo-standards/inputs/metadata.json": {
-      "sha256": "e191a15d12dfa26e8b576cb5778b9b295dda22eb4e92e125739ff027a0a6411c",
+      "sha256": "f2239f0f51377a8b00a0a88fbcd6584093b40d209d5d1ef31c46cd2b7810a04a",
       "executable": false
     },
     ".repo-standards/inputs/resolved.json": {
-      "sha256": "4f8e4e5e83c319c643ce554ba3160179672cc289df276c91b4bc539628ed1c55",
+      "sha256": "6531159f52c6b608eb0fb1485fcaba11eccbbfd5888f49814036a99575bc07a2",
       "executable": false
     },
     ".repo-standards/inputs/scope-history.json": {
-      "sha256": "2906207d615d212e5f86d04c7979f4745784e5cca2d1239c9ef18566b0ae2008",
+      "sha256": "e219b61027ce45b028da44818950dfba29b2b1ede78dbd144c7e57674bcfb382",
       "executable": false
     },
     ".repo-standards/rules/documentation.md": {
@@ -819,11 +831,15 @@
       "executable": false
     },
     ".repo-standards/rules/factory-sandbox-image.md": {
-      "sha256": "a84deea1d4652ea987796764fe2454acd83a1e76a5df5f4261a12560444db66d",
+      "sha256": "a9139d625539ef858bb1c23524322ddf7da8127100e923808a839f2dd224a2b5",
+      "executable": false
+    },
+    ".repo-standards/rules/factory-workflow.md": {
+      "sha256": "40cc000c8d7b61140cbb597757f3c6ddc97cfe77536aeed514d9607d75ce4397",
       "executable": false
     },
     ".repo-standards/rules/github-repository-configuration.md": {
-      "sha256": "00449184bfeb45528f90d9227e38718cf9213929ecdf842dd318c5110c7780f0",
+      "sha256": "d40bff6ca87da9dd5222bdd52b6fb572904d40f1e621f2407e1e8d28acc87c8b",
       "executable": false
     },
     ".repo-standards/rules/project-agent-guidance.md": {
@@ -843,11 +859,11 @@
       "executable": false
     },
     ".repo-standards/rules/README.md": {
-      "sha256": "e41c82ca4e20f9c795ea38ec5a729b59e20de2573ea45d9f11c08f2e9e3a7815",
+      "sha256": "893c129fa8fb4fd79a9ea61fd0f08befa239d0e5bafa5fb100da553cc7d10bfd",
       "executable": false
     },
     ".repo-standards/selection.yaml": {
-      "sha256": "b4c4d2bba0b35a78a915f5cd00c1181d548edf117fdcd5f69fa520a81f8a19c7",
+      "sha256": "25b93055d51ba3452d8c43f9462b8ea764d9a9fd37ed0fa66ea3f53f051d0bc7",
       "executable": false
     },
     ".repo-standards/.gitignore": {
@@ -855,16 +871,16 @@
       "executable": false
     },
     ".repo-standards/runtime/package.json": {
-      "sha256": "1adbea32f994f80766937da60f13948f755bfc38f5ea52d93c149ee128b5ccfc",
+      "sha256": "782e7f026392442b9b1d4244bf0de06e9e283e13ed55430cb0ad07d593c7cd30",
       "executable": false
     },
     ".repo-standards/runtime/package-lock.json": {
-      "sha256": "8989142ef800c97efb882f4505c43509fc3ea6ac25b8f1e22d410a79d27ebf03",
+      "sha256": "2661887dad33a6442f37fa482d792fa9ceb892558dcc48ff65e20207b377ea77",
       "executable": false
     }
   },
   "state": {
-    "sha256": "2be89c09afd06f228ee596a275dda2413c087d0fbabe8a758a76e9a9254cd145",
+    "sha256": "9f388d7068889c68cfe44ab55f9c6cdc64fad7f53b68b649ade55c85d5ce551b",
     "executable": false
   }
 }

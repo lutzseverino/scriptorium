@@ -3,13 +3,13 @@ name: repo-canon
 description: Repository documentation, contribution, agent workflow, and GitHub
   validation standards
 requires:
-  repo-standards: ">=7.1.0"
+  repo-standards: ">=7.2.0"
 defaults:
   declarations: {}
 profiles:
   factory:
-    description: The standard profile plus the factory's repository files, for a
-      repository a factory serves
+    description: The standard profile plus the factory's repository files and
+      workflow rules, for a repository a factory serves
     declarations:
       agent-configuration-index:
         checks: []
@@ -52,7 +52,7 @@ profiles:
             prerequisite:
               version-arguments:
                 - --version
-              version: ">=24.0.0 <25.0.0"
+              version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             timeout-seconds: 30
         fixes: []
         kind: repository
@@ -75,7 +75,7 @@ profiles:
           prerequisite:
             version-arguments:
               - --version
-            version: ">=24.0.0 <25.0.0"
+            version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
           timeout-seconds: 60
       domain-configuration:
         checks: []
@@ -102,6 +102,13 @@ profiles:
         kind: file
         target: .github/workflows/sandbox-image.yml
         exact: .github/workflows/sandbox-image.yml
+      factory-workflow:
+        checks: []
+        fixes: []
+        kind: repository
+        guidance: guidance/factory-workflow.md
+        rules: rules/factory-workflow.md
+        discovery: discovery/factory-workflow.md
       feature-request-template:
         checks: []
         fixes: []
@@ -120,7 +127,7 @@ profiles:
             prerequisite:
               version-arguments:
                 - --version
-              version: ">=24.0.0 <25.0.0"
+              version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             timeout-seconds: 30
         fixes:
           - id: canonical-labels
@@ -140,7 +147,7 @@ profiles:
             prerequisite:
               version-arguments:
                 - --version
-              version: ">=24.0.0 <25.0.0"
+              version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             timeout-seconds: 30
             remote-setup:
               probe:
@@ -153,7 +160,7 @@ profiles:
                 prerequisite:
                   version-arguments:
                     - --version
-                  version: ">=24.0.0 <25.0.0"
+                  version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
                 timeout-seconds: 30
           - id: pull-request-integration
             run:
@@ -165,7 +172,7 @@ profiles:
             prerequisite:
               version-arguments:
                 - --version
-              version: ">=24.0.0 <25.0.0"
+              version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             timeout-seconds: 30
             remote-setup:
               probe:
@@ -178,7 +185,7 @@ profiles:
                 prerequisite:
                   version-arguments:
                     - --version
-                  version: ">=24.0.0 <25.0.0"
+                  version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
                 timeout-seconds: 30
         kind: repository
         guidance: guidance/github-repository-configuration.md
@@ -296,7 +303,7 @@ profiles:
             prerequisite:
               version-arguments:
                 - --version
-              version: ">=24.0.0 <25.0.0"
+              version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             timeout-seconds: 30
         fixes: []
         kind: repository
@@ -338,7 +345,7 @@ profiles:
             prerequisite:
               version-arguments:
                 - --version
-              version: ">=24.0.0 <25.0.0"
+              version: ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
             timeout-seconds: 30
         fixes: []
         kind: file
