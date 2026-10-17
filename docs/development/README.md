@@ -35,7 +35,7 @@ spies, without Docker or network access, for both architectures. It rejects
 missing or malformed pins and extraction or installation before verification.
 `test/agent-layer-upstream.test.ts` compares all ten pins against upstream
 metadata using `gh api` and Claude Code's manifest. CI passes its read-only
-GitHub token to the factory test step; only local runs may skip when the
+GitHub token to the test step; only local runs may skip when the
 network is unavailable. The image suite also alters Git's amd64 digest and
 asserts that its checksum fails and no image is tagged.
 
