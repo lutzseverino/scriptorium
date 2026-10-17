@@ -6,10 +6,11 @@ released from here. [ADR 0001](0001-keep-the-package-outside-repo-canon-release-
 kept the package in Repo Canon with its own release stream, and Repo Canon's
 [ADR 0013](https://github.com/lutzseverino/repo-canon/blob/v0.14.0/docs/adr/0013-install-the-factory-on-the-host-from-its-own-releases.md)
 deferred a separate repository until a trigger: an outside user, factory changes
-still driving most Repo Canon releases, or changed vendor terms. None of those
-triggers had occurred. The owner decided to move anyway, on 2026-10-17, as the
-[separation issue](https://github.com/lutzseverino/repo-canon/issues/506)
-records. The shared repository made Repo Canon harder to explain, split one
+still driving most Repo Canon releases, or changed vendor terms. The move
+answers none of those triggers: the owner decided it on 2026-10-17, as the
+[separation issue](https://github.com/lutzseverino/repo-canon/issues/506) and
+its [decisions](https://github.com/lutzseverino/repo-canon/issues/506#issuecomment-6237978870)
+record. The shared repository made Repo Canon harder to explain, split one
 issue tracker and CI between two products, and would have started
 factory-owned work, such as the hosting-platform seam, inside the standards
 source. The history of `factory/` was exported to the root with
