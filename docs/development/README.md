@@ -12,8 +12,8 @@ running package tests: the upstream digest comparison uses authenticated
 fails that check; only an unavailable local network may skip it. From the
 repository root, run `npm ci --include=dev`, `npm run typecheck`, and
 `npm test`. Run `git diff --check` over the change before opening a pull
-request. CI runs both package
-checks on Node.js 24 beside the repository checks.
+request. CI's `Test` job, in `.github/workflows/ci.yml`, runs the same install,
+typecheck and tests on Node.js 24 for every pull request and push to `main`.
 
 The package runs TypeScript through Node.js type stripping and emits no build
 output. The typecheck uses strict TypeScript, Node module resolution, explicit
@@ -23,8 +23,8 @@ tests in `test/`.
 The sandbox image contract tests build and run the factory layer on
 `debian:bookworm-slim` without Node and on `node:24-bookworm` with its existing
 UID and GID 1000, and remove sandbox containers by the layer's label. They run
-in the existing factory CI job, where Docker is required; local runs skip them
-when Docker is unavailable. Run them alone
+in CI's `Test` job, where Docker is required; local runs skip them when Docker
+is unavailable. Run them alone
 with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`
