@@ -338,6 +338,7 @@ function fakeGitHub(
 // Sandcastle that records each run, with the token the sandbox would read,
 // until the test finishes it or its sandbox is removed.
 function fakeSandcastle() {
+  let closing = false;
   const launched: {
     options: RunOptions;
     docker: DockerOptions;
@@ -348,6 +349,10 @@ function fakeSandcastle() {
   let docker: DockerOptions;
   return {
     launched,
+    finish() {
+      closing = true;
+      for (const launch of launched) launch.finish();
+    },
     sandcastle: {
       docker(options: DockerOptions) {
         docker = options;
@@ -370,6 +375,7 @@ function fakeSandcastle() {
           options.signal?.addEventListener("abort", () =>
             reject(options.signal!.reason),
           );
+          if (closing) resolve(undefined);
         });
       },
     },
@@ -417,7 +423,14 @@ function host(
     usage?: Record<string, number | null | Error>;
   },
 ) {
-  const root = directory(t);
+  const instances: ReturnType<typeof createHost>[] = [];
+  const root = directory(t, async () => {
+    for (const instance of instances) instance.interrupt();
+    // Release gates even if a failed test left a launch waiting to start.
+    for (const start of starts.splice(0)) start();
+    fake.finish();
+    await Promise.all(instances.map((instance) => instance.drain()));
+  });
   const claudeToken = join(root, "claude-token");
   const codexLogin = join(root, "codex-auth.json");
   writeFileSync(claudeToken, "claude-secret\n");
@@ -430,7 +443,8 @@ function host(
     ]),
   );
   const github = fakeGitHub(repositories, tokenOf, roles);
-  const { sandcastle, launched } = fakeSandcastle();
+  const fake = fakeSandcastle();
+  const { sandcastle, launched } = fake;
   const resolved: HostConfiguration = {
     repositories: Object.keys(repositories),
     providers: {
@@ -506,6 +520,7 @@ function host(
   };
   function process() {
     const instance = createHost(resolved, registry, ports);
+    instances.push(instance);
     return {
       ...instance,
       async tick() {
@@ -561,6 +576,39 @@ const factoryFiles = {
   "README.md": "base\n",
   ".github/workflows/old.yml": "old\n",
 };
+
+for (const ending of ["running", "finished", "failed", "aborted", "restarted"])
+  test(`host fixture lifecycle removes its root after ${ending} launches`, async (t) => {
+    let run: ReturnType<typeof host>;
+    await t.test("owns the host and its remote", async (fixture) => {
+      run = host(fixture, {
+        repositories: { "acme/widgets": [{ number: 4 }] },
+        remotes: { "acme/widgets": remote(fixture, factoryFiles) },
+      });
+      await run.tick();
+      if (ending === "finished") run.launched[0].finish();
+      if (ending === "failed")
+        run.launched[0].finish(new Error("agent crashed"));
+      if (ending === "aborted") {
+        run.clock.now = new Date("2026-10-09T16:01:00Z");
+        await run.tick();
+        assert.equal(run.launched[0].options.signal!.aborted, true);
+      }
+      if (ending === "restarted") {
+        run.interrupt();
+        await run.restart().tick();
+        assert.equal(run.launched.length, 2);
+      }
+    });
+    assert.equal(existsSync(dirname(run!.state)), false);
+    // Joining again must reveal no writes that recreate the removed root.
+    await run!.drain();
+    assert.equal(existsSync(dirname(run!.state)), false);
+    assert.ok(
+      run!.reports.every((line) => !line.includes("did not finish its records")),
+      run!.reports.join("\n"),
+    );
+  });
 
 test("one process launches each repository's ready issues from that repository's clone", async (t) => {
   const widgets = remote(t, factoryFiles);
