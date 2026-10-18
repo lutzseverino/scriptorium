@@ -48,6 +48,13 @@ new issues through low and unknown readings and restarts until the owner
 resumes the provider, and never holds paused runs.
 _Avoid_: Soft-pause label, factory pause
 
+**Reserve raise**:
+A one-time raise of one provider's drain threshold for new claims, up to its
+pause threshold, which the owner requests when resuming the provider. It lasts
+until a reading below the configured drain threshold or the provider's
+reported reset, and never moves the pause threshold or releases a paused run.
+_Avoid_: Override, threshold bypass
+
 **Paused run**:
 A run whose agent exited on its provider's usage limit, or whose sandbox the
 factory stopped at its provider's pause threshold, which the factory labels

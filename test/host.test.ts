@@ -564,6 +564,7 @@ function host(
     usage,
     usageReads,
     state,
+    configuration: resolved,
     clone: (name: string) => join(state, "repositories", name, "clone"),
     status: () => JSON.parse(readFileSync(join(state, "status.json"), "utf8")),
   };
@@ -2928,4 +2929,156 @@ test("a usage hold stops new claims through unknown usage and a restart until it
     "ready-for-agent",
     "factory:running",
   ]);
+});
+
+// The owner's `resume` command, run as its own process against the host
+// configuration the fixture's host runs with.
+function resumeCommand(run: ReturnType<typeof host>, ...args: string[]) {
+  const path = join(dirname(run.state), "host.json");
+  writeFileSync(path, JSON.stringify(run.configuration));
+  return execFileSync(
+    process.execPath,
+    [join(import.meta.dirname, "../src/main.ts"), "resume", path, ...args],
+    { encoding: "utf8" },
+  );
+}
+
+const ownerResume = { ...thresholds, afterDrain: "owner-resume" } as const;
+
+test("an owner hold keeps a drained provider's new claims through low usage and a restart until the owner's resume command, and its next pass applies it", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4 },
+        { number: 5, labels: ["ready-for-agent", "model:gpt-5.5"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: ownerResume },
+    usage: { "claude-code": 92, codex: 10 },
+  });
+  await run.tick();
+  const hold =
+    "claude-code has an owner hold from 92% at 2026-10-09T12:00:00.000Z; only the owner's resume request lifts it";
+  assert.equal(held(run, 4), hold);
+  // The other provider keeps claiming.
+  assert.equal(run.launched.length, 1);
+  run.usage["claude-code"] = 10;
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  assert.equal(held(run, 4), hold);
+  run.interrupt();
+  const restarted = run.restart();
+  run.usage["claude-code"] = null;
+  await restarted.tick();
+  assert.equal(held(run, 4), hold);
+
+  const output = resumeCommand(run, "claude-code");
+  const id =
+    /^Queued resume request (\S+) to lift claude-code's owner hold\./.exec(
+      output,
+    )?.[1];
+  assert.ok(id, output);
+  run.usage["claude-code"] = 10;
+  assert.equal(launchesOf(await restarted.tick())[0]?.issue, 4);
+  assert.ok(
+    run.reports.includes(
+      `resume request ${id} applied: lifted claude-code's owner hold from 92% at 2026-10-09T12:00:00.000Z`,
+    ),
+    run.reports.join("\n"),
+  );
+});
+
+test("a paused run relaunches below the drain threshold despite its provider's owner hold", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: ownerResume },
+    caps: { "claude-code": 1, codex: 1 },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  run.usage["claude-code"] = { used: 96, reset };
+  assert.equal((await run.tick())[0].kind, "stop");
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  await run.tick();
+  run.usage["claude-code"] = 92;
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  await run.tick();
+  assert.match(
+    held(run, 4)!,
+    /usage 92% is at or above the 90% drain threshold$/,
+  );
+  run.usage["claude-code"] = 89;
+  run.clock.now = new Date("2026-10-09T12:20:00Z");
+  const decisions = await run.tick();
+  assert.deepEqual(
+    launchesOf(decisions).map(({ issue, relaunch }) => ({ issue, relaunch })),
+    [{ issue: 4, relaunch: true }],
+  );
+  assert.match(held(run, 5)!, /^claude-code has an owner hold from 96% at /);
+});
+
+test("the owner's resume command with a drain threshold opens claims up to the raise, and a reading below the configured drain threshold ends it", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }, { number: 5 }, { number: 6 }],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: ownerResume },
+    caps: { "claude-code": 1, codex: 1 },
+    usage: { "claude-code": { used: 92, reset } },
+  });
+  await run.tick();
+  assert.throws(
+    () => resumeCommand(run, "claude-code", "--drain-threshold", "96"),
+    (error: { status: number; stderr: string }) =>
+      error.status === 1 &&
+      error.stderr ===
+        "The resume request was not queued: the drain threshold can be raised only above its configured 90%, up to the 95% pause threshold\n",
+  );
+  assert.match(
+    resumeCommand(run, "claude-code", "--drain-threshold", "94"),
+    /to lift claude-code's owner hold and raise its drain threshold once to 94%\. The running factory applies it on its next pass, within 300 seconds of its current one/,
+  );
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  assert.deepEqual(
+    launchesOf(await run.tick()).map(({ issue }) => issue),
+    [4],
+  );
+  // Its run awaits merge, which takes no cap slot.
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish();
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  // A restart keeps the raise, and reaching it holds claims again, with a
+  // new owner hold.
+  const restarted = run.restart();
+  run.usage["claude-code"] = { used: 94, reset };
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  await restarted.tick();
+  assert.equal(
+    held(run, 5),
+    "claude-code has an owner hold from 94% at 2026-10-09T12:10:00.000Z; only the owner's resume request lifts it",
+  );
+  // A plain release meets the raised drain threshold, and once usage reads
+  // below the configured one the raise ends and claims reopen.
+  resumeCommand(run, "claude-code");
+  await restarted.tick();
+  assert.equal(
+    held(run, 5),
+    "claude-code usage 94% is at or above the 94% drain threshold, which the owner raised once from 90%",
+  );
+  run.usage["claude-code"] = 89;
+  run.clock.now = new Date("2026-10-09T12:15:00Z");
+  assert.deepEqual(
+    launchesOf(await restarted.tick()).map(({ issue }) => issue),
+    [5],
+  );
+  assert.ok(
+    run.reports.includes(
+      "claude-code's reserve raise to 94% ended: usage 89% is below the configured 90% drain threshold; its configured drain threshold applies again",
+    ),
+  );
 });

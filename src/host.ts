@@ -44,6 +44,7 @@ import type { HostConfiguration } from "./host-configuration.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
 import type { UsageWindow } from "./providers/usage.ts";
 import type { PullRequestState } from "./run-outcome.ts";
+import { createOwner } from "./owner.ts";
 import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
 import { followRunLog, readLogEnd } from "./run-log.ts";
@@ -153,6 +154,13 @@ export function createHost(
     now: ports.now,
     report,
     path: join(configuration.stateDirectory, "usage.json"),
+  });
+  const owner = createOwner({
+    providers: Object.keys(configuration.providers),
+    policy: configuration.usage,
+    now: ports.now,
+    report,
+    stateDirectory: configuration.stateDirectory,
   });
 
   // Everything the process owns for a repository lives under its directory.
@@ -710,6 +718,8 @@ export function createHost(
     const readable = new Set(
       passes.filter((pass) => pass.read).map((pass) => pass.name),
     );
+    const readings = await usage.read();
+    const holds = usage.holds();
     const snapshot: Snapshot = {
       now: ports.now().toISOString(),
       repositories: passes.flatMap((pass) => (pass.read ? [pass.read] : [])),
@@ -727,8 +737,10 @@ export function createHost(
           log: run.log,
           ended: run.exited ? run.ended : null,
         })),
-      usage: await usage.read(),
-      holds: usage.holds(),
+      usage: readings,
+      holds,
+      // The owner's resume requests apply here, at the pass's start.
+      owners: owner.pass(readings, holds),
       settings,
     };
     for (const pass of passes)

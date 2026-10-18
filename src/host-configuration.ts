@@ -30,7 +30,8 @@ export type HostConfiguration = {
 
 // What each provider's usage does to its work: at or above `drainThreshold`
 // it claims no new issue, and at or above `pauseThreshold` its running runs
-// stop too; either is null when off. `afterDrain` says what reopens claims.
+// stop too; either is null when off. `afterDrain` says what reopens claims:
+// a reading below the drain threshold, or only the owner's resume request.
 export type UsagePolicy = {
   drainThreshold: number | null;
   pauseThreshold: number | null;
@@ -168,7 +169,10 @@ function hostConfigurationProblems(value: unknown): string[] {
       {
         drainThreshold: nullable(percentage),
         pauseThreshold: nullable(percentage),
-        afterDrain,
+        afterDrain: text(
+          (choice) => (afterDrains as readonly string[]).includes(choice),
+          `is not one of ${afterDrains.join(", ")}`,
+        ),
       },
       ["pauseThreshold", "afterDrain"],
     ),
@@ -221,18 +225,6 @@ const percentage = number(
   (percent) => percent >= 0 && percent <= 100,
   "is not a percentage from 0 to 100",
 );
-
-// Owner holds are not in this factory release yet, so `owner-resume` is
-// refused rather than read as `auto-resume`.
-const afterDrain: Check = (value, path, problems) =>
-  value === "owner-resume"
-    ? problems.push(
-        `${path}: "owner-resume" needs owner holds, which this factory release does not have yet; use "auto-resume"`,
-      )
-    : text(
-        (choice) => (afterDrains as readonly string[]).includes(choice),
-        `is not one of ${afterDrains.join(", ")}`,
-      )(value, path, problems);
 
 function valid(check: Check, value: unknown): boolean {
   const problems: string[] = [];
