@@ -127,6 +127,7 @@ export function createHost(
   const report = (line: string) => ports.report(redactor.redact(line));
   let started = false;
   let interrupting = false;
+  const pending = new Set<Promise<void>>();
   const settings: Settings = {
     defaultModel: configuration.models.default,
     retryModel: configuration.models.retry,
@@ -595,7 +596,9 @@ export function createHost(
             `run for ${repository}#${issue} did not finish its records: ${error}`,
           );
         }
-      });
+      })
+      .finally(() => pending.delete(run.finished));
+    pending.add(run.finished);
   }
 
   async function apply(decision: Decision, pass: Pass) {
@@ -736,7 +739,13 @@ export function createHost(
     return decisions;
   }
 
-  return { tick, interrupt, refreshTokens, report };
+  // After launches have been stopped or finished, wait for their log and
+  // record writes, including runs a later pass has already forgotten.
+  async function drain(): Promise<void> {
+    await Promise.all(pending);
+  }
+
+  return { tick, interrupt, drain, refreshTokens, report };
 }
 
 export function prompt(

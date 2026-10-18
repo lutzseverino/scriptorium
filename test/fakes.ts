@@ -6,10 +6,19 @@ import type { RunOptions } from "@ai-hero/sandcastle";
 import type { DockerOptions } from "@ai-hero/sandcastle/sandboxes/docker";
 import type { LaunchRequest, ProviderPorts } from "../src/providers.ts";
 
-// A temporary directory removed after the test.
-export function directory(t: TestContext): string {
+// A temporary directory removed after the test and its asynchronous work.
+export function directory(
+  t: TestContext,
+  beforeRemove: () => void | Promise<void> = () => {},
+): string {
   const path = mkdtempSync(join(tmpdir(), "factory-test-"));
-  t.after(() => rmSync(path, { recursive: true, force: true }));
+  t.after(async () => {
+    try {
+      await beforeRemove();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
   return path;
 }
 
