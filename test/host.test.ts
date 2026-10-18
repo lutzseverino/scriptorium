@@ -1157,8 +1157,9 @@ test("image retention and cache pruning failures are reported without changing t
     pruning: [new Error("docker buildx prune failed: boom"), "1.2GB"],
   });
   await run.tick();
+  // The providers' launches can finish in either order.
   assert.deepEqual(
-    run.launched.map(({ options }) => options.name),
+    run.launched.map(({ options }) => options.name).sort(),
     ["acme/widgets#4", "acme/widgets#5"],
   );
   assert.equal(run.status().repositories[0].state, "running");
