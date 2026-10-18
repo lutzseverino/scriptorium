@@ -143,26 +143,30 @@ test("the usage thresholds may be off, and the pause threshold and after-drain p
   assert.deepEqual(warnings, []);
 });
 
-test("a pause threshold below the drain threshold and the owner-resume policy are refused", (t) => {
-  assert.deepEqual(refusal("usage-unsupported"), [
-    `The host configuration ${fixture("usage-unsupported")} is invalid:`,
-    '- usage.afterDrain: "owner-resume" needs owner holds, which this factory release does not have yet; use "auto-resume"',
+test("a pause threshold below the drain threshold is refused", (t) => {
+  assert.deepEqual(refusal("usage-misordered"), [
+    `The host configuration ${fixture("usage-misordered")} is invalid:`,
     "- usage.pauseThreshold: 90 is below usage.drainThreshold, 95",
   ]);
-  // Equal thresholds are allowed: the drain and the pause start together.
+  // Equal thresholds are allowed, the drain and the pause starting together,
+  // and so is the owner-resume policy.
   const equal = join(directory(t), "host.json");
   const valid = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   writeFileSync(
     equal,
     JSON.stringify({
       ...valid,
-      usage: { drainThreshold: 95, pauseThreshold: 95 },
+      usage: {
+        drainThreshold: 95,
+        pauseThreshold: 95,
+        afterDrain: "owner-resume",
+      },
     }),
   );
   assert.deepEqual(read(equal).configuration.usage, {
     drainThreshold: 95,
     pauseThreshold: 95,
-    afterDrain: "auto-resume",
+    afterDrain: "owner-resume",
   });
 });
 
@@ -240,5 +244,8 @@ test("an invalid host configuration stops the process with its reason", () => {
   );
   const usage = spawnSync(process.execPath, [main], { encoding: "utf8" });
   assert.equal(usage.status, 2);
-  assert.equal(usage.stderr, "Usage: node src/main.ts <host configuration>\n");
+  assert.equal(
+    usage.stderr,
+    "Usage: node src/main.ts <host configuration>\n   or: node src/main.ts resume <host configuration> <provider> [--drain-threshold N]\n",
+  );
 });

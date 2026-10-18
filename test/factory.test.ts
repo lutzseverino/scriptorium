@@ -89,6 +89,7 @@ function snapshot({
   repositories,
   usage = {},
   holds = {},
+  owners = {},
   settings = {},
 }: {
   issues?: Issue[];
@@ -97,6 +98,7 @@ function snapshot({
   repositories?: Repository[];
   usage?: Record<string, number | Usage | null>;
   holds?: Record<string, UsageHold | null>;
+  owners?: Snapshot["owners"];
   settings?: Partial<Settings>;
 } = {}): Snapshot {
   return {
@@ -110,6 +112,7 @@ function snapshot({
       ]),
     ),
     holds,
+    owners,
     settings: {
       defaultModel: "claude-sonnet-5-5",
       retryModel: "claude-opus-5-5@xhigh",
@@ -2327,4 +2330,102 @@ test("a usage hold holds a paused run past the pause's own deadline, until the h
     /^relaunch waits: claude-code hit its usage limit \(resets 12:50pm \(UTC\)\); usage is unknown, and its usage hold/,
   );
   assert.equal(launched(decideAt(hold.until)).length, 1);
+});
+
+// The owner's control of claude-code: its owner hold, set at 92%, and a
+// reserve raise to 94%.
+const ownerHold = { since: "2026-10-09T11:00:00.000Z", used: 92 };
+const reserve = {
+  drainThreshold: 94,
+  since: "2026-10-09T11:30:00.000Z",
+  until: "2026-10-09T15:00:00.000Z",
+};
+
+test("an owner hold holds its provider's new claims and retries through low and unknown usage, and nothing else", () => {
+  for (const usage of [{ "claude-code": 10 }, { "claude-code": null }]) {
+    const decisions = decide({
+      issues: [
+        issue(3, claimed),
+        issue(4, claimed),
+        issue(5, pausedLabels),
+        issue(6),
+        issue(7, ["ready-for-agent", "model:gpt-5.5"]),
+      ],
+      runs: [
+        run(3, { ended: interrupted }),
+        run(4, { ended: none }),
+        run(5, {
+          ended: {
+            paused: { ...thresholdPause, until: "2026-10-09T11:45:00.000Z" },
+            commented: true,
+          },
+        }),
+      ],
+      usage,
+      owners: { "claude-code": { hold: ownerHold, reserve: null } },
+      settings: thresholds,
+    });
+    // Running work and the paused run relaunch; other providers claim.
+    assert.deepEqual(launched(decisions), [
+      "acme/widgets#3",
+      "acme/widgets#5",
+      "acme/widgets#7",
+    ]);
+    const reason =
+      "claude-code has an owner hold from 92% at 2026-10-09T11:00:00.000Z; only the owner's resume request lifts it";
+    assert.equal(skipOf(decisions, 6), reason);
+    assert.equal(skipOf(decisions, 4), `retry waits: ${reason}`);
+  }
+});
+
+test("an owner hold never releases a paused run its usage still holds", () => {
+  const decisions = decide({
+    issues: [issue(5, pausedLabels)],
+    runs: [run(5, { ended: { paused: thresholdPause, commented: true } })],
+    usage: { "claude-code": 92 },
+    owners: { "claude-code": { hold: ownerHold, reserve: null } },
+    settings: thresholds,
+  });
+  assert.equal(
+    skipOf(decisions, 5),
+    `relaunch waits: claude-code reached its pause threshold (resets ${thresholdPause.reset}); usage 92% is at or above the 90% drain threshold`,
+  );
+});
+
+test("a reserve raise lifts the drain threshold for new claims only, up to the raise", () => {
+  const owners = { "claude-code": { hold: null, reserve } };
+  const at = (used: number) =>
+    decide({
+      issues: [issue(4, claimed), issue(5, pausedLabels), issue(6)],
+      runs: [
+        run(4, { ended: none }),
+        run(5, { ended: { paused: thresholdPause, commented: true } }),
+      ],
+      usage: { "claude-code": used },
+      owners,
+      settings: thresholds,
+    });
+  // At 92% the new claim and the retry launch, but the paused run still
+  // waits for a reading below the configured drain threshold.
+  const at92 = at(92);
+  assert.deepEqual(launched(at92), ["acme/widgets#4", "acme/widgets#6"]);
+  assert.match(
+    skipOf(at92, 5)!,
+    /usage 92% is at or above the 90% drain threshold$/,
+  );
+  const at94 = at(94);
+  assert.deepEqual(launched(at94), []);
+  assert.equal(
+    skipOf(at94, 6),
+    "claude-code usage 94% is at or above the 94% drain threshold, which the owner raised once from 90%",
+  );
+  // The pause threshold still stops running work.
+  const running = decide({
+    issues: [issue(4, claimed)],
+    runs: [run(4)],
+    usage: { "claude-code": 95 },
+    owners,
+    settings: thresholds,
+  });
+  assert.equal(running[0].kind, "stop");
 });

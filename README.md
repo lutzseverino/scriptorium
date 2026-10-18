@@ -45,6 +45,7 @@ keeps its own service definition and credential files.
 - Builds each toolchain image from the repository's `.factory/Dockerfile`.
 - Caps each provider's concurrent sandboxes and stops its new claims at high usage.
 - Pauses a provider's runs near or at its usage limit and resumes them unattended.
+- Holds a drained provider's new claims until its owner resumes it, when the host asks.
 - Retries a failed first attempt once, on the host's retry model.
 - Restarts without spending a run's retry.
 

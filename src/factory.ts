@@ -118,16 +118,38 @@ export type Usage = { used: number; at: string; reset?: string };
 // the hold began, and `until` are fixed once as it begins.
 export type UsageHold = Usage & { since: string; until: string };
 
+// The owner's control of one provider's claims. An owner hold, set when the
+// provider drained on an owner-resume host, holds every new claim until the
+// owner's resume request lifts it, whatever its usage reads. A reserve raise,
+// which a resume request grants, raises the drain threshold for new claims
+// once, up to the pause threshold, until a reading below the configured drain
+// threshold or `until`, the reset the provider reported, when it reported one.
+// Neither holds nor releases running work or paused runs.
+// `used` is the usage that set the owner hold, or null when the hold stands in
+// for an owner record the factory could not read.
+export type OwnerHold = { since: string; used: number | null };
+export type ReserveRaise = {
+  drainThreshold: number;
+  since: string;
+  until: string | null;
+};
+export type OwnerControl = {
+  hold: OwnerHold | null;
+  reserve: ReserveRaise | null;
+};
+
 // Runs of a repository this pass could not read are present only while their
 // sandboxes run, so caps and the time limit still apply to them. A provider's
 // usage is null or absent while unknown, and so is its usage hold while it has
-// none.
+// none, and so is the owner's control of it while it has neither an owner
+// hold nor a reserve raise.
 export type Snapshot = {
   now: string;
   repositories: Repository[];
   runs: Run[];
   usage: Record<string, Usage | null>;
   holds: Record<string, UsageHold | null>;
+  owners: Record<string, OwnerControl | null>;
   settings: Settings;
 };
 
@@ -526,8 +548,9 @@ function unretried({ run, failure }: Retry, reason: string): Decision {
 }
 
 // A paused run is held while its provider's usage is at or above a
-// threshold, read or held, and released once a reading taken since the pause
-// is below every threshold. Unlike a fresh launch, which unknown usage holds
+// configured threshold, read or held, and released once a reading taken since
+// the pause is below every configured threshold; an owner hold or a reserve
+// raise changes neither. Unlike a fresh launch, which unknown usage holds
 // only during a usage hold, the pause is evidence of exhaustion: unknown
 // usage, a reading from before the pause, or a host that sets no threshold
 // holds it until the pause's deadline, and no longer, so a provider whose
@@ -574,28 +597,67 @@ export function reached(
   return null;
 }
 
-// A provider's usage at or above a threshold: its reading while the snapshot
-// trusts one, or else its usage hold until the hold ends.
-type HighUsage = { threshold: Threshold; usage: Usage; hold: UsageHold | null };
-
-function highUsage(provider: string, snapshot: Snapshot): HighUsage | null {
-  const reading = snapshot.usage[provider] ?? null;
-  const hold = snapshot.holds[provider] ?? null;
-  const active =
-    reading === null &&
-    hold !== null &&
-    Date.parse(snapshot.now) < Date.parse(hold.until)
-      ? hold
-      : null;
-  const usage = reading ?? active;
-  const threshold = usage && reached(usage.used, snapshot.settings);
-  return usage && threshold ? { threshold, usage, hold: active } : null;
+// A provider's usage in force: its reading while the snapshot trusts one, or
+// else its usage hold until the hold ends, which `hold` then names.
+export function usageInForce(
+  reading: Usage | null,
+  hold: UsageHold | null,
+  now: string,
+): { usage: Usage; hold: UsageHold | null } | null {
+  if (reading !== null) return { usage: reading, hold: null };
+  return hold !== null && Date.parse(now) < Date.parse(hold.until)
+    ? { usage: hold, hold }
+    : null;
 }
 
-function described({ threshold, usage, hold }: HighUsage, settings: Settings) {
+// The thresholds that hold a provider's new claims: the configured ones, with
+// the drain threshold its reserve raise grants while it lasts.
+export function claimThresholds(
+  settings: Pick<Settings, "drainThreshold" | "pauseThreshold">,
+  control: OwnerControl | null,
+): Pick<Settings, "drainThreshold" | "pauseThreshold"> {
+  return {
+    drainThreshold: control?.reserve?.drainThreshold ?? settings.drainThreshold,
+    pauseThreshold: settings.pauseThreshold,
+  };
+}
+
+// A provider's usage in force at or above one of `thresholds`, the configured
+// ones unless a new claim's reserve raise lifts its drain threshold.
+type HighUsage = {
+  threshold: Threshold;
+  usage: Usage;
+  hold: UsageHold | null;
+  thresholds: Pick<Settings, "drainThreshold" | "pauseThreshold">;
+};
+
+function highUsage(
+  provider: string,
+  snapshot: Snapshot,
+  thresholds: HighUsage["thresholds"] = snapshot.settings,
+): HighUsage | null {
+  const inForce = usageInForce(
+    snapshot.usage[provider] ?? null,
+    snapshot.holds[provider] ?? null,
+    snapshot.now,
+  );
+  const threshold = inForce && reached(inForce.usage.used, thresholds);
+  return inForce && threshold ? { threshold, ...inForce, thresholds } : null;
+}
+
+function described(
+  { threshold, usage, hold, thresholds }: HighUsage,
+  settings: Settings,
+) {
   const percent =
-    threshold === "pause" ? settings.pauseThreshold : settings.drainThreshold;
-  const over = `at or above the ${percent}% ${threshold} threshold`;
+    threshold === "pause"
+      ? thresholds.pauseThreshold
+      : thresholds.drainThreshold;
+  const raised =
+    threshold === "drain" && percent !== settings.drainThreshold
+      ? `, which the owner raised once from ${settings.drainThreshold}%`
+      : "";
+  const over = `at or above the ${percent}% ${threshold} threshold${raised}`;
   return hold
     ? `usage is unknown, and its usage hold from ${usage.used}% at ${usage.at}, ${over}, lasts until ${hold.until} at most`
     : `usage ${usage.used}% is ${over}`;
@@ -617,7 +679,9 @@ function paused(repository: Repository): string | null {
 
 // A launch needs fewer running sandboxes than the provider's cap, and its
 // provider's usage, read or held, below the threshold that stops it: the drain
-// threshold for a new claim, and the pause threshold for running work.
+// threshold for a new claim, as its reserve raise sets it, and the pause
+// threshold for running work. A new claim also waits for its provider's owner
+// hold to be lifted.
 function gate(
   provider: string,
   running: Map<string, number>,
@@ -627,9 +691,15 @@ function gate(
   const { settings } = snapshot;
   const cap = settings.caps[provider];
   if (cap === undefined) return `the host sets no cap for ${provider}`;
+  const control = snapshot.owners[provider] ?? null;
+  if (stops === "drain" && control?.hold)
+    return `${provider} has an owner hold ${control.hold.used === null ? "since" : `from ${control.hold.used}% at`} ${control.hold.since}; only the owner's resume request lifts it`;
   if ((running.get(provider) ?? 0) >= cap)
     return `${provider} already runs its cap of ${cap} agent${cap === 1 ? "" : "s"}`;
-  const high = highUsage(provider, snapshot);
+  const high =
+    stops === "drain"
+      ? highUsage(provider, snapshot, claimThresholds(settings, control))
+      : highUsage(provider, snapshot);
   return high && (stops === "drain" || high.threshold === "pause")
     ? `${provider} ${described(high, settings)}`
     : null;

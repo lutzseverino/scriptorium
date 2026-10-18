@@ -82,7 +82,7 @@ variables.
 | `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                             |
 | `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                       |
 | `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                        |
-| `usage.afterDrain`                      | What reopens a drained provider's claims: `auto-resume`, a reading below the drain threshold. Optional; the default is `auto-resume`. This factory release refuses `owner-resume`.                                      |
+| `usage.afterDrain`                      | What reopens a drained provider's claims: `auto-resume`, a reading below the drain threshold, or `owner-resume`, only the owner's [resume command](#owner-holds-and-resume). Optional; the default is `auto-resume`.    |
 | `pollSeconds`                           | The wait between passes.                                                                                                                                                                                                |
 | `readiness.authorizedRoles`             | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                               |
 | `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
@@ -106,7 +106,8 @@ when that reading counts.
   runs carry on, and so does an [interrupted run's](#restarts) relaunch, which
   is running work. With `auto-resume`, claims start again on the first reading
   below the threshold, even while runs from before the drain are still
-  running.
+  running. With `owner-resume`, the drain also sets an
+  [owner hold](#owner-holds-and-resume).
 - **Pause threshold.** At or above `usage.pauseThreshold`, the factory also
   stops each of the provider's running runs by killing its sandbox, and holds
   interrupted relaunches. The worktree and the `factory/issue-<n>` branch
@@ -127,15 +128,81 @@ A pause threshold below the drain threshold is refused; equal thresholds
 drain and pause together. Either threshold may be `null`. With both `null`,
 usage holds nothing, and a paused run waits only for its deadline.
 
-The `owner-resume` policy, an owner hold that only the owner lifts, is not in
-this factory release, so the configuration refuses it rather than reading it
-as `auto-resume`.
-
 For this factory release only, a configuration that still sets the legacy
 `usageThreshold` is read as `usage.drainThreshold` with no pause threshold,
 and the process log warns at start to replace it, for example
 `"usageThreshold": 90` with `"usage": { "drainThreshold": 90 }`. Setting
 `usageThreshold` together with `usage` is refused rather than choosing either.
+
+### Owner holds and resume
+
+With `"afterDrain": "owner-resume"`, a provider that drains gets an owner
+hold: the first pass whose usage, read or kept by a usage hold, holds the
+provider's new claims sets it. That is the drain threshold, or the pause
+threshold when the host sets no drain threshold. The owner hold keeps that
+provider from claiming any new issue, retries included, in every repository,
+through low readings, unknown usage and restarts, until the owner resumes the
+provider. A low reading, the provider's reset or the usage hold's deadline
+ends only the usage hold, never the owner hold. Other providers keep claiming.
+
+The owner hold holds no running work: running runs carry on, interrupted runs
+relaunch, and the pause threshold still stops runs. A
+[paused run](#paused-runs) relaunches by itself under its own rule, on a
+reading below every configured threshold, whatever the owner hold or a reserve
+raise says.
+
+The owner resumes a provider with the `resume` command, run as the factory's
+user from the release checkout, with the same host configuration:
+
+```sh
+node src/main.ts resume <host configuration> <provider> [--drain-threshold N]
+```
+
+The command checks the request against the host configuration and writes it
+to `requests/` in the state directory; it never runs, stops or edits the
+running factory. It prints the request's name, then exits with status 0 once
+queued, 1 for a refused request or configuration, and 2 for a malformed
+command. The running factory applies each queued request on its next pass,
+within `pollSeconds` of its current one, in the order they were queued, before
+it decides that pass. It logs `resume request <name> applied`, with what it
+lifted or raised, or `resume request <name> was discarded` with the reason,
+such as a provider the host configuration no longer lists, and removes the
+request. A request is applied once, even across a restart, and one queued
+while the factory is stopped applies on its first pass.
+
+- **Plain release.** `resume <host configuration> claude-code` lifts the owner
+  hold and nothing else. Claims then follow the drain threshold as with
+  `auto-resume`: at or above it they still wait, and on a reading below it they
+  reopen. The provider gets a new owner hold only once its usage has stopped
+  holding its claims, on a reading below the threshold or at the end of its
+  usage hold, and it then drains again.
+- **Reserve use.** `--drain-threshold N` also raises the provider's drain
+  threshold for new claims once, to `N`: above `usage.drainThreshold`, and at
+  most `usage.pauseThreshold`, or 100 without one. The raise lasts until a
+  reading below the configured drain threshold or until the reset the
+  provider reported for its fullest window passes; a raise granted while no
+  reset is known waits for the first one the provider reports. Then the
+  configured drain threshold applies again, and a provider whose usage still
+  holds its claims drains again. Usage reaching the raise also drains the
+  provider, which sets a new owner hold under `owner-resume`. The raise never
+  moves the pause threshold, and never releases a paused run.
+
+Both work under `auto-resume` too. It sets no owner hold, though one set
+before the host switched to it stays until a resume lifts it. For example,
+with a drain threshold of 90, a pause threshold of 95 and `owner-resume`,
+Claude Code reads 92% and has an owner hold:
+
+```sh
+# Claims wait for the usage to read below 90%, then reopen by themselves.
+node src/main.ts resume /etc/factory/host.json claude-code
+# Claims reopen at once and run up to 94%; at 94% a new owner hold is set.
+node src/main.ts resume /etc/factory/host.json claude-code --drain-threshold 94
+```
+
+A raise the host configuration no longer allows, after an edit and restart,
+ends on the next pass. An unreadable `owner.json` starts every provider of an
+`owner-resume` host with an owner hold, so a damaged record never reopens
+claims; resume each provider to lift it.
 
 ### Token command
 
@@ -278,6 +345,8 @@ The process owns everything under `stateDirectory`:
 | `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                               |
 | `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                      |
 | `usage.json`                                     | Each provider's last good usage reading with when it was read and its reset, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                  |
+| `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                           |
+| `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                              |
 | `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline and whether its issue was told when it paused, and whether the host settled it. |
 | `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                                                                                                                                                                |
 
@@ -361,6 +430,7 @@ resumes on it. Unlike an interrupted run, its pause holds it:
   cannot hold it forever.
 - With neither threshold set, a reading releases nothing, and it relaunches at
   its deadline.
+- An owner hold or a reserve raise neither holds nor releases it.
 
 The deadline bounds only the hold caused by unknown usage. A usable high
 reading or a usage hold still holds it after the deadline; the deadline

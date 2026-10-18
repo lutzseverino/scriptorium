@@ -1,5 +1,7 @@
 // The factory process: `node src/main.ts <host configuration>` serves every
-// repository the host configuration lists until it is stopped.
+// repository the host configuration lists until it is stopped, and
+// `node src/main.ts resume <host configuration> <provider>` queues the owner's
+// resume request for it.
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -7,11 +9,23 @@ import { tokenCommand } from "./github-token.ts";
 import { createHost } from "./host.ts";
 import { readHostConfiguration } from "./host-configuration.ts";
 import { createRegistry } from "./providers.ts";
+import { resume, resumeUsage } from "./resume.ts";
 import { buildSandboxImage, stopSandboxes } from "./sandbox-image.ts";
+
+if (process.argv[2] === "resume")
+  process.exit(
+    resume(process.argv.slice(3), {
+      now: () => new Date(),
+      print: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }),
+  );
 
 const path = process.argv[2];
 if (process.argv.length !== 3) {
-  console.error("Usage: node src/main.ts <host configuration>");
+  console.error(
+    `Usage: node src/main.ts <host configuration>\n   or: ${resumeUsage}`,
+  );
   process.exit(2);
 }
 // The process log. Every line reaches it through the host, which redacts it,

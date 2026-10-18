@@ -93,6 +93,11 @@ provider adapter's tests read raw logs shaped like Sandcastle's file display
 for its usage-limit errors. `test/usage.test.ts` drives the host's usage
 reads on a fake clock, covering `Retry-After`, reading freshness, usage holds
 and the usage record, and `test/pause.test.ts` covers the pause deadline.
+`test/owner.test.ts` drives owner holds, reserve raises and queued resume
+requests on a fake clock over a state directory, including a request left
+behind by a stopped process, and `test/resume.test.ts` covers the `resume`
+command's arguments and refusals; the host tests run that command as its own
+process against a running host.
 The GitHub CLI fake serves each issue's timeline from one fixture shape (label
 events with their actors, body and title edits, comments and sub-issue links)
 and each account's repository role, so the host tests drive the adapter's
