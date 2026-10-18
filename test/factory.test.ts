@@ -10,6 +10,7 @@ import {
   type Settings,
   type Snapshot,
   type Usage,
+  type UsageHold,
 } from "../src/factory.ts";
 import { createRegistry } from "../src/providers.ts";
 import type { Actor } from "../src/readiness.ts";
@@ -87,6 +88,7 @@ function snapshot({
   claims = [],
   repositories,
   usage = {},
+  holds = {},
   settings = {},
 }: {
   issues?: Issue[];
@@ -94,6 +96,7 @@ function snapshot({
   claims?: Claim[];
   repositories?: Repository[];
   usage?: Record<string, number | Usage | null>;
+  holds?: Record<string, UsageHold | null>;
   settings?: Partial<Settings>;
 } = {}): Snapshot {
   return {
@@ -106,11 +109,13 @@ function snapshot({
         typeof reading === "number" ? { used: reading, at: now } : reading,
       ]),
     ),
+    holds,
     settings: {
       defaultModel: "claude-sonnet-5-5",
       retryModel: "claude-opus-5-5@xhigh",
       caps: { "claude-code": 3, codex: 2 },
-      usageThreshold: 80,
+      drainThreshold: 80,
+      pauseThreshold: null,
       timeLimitMinutes: 240,
       authorizedRoles: ["admin", "maintain"],
       ...settings,
@@ -711,7 +716,7 @@ test("a provider launches only while its usage is below the threshold", () => {
   assert.deepEqual(launched(decisions), ["acme/widgets#5"]);
   assert.equal(
     skipOf(decisions, 4),
-    "claude-code usage 80% is at or above the 80% threshold",
+    "claude-code usage 80% is at or above the 80% drain threshold",
   );
 });
 
@@ -1025,7 +1030,7 @@ test("a retry waits for its provider's gate", () => {
     kind: "skip",
     ...at(4),
     reason:
-      "retry waits: claude-code usage 95% is at or above the 80% threshold",
+      "retry waits: claude-code usage 95% is at or above the 80% drain threshold",
   });
 });
 
@@ -1486,7 +1491,7 @@ test("a paused run resumes as the same attempt only once its provider's usage re
   );
   assert.equal(
     skipOf(paused({ codex: 80 }), 4),
-    "relaunch waits: codex hit its usage limit (resets 12:50pm (UTC)); usage 80% is at or above the 80% threshold",
+    "relaunch waits: codex hit its usage limit (resets 12:50pm (UTC)); usage 80% is at or above the 80% drain threshold",
   );
   assert.deepEqual(paused({ codex: 79 }), [
     { kind: "unpause", ...at(4) },
@@ -1545,7 +1550,7 @@ test("a paused run waits on unknown usage only until its deadline, and on high u
     }
   assert.equal(
     skipOf(decideAt(after, { "claude-code": { used: 95, at: after } }), 4),
-    "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 95% is at or above the 80% threshold",
+    "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 95% is at or above the 80% drain threshold",
   );
 });
 
@@ -1569,7 +1574,7 @@ test("a low reading from before the pause cannot release it early, while a high 
   assert.equal(launched(decideAt(limit.until, 10)).length, 1);
   assert.match(
     skipOf(decideAt(limit.until, 90), 4)!,
-    /usage 90% is at or above the 80% threshold$/,
+    /usage 90% is at or above the 80% drain threshold$/,
   );
   // A fresh launch counts the same reading as its provider's usage.
   assert.equal(
@@ -1958,4 +1963,368 @@ test("a failed first attempt waits for an unreadable readiness role, including i
       authorizing.ready.actor = owner;
       assert.equal(launches(decide(observed))[0].attempt, 2);
     }
+});
+
+// The drain and pause thresholds, as the owner's host sets them.
+const thresholds = { drainThreshold: 90, pauseThreshold: 95 } as const;
+const thresholdPause = {
+  cause: "pause threshold",
+  reset: "2026-10-09T15:00:00.000Z",
+  at: "2026-10-09T11:30:00.000Z",
+  until: "2026-10-09T15:00:00.000Z",
+} as const;
+
+test("at 89, 90, 94 and 95 percent, new claims stop at the drain threshold and running work at the pause threshold", () => {
+  const retry = (used: number) =>
+    decide({
+      issues: [issue(4, claimed)],
+      runs: [run(4, { ended: none })],
+      usage: { "claude-code": used },
+      settings: thresholds,
+    });
+  const relaunch = (used: number) =>
+    decide({
+      issues: [issue(4, claimed)],
+      runs: [run(4, { ended: interrupted })],
+      usage: { "claude-code": used },
+      settings: thresholds,
+    });
+  const running = (used: number) =>
+    decide({
+      issues: [issue(4, claimed)],
+      runs: [run(4)],
+      usage: { "claude-code": { used, at: now, reset: thresholdPause.reset } },
+      settings: thresholds,
+    });
+  const resumed = (used: number) =>
+    decide({
+      issues: [issue(4, pausedLabels)],
+      runs: [run(4, { ended: { paused: thresholdPause, commented: true } })],
+      usage: { "claude-code": used },
+      settings: thresholds,
+    });
+  const outcomes = [89, 90, 94, 95].map((used) => ({
+    used,
+    claim: launched(
+      decide({
+        issues: [issue(5)],
+        usage: { "claude-code": used },
+        settings: thresholds,
+      }),
+    ).length,
+    retry: launches(retry(used)).length,
+    relaunch: launches(relaunch(used)).length,
+    stopped: running(used).filter(({ kind }) => kind === "stop").length,
+    resumed: launches(resumed(used)).length,
+  }));
+  assert.deepEqual(outcomes, [
+    { used: 89, claim: 1, retry: 1, relaunch: 1, stopped: 0, resumed: 1 },
+    { used: 90, claim: 0, retry: 0, relaunch: 1, stopped: 0, resumed: 0 },
+    { used: 94, claim: 0, retry: 0, relaunch: 1, stopped: 0, resumed: 0 },
+    { used: 95, claim: 0, retry: 0, relaunch: 0, stopped: 1, resumed: 0 },
+  ]);
+  assert.equal(
+    skipOf(
+      decide({
+        issues: [issue(5)],
+        usage: { "claude-code": 90 },
+        settings: thresholds,
+      }),
+      5,
+    ),
+    "claude-code usage 90% is at or above the 90% drain threshold",
+  );
+  assert.equal(
+    skipOf(retry(94), 4),
+    "retry waits: claude-code usage 94% is at or above the 90% drain threshold",
+  );
+  assert.equal(
+    skipOf(relaunch(95), 4),
+    "relaunch waits: claude-code usage 95% is at or above the 95% pause threshold",
+  );
+  assert.equal(
+    skipOf(resumed(90), 4),
+    "relaunch waits: claude-code reached its pause threshold (resets 2026-10-09T15:00:00.000Z); usage 90% is at or above the 90% drain threshold",
+  );
+  // The stop fixes the run's pause at this pass, until the reading's reset.
+  assert.deepEqual(
+    running(95).filter(({ kind }) => kind !== "skip"),
+    [
+      {
+        kind: "stop",
+        ...at(4),
+        reason: "claude-code usage 95% is at or above the 95% pause threshold",
+        pause: {
+          cause: "pause threshold",
+          reset: "2026-10-09T15:00:00.000Z",
+          at: "2026-10-09T12:00:00Z",
+          until: "2026-10-09T15:00:00.000Z",
+        },
+      },
+    ],
+  );
+});
+
+test("a stop at the pause threshold without a reset waits the whole hold, and the time limit stops a run first", () => {
+  const stops = decide({
+    issues: [issue(4, claimed), issue(5, claimed)],
+    runs: [run(4), run(5, { startedAt: "2026-10-09T07:59:00Z" })],
+    usage: { "claude-code": 100 },
+    settings: thresholds,
+  }).filter(({ kind }) => kind !== "skip");
+  assert.deepEqual(stops, [
+    {
+      kind: "stop",
+      ...at(4),
+      reason: "claude-code usage 100% is at or above the 95% pause threshold",
+      pause: {
+        cause: "pause threshold",
+        reset: null,
+        at: now,
+        until: "2026-10-10T12:00:00.000Z",
+      },
+    },
+    {
+      kind: "stop",
+      ...at(5),
+      reason: "exceeded the time limit of 240 minutes",
+    },
+  ]);
+});
+
+test("a provider at its thresholds holds only its own work, across every repository", () => {
+  const codexModel = "model:gpt-5.5";
+  const decisions = decideFactory(
+    snapshot({
+      repositories: [
+        repository(widgets, [
+          issue(1),
+          issue(2, ["ready-for-agent", codexModel]),
+          issue(3, claimed),
+        ]),
+        repository(gadgets, [
+          issue(4),
+          issue(5, ["ready-for-agent", codexModel]),
+          issue(6, claimed),
+        ]),
+      ],
+      runs: [
+        run(3),
+        run(6, { repository: gadgets, provider: "codex", model: "gpt-5.5" }),
+      ],
+      usage: { "claude-code": 92, codex: 10 },
+      settings: { ...thresholds, caps: { "claude-code": 3, codex: 3 } },
+    }),
+    registry,
+  );
+  assert.deepEqual(launched(decisions), ["acme/widgets#2", "acme/gadgets#5"]);
+  assert.match(skipOf(decisions, 1)!, /^claude-code usage 92%/);
+  assert.match(skipOf(decisions, 4, gadgets)!, /^claude-code usage 92%/);
+  // The drain lets the running run continue; the pause threshold stops it, in
+  // any repository, and leaves the other provider's run alone.
+  assert.equal(
+    decisions.some(({ kind }) => kind === "stop"),
+    false,
+  );
+  const paused = decideFactory(
+    snapshot({
+      repositories: [
+        repository(widgets, [issue(3, claimed)]),
+        repository(gadgets, [issue(6, claimed), issue(7, claimed)]),
+      ],
+      runs: [
+        run(3),
+        run(6, { repository: gadgets }),
+        run(7, { repository: gadgets, provider: "codex", model: "gpt-5.5" }),
+      ],
+      usage: { "claude-code": 97, codex: 10 },
+      settings: thresholds,
+    }),
+    registry,
+  );
+  assert.deepEqual(
+    paused
+      .filter(({ kind }) => kind !== "skip")
+      .map(
+        (decision) =>
+          `${decision.kind} ${decision.repository}#${decision.issue}`,
+      ),
+    ["stop acme/widgets#3", "stop acme/gadgets#6"],
+  );
+});
+
+test("auto-resume admits new claims on a reading below the drain threshold while earlier runs still run", () => {
+  const decisions = decide({
+    issues: [issue(3, claimed), issue(4, claimed), issue(5)],
+    runs: [run(3), run(4)],
+    usage: { "claude-code": 89.9 },
+    settings: thresholds,
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#5"]);
+});
+
+test("thresholds set to null hold nothing, and a paused run then waits for its deadline alone", () => {
+  const off = { drainThreshold: null, pauseThreshold: null };
+  const decisions = decide({
+    issues: [issue(3, claimed), issue(4, claimed), issue(5)],
+    runs: [run(3), run(4, { ended: none })],
+    usage: { "claude-code": 100 },
+    settings: off,
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#4", "acme/widgets#5"]);
+  assert.equal(
+    decisions.some(({ kind }) => kind === "stop"),
+    false,
+  );
+  // A low reading since the pause releases nothing when no threshold is set.
+  const pausedAt = (time: string) =>
+    decideFactory(
+      {
+        ...snapshot({
+          issues: [issue(4, pausedLabels)],
+          runs: [run(4, { ended: pausedRun })],
+          settings: off,
+        }),
+        now: time,
+        usage: { "claude-code": { used: 0, at: time } },
+      },
+      registry,
+    );
+  assert.equal(
+    skipOf(pausedAt(now), 4),
+    "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); the host sets no usage threshold, so it waits until 2026-10-09T12:50:00.000Z at most",
+  );
+  assert.equal(launched(pausedAt(limit.until)).length, 1);
+});
+
+test("without a drain threshold the pause threshold alone stops claims and runs, and is the reading a paused run waits below", () => {
+  const pauseOnly = { drainThreshold: null, pauseThreshold: 95 };
+  const at94 = decide({
+    issues: [issue(3, claimed), issue(5)],
+    runs: [run(3)],
+    usage: { "claude-code": 94 },
+    settings: pauseOnly,
+  });
+  assert.deepEqual(launched(at94), ["acme/widgets#5"]);
+  assert.equal(
+    at94.some(({ kind }) => kind === "stop"),
+    false,
+  );
+  const at95 = decide({
+    issues: [issue(3, claimed), issue(5)],
+    runs: [run(3)],
+    usage: { "claude-code": 95 },
+    settings: pauseOnly,
+  });
+  assert.deepEqual(launched(at95), []);
+  assert.equal(at95[0].kind, "stop");
+  assert.equal(
+    skipOf(at95, 5),
+    "claude-code usage 95% is at or above the 95% pause threshold",
+  );
+  const resumed = decide({
+    issues: [issue(4, pausedLabels)],
+    runs: [run(4, { ended: { paused: thresholdPause, commented: true } })],
+    usage: { "claude-code": 94 },
+    settings: pauseOnly,
+  });
+  assert.equal(launches(resumed)[0]?.relaunch, true);
+});
+
+test("a usage hold keeps a high reading in force while usage is unknown, until its deadline", () => {
+  const hold = {
+    used: 92,
+    at: "2026-10-09T11:00:00.000Z",
+    since: "2026-10-09T10:00:00.000Z",
+    until: "2026-10-09T15:00:00.000Z",
+  };
+  const decideAt = (time: string, holds: Snapshot["holds"]) =>
+    decideFactory(
+      {
+        ...snapshot({
+          issues: [issue(3, claimed), issue(4, claimed), issue(5)],
+          runs: [run(3, { ended: interrupted }), run(4, { ended: none })],
+          settings: thresholds,
+        }),
+        now: time,
+        holds,
+      },
+      registry,
+    );
+  const held = decideAt("2026-10-09T14:59:59.999Z", { "claude-code": hold });
+  // Running work continues; a new claim and a retry wait.
+  assert.deepEqual(launched(held), ["acme/widgets#3"]);
+  assert.equal(
+    skipOf(held, 5),
+    "claude-code usage is unknown, and its usage hold from 92% at 2026-10-09T11:00:00.000Z, at or above the 90% drain threshold, lasts until 2026-10-09T15:00:00.000Z at most",
+  );
+  assert.match(skipOf(held, 4)!, /^retry waits: claude-code usage is unknown/);
+  // At its deadline the hold is over, and unknown usage gates by count only.
+  assert.deepEqual(launched(decideAt(hold.until, { "claude-code": hold })), [
+    "acme/widgets#3",
+    "acme/widgets#4",
+    "acme/widgets#5",
+  ]);
+  // A hold at the pause threshold also holds running work and stops it.
+  const pauseHold = { ...hold, used: 96 };
+  assert.deepEqual(launched(decideAt(now, { "claude-code": pauseHold })), []);
+  const stopping = decideFactory(
+    {
+      ...snapshot({
+        issues: [issue(3, claimed)],
+        runs: [run(3)],
+        settings: thresholds,
+      }),
+      holds: { "claude-code": pauseHold },
+    },
+    registry,
+  );
+  assert.deepEqual(
+    stopping.filter(({ kind }) => kind !== "skip").map(({ kind }) => kind),
+    ["stop"],
+  );
+  // A trusted reading takes precedence over the hold.
+  assert.deepEqual(
+    launched(
+      decideFactory(
+        {
+          ...snapshot({
+            issues: [issue(5)],
+            usage: { "claude-code": 40 },
+            settings: thresholds,
+          }),
+          holds: { "claude-code": hold },
+        },
+        registry,
+      ),
+    ),
+    ["acme/widgets#5"],
+  );
+});
+
+test("a usage hold holds a paused run past the pause's own deadline, until the hold ends", () => {
+  const hold = {
+    used: 92,
+    at: "2026-10-09T11:00:00.000Z",
+    since: "2026-10-09T11:00:00.000Z",
+    until: "2026-10-09T18:00:00.000Z",
+  };
+  const decideAt = (time: string) =>
+    decideFactory(
+      {
+        ...snapshot({
+          issues: [issue(4, pausedLabels)],
+          runs: [run(4, { ended: pausedRun })],
+          settings: thresholds,
+        }),
+        now: time,
+        holds: { "claude-code": hold },
+      },
+      registry,
+    );
+  assert.match(
+    skipOf(decideAt(limit.until), 4)!,
+    /^relaunch waits: claude-code hit its usage limit \(resets 12:50pm \(UTC\)\); usage is unknown, and its usage hold/,
+  );
+  assert.equal(launched(decideAt(hold.until)).length, 1);
 });

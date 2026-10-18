@@ -21,13 +21,42 @@ A run whose sandbox a factory restart stopped, which launches again as the same
 attempt on its branch instead of ending with a run outcome.
 _Avoid_: Cancelled run, drained run
 
+**Drain threshold**:
+The provider usage percentage, set in host configuration, at or above which
+the factory claims no new issue for that provider in any repository, retries
+included, while its running runs carry on. Other providers keep claiming.
+_Avoid_: Usage threshold, soft pause
+
+**Pause threshold**:
+The provider usage percentage, set in host configuration and never below the
+drain threshold, at or above which the factory also stops that provider's
+running runs by killing their sandboxes, so each becomes a paused run. Nothing
+overrides it.
+_Avoid_: Hard pause, kill threshold
+
+**Usage hold**:
+The factory's automatic hold on one provider: once a reading reaches a
+threshold, it keeps that reading in force while the provider's usage is
+unknown, and ends on a usable reading below every threshold, at the reset the
+provider reported, or at the latest 24 hours after it began.
+_Avoid_: Provider pause, cached reading
+
+**Owner hold**:
+A hold on one provider that a host whose policy after the drain is
+owner-resume sets at the drain threshold. It keeps that provider from claiming
+new issues through low and unknown readings and restarts until the owner
+resumes the provider, and never holds paused runs.
+_Avoid_: Soft-pause label, factory pause
+
 **Paused run**:
-A run whose agent exited on its provider's usage limit, which the factory
-labels paused and relaunches by itself as the same attempt once the provider's
-usage reads below the threshold, or once its deadline passes while the usage is
-unknown, instead of ending with a run outcome. Unlike a
-paused repository, which claims and launches nothing for a pass and never
-touches its issues, a paused run is one issue's run, marked on that issue.
+A run whose agent exited on its provider's usage limit, or whose sandbox the
+factory stopped at its provider's pause threshold, which the factory labels
+paused and relaunches by itself as the same attempt once the provider's usage
+reads below every threshold, or once its deadline passes while the usage is
+unknown and no usage hold applies, instead of ending with a run outcome.
+Unlike a paused repository, which claims and launches nothing for a pass and
+never touches its issues, a paused run is one issue's run, marked on that
+issue.
 _Avoid_: Limited run, held run, failed run
 
 **Provider**:

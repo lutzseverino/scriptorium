@@ -3,7 +3,11 @@
   "providers": { "claude-code": { "cap": -1, "credential": "claude-token" } },
   "models": { "default": "claude-sonnet-5-5", "retry": 5 },
   "timeLimitMinutes": 0,
-  "usageThreshold": 120,
+  "usage": {
+    "drainThreshold": 120,
+    "pauseThreshold": "95",
+    "afterDrain": "later"
+  },
   "pollSeconds": "300",
   "readiness": { "authorizedRoles": ["owner", "admin", "admin"] },
   "unpushablePaths": ["/etc", "../outside", ""],

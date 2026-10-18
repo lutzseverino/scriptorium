@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { readHostConfiguration } from "../src/host-configuration.ts";
 import { createRegistry } from "../src/providers.ts";
-import { UsageReadError } from "../src/providers/usage.ts";
+import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { createUsage, retryAt, usageFreshMinutes } from "../src/usage.ts";
 import { directory, fakePorts } from "./fakes.ts";
 
@@ -43,11 +43,15 @@ test("a missing, malformed or past Retry-After provides no header deadline", () 
     assert.equal(retryAt(value, start), null, String(value));
 });
 
+// The thresholds the usage reads below hold at, unless a test names others.
+const thresholds = { drainThreshold: 90, pauseThreshold: 95 };
+
 // Usage reads on a fake clock, with each provider's next answers queued: a
-// number, null for no usage window, or an error to throw.
+// number without a reset, a window, null for no usage window, or an error to
+// throw.
 function usage(t: TestContext, path = join(directory(t), "usage.json")) {
   const clock = { now: start };
-  const answers: Record<string, (number | null | Error)[]> = {
+  const answers: Record<string, (number | UsageWindow | null | Error)[]> = {
     "claude-code": [],
     codex: [],
   };
@@ -55,12 +59,15 @@ function usage(t: TestContext, path = join(directory(t), "usage.json")) {
   const reports: string[] = [];
   const instance = createUsage({
     providers: ["claude-code", "codex"],
+    thresholds,
     async read(provider) {
       reads.push(provider);
       const answer = answers[provider].shift();
       if (answer === undefined) throw new Error(`no answer for ${provider}`);
       if (answer instanceof Error) throw answer;
-      return answer;
+      return typeof answer === "number"
+        ? { used: answer, reset: null }
+        : answer;
     },
     now: () => clock.now,
     report: (line) => reports.push(line),
@@ -138,7 +145,7 @@ test("unavailable episodes stay quiet across cooldowns and restarts, report chan
   assert.match(first.reports[0], /setup token may lack usage-read permission/);
   assert.match(
     first.reports[0],
-    /cached reading.*expires.*fresh launches.*without the percentage gate/,
+    /cached reading.*usage hold until it ends.*expires.*fresh launches.*without the usage thresholds/,
   );
 
   const second = usage(t, first.path);
@@ -299,11 +306,13 @@ test("the readings and read deadlines survive a restart", async (t) => {
       reading: null,
       nextRead: "2026-10-14T15:19:08.000Z",
       failure: "http:429",
+      hold: null,
     },
     codex: {
       reading: { used: 33, at: start.toISOString() },
       nextRead: null,
       failure: null,
+      hold: null,
     },
   });
 
@@ -364,6 +373,7 @@ test("fallback deadlines count from receipt and a replaced credential recovers a
     ).providers.get("claude-code")!;
     const ports = {
       providers: ["claude-code"],
+      thresholds,
       read: () => adapter.readUsage(),
       now: () => clock.now,
       report: (line: string) => reports.push(line),
@@ -424,7 +434,7 @@ test("a configured Claude usage login retains cache/backoff across replacement a
     publish("synthetic-first-secret");
     const tokens: string[] = [];
     const adapter = createRegistry(
-      readHostConfiguration(hostPath).providers,
+      readHostConfiguration(hostPath, assert.fail).providers,
       fakePorts({
         fetch: async (_url, init) => {
           tokens.push(new Headers(init?.headers).get("authorization")!);
@@ -443,6 +453,7 @@ test("a configured Claude usage login retains cache/backoff across replacement a
     const path = join(root, "usage.json");
     const ports = {
       providers: ["claude-code"],
+      thresholds,
       read: () => adapter.readUsage(),
       now: () => now,
       report: (line: string) => reports.push(line),
@@ -505,6 +516,7 @@ test("missing, expired and malformed usage copies and empty windows stay unknown
   ).providers.get("claude-code")!;
   const reader = createUsage({
     providers: ["claude-code"],
+    thresholds,
     read: () => adapter.readUsage(),
     now: () => start,
     report: (line) => reports.push(line),
@@ -621,6 +633,7 @@ test("Claude Code's refusals reach the process log with the provider and status,
     const reports: string[] = [];
     await createUsage({
       providers: ["claude-code"],
+      thresholds,
       read: () => adapter.readUsage(),
       now: () => start,
       report: (line) => reports.push(line),
@@ -633,5 +646,129 @@ test("Claude Code's refusals reach the process log with the provider and status,
       ),
     );
     assert.doesNotMatch(reports[0], /sk-ant|secret body/);
+  }
+});
+
+test("a fresh high reading starts a usage hold that survives stale and failed reads and a restart, until its fixed deadline", async (t) => {
+  const first = usage(t);
+  const reset = "2026-10-14T19:00:00.000Z";
+  first.answers["claude-code"].push(
+    { used: 92, reset },
+    { used: 93, reset: "2026-10-14T23:00:00.000Z" },
+    throttled("1800"),
+  );
+  first.answers.codex.push(10, 11, 12);
+  await first.at(0);
+  const hold = {
+    used: 92,
+    at: start.toISOString(),
+    reset,
+    since: start.toISOString(),
+    until: reset,
+  };
+  assert.deepEqual(first.holds(), { "claude-code": hold, codex: null });
+  // A later high reading updates the hold but never moves its start or end.
+  await first.at(600);
+  const later93 = {
+    ...hold,
+    used: 93,
+    at: later(600).toISOString(),
+    reset: "2026-10-14T23:00:00.000Z",
+  };
+  assert.deepEqual(first.holds()["claude-code"], later93);
+  // A throttled read and the reading's expiry leave the hold in force; the
+  // read backoff is no deadline for it.
+  assert.equal((await first.at(1200))["claude-code"]?.used, 93);
+  assert.equal((await first.at(1801))["claude-code"], null);
+  assert.deepEqual(first.holds()["claude-code"], later93);
+  assert.deepEqual(
+    JSON.parse(readFileSync(first.path, "utf8"))["claude-code"].hold,
+    later93,
+  );
+
+  const second = usage(t, first.path);
+  second.answers["claude-code"].push(null, new Error("refused"));
+  second.answers.codex.push(13, 14, 15);
+  assert.equal((await second.at(3000))["claude-code"], null);
+  assert.deepEqual(second.holds()["claude-code"], later93);
+  second.clock.now = new Date("2026-10-14T18:59:59.999Z");
+  await second.read();
+  assert.deepEqual(second.holds()["claude-code"], later93);
+  second.clock.now = new Date(reset);
+  second.answers["claude-code"].push(new Error("refused"));
+  await second.read();
+  assert.equal(second.holds()["claude-code"], null);
+});
+
+test("a usage hold without a reset lasts 24 hours from its start, and a reading below every threshold ends it at once", async (t) => {
+  const reader = usage(t);
+  reader.answers["claude-code"].push(95, new Error("refused"), 89.9);
+  reader.answers.codex.push(1, 2, 3);
+  await reader.at(0);
+  assert.equal(
+    reader.holds()["claude-code"]?.until,
+    "2026-10-15T15:00:00.000Z",
+  );
+  await reader.at(3600);
+  assert.equal(reader.holds()["claude-code"]?.used, 95);
+  await reader.at(7200);
+  assert.equal(reader.holds()["claude-code"], null);
+  // A reset more than 24 hours away is capped too.
+  const weekly = usage(t);
+  weekly.answers["claude-code"].push({
+    used: 91,
+    reset: "2026-10-20T00:00:00.000Z",
+  });
+  weekly.answers.codex.push(1);
+  await weekly.at(0);
+  assert.equal(
+    weekly.holds()["claude-code"]?.until,
+    "2026-10-15T15:00:00.000Z",
+  );
+});
+
+test("unknown usage starts no hold, and a hold the thresholds no longer reach ends", async (t) => {
+  const reader = usage(t);
+  reader.answers["claude-code"].push(new Error("refused"));
+  reader.answers.codex.push(null);
+  await reader.at(0);
+  assert.deepEqual(reader.holds(), { "claude-code": null, codex: null });
+
+  const hold = {
+    used: 92,
+    at: start.toISOString(),
+    since: start.toISOString(),
+    until: "2026-10-15T15:00:00.000Z",
+  };
+  for (const [drainThreshold, expected] of [
+    [90, hold],
+    [93, null],
+    [null, null],
+  ] as const) {
+    const path = join(directory(t), "usage.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        "claude-code": { reading: null, nextRead: null, failure: null, hold },
+        // A hold with a bad deadline is dropped as it loads.
+        codex: { reading: null, hold: { ...hold, until: "later" } },
+      }),
+    );
+    const restarted = createUsage({
+      providers: ["claude-code", "codex"],
+      thresholds: { drainThreshold, pauseThreshold: null },
+      read: async () => {
+        throw new Error("refused");
+      },
+      now: () => later(60),
+      report: () => {},
+      path,
+    });
+    await restarted.read();
+    assert.deepEqual(
+      restarted.holds(),
+      { "claude-code": expected, codex: null },
+      String(drainThreshold),
+    );
   }
 });

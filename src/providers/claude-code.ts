@@ -9,7 +9,7 @@ import type {
 } from "../providers.ts";
 import { launchAgent } from "./launch.ts";
 import { limitError } from "./limit.ts";
-import { fullest, UsageReadError } from "./usage.ts";
+import { fullest, UsageReadError, type UsageWindow } from "./usage.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 const efforts: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -140,9 +140,11 @@ async function readUsageToken(path: string): Promise<string> {
 }
 
 // The usage endpoint's result.
-export function claudeUsage(result: any): number | null {
-  return fullest([
-    result?.five_hour?.utilization,
-    result?.seven_day?.utilization,
-  ]);
+export function claudeUsage(result: any): UsageWindow | null {
+  return fullest(
+    [result?.five_hour, result?.seven_day].map((window) => ({
+      used: window?.utilization,
+      reset: window?.resets_at,
+    })),
+  );
 }

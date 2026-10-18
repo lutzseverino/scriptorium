@@ -14,9 +14,15 @@ if (process.argv.length !== 3) {
   console.error("Usage: node src/main.ts <host configuration>");
   process.exit(2);
 }
+// The process log. Every line reaches it through the host, which redacts it,
+// apart from the host configuration's warnings, which hold no secret.
+function log(line: string) {
+  console.log(`${new Date().toISOString()} ${line}`);
+}
+
 let configuration;
 try {
-  configuration = readHostConfiguration(path);
+  configuration = readHostConfiguration(path, log);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
@@ -34,11 +40,6 @@ const credentialHelper =
   '!f() { test "$1" = get && echo username=x-access-token && echo "password=$FACTORY_GITHUB_TOKEN"; }; f';
 
 const registry = createRegistry(configuration.providers);
-
-// The process log. Every line reaches it through the host, which redacts it.
-function log(line: string) {
-  console.log(`${new Date().toISOString()} ${line}`);
-}
 
 const host = createHost(configuration, registry, {
   async gh(token, args) {

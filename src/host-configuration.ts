@@ -1,6 +1,6 @@
-// The host configuration: the operator's one JSON file for this host. Only the
-// Claude usage credential is optional; unknown fields are refused, and nothing
-// comes from the environment.
+// The host configuration: the operator's one JSON file for this host. Every
+// field is required unless it is the optional Claude usage credential or has a
+// default; unknown fields are refused, and nothing comes from the environment.
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import {
@@ -15,7 +15,7 @@ export type HostConfiguration = {
   providers: Record<string, ProviderSettings & { cap: number }>;
   models: { default: string; retry: string };
   timeLimitMinutes: number;
-  usageThreshold: number;
+  usage: UsagePolicy;
   pollSeconds: number;
   readiness: { authorizedRoles: Role[] };
   // Path prefixes the factory's GitHub App can't push, such as
@@ -28,11 +28,27 @@ export type HostConfiguration = {
   github: { tokenCommand: string[] };
 };
 
+// What each provider's usage does to its work: at or above `drainThreshold`
+// it claims no new issue, and at or above `pauseThreshold` its running runs
+// stop too; either is null when off. `afterDrain` says what reopens claims.
+export type UsagePolicy = {
+  drainThreshold: number | null;
+  pauseThreshold: number | null;
+  afterDrain: AfterDrain;
+};
+
+export const afterDrains = ["auto-resume", "owner-resume"] as const;
+export type AfterDrain = (typeof afterDrains)[number];
+
 export const roles = ["admin", "maintain", "write", "triage", "read"] as const;
 export type Role = (typeof roles)[number];
 
 // Reads and validates the host configuration, or throws naming every problem.
-export function readHostConfiguration(path: string): HostConfiguration {
+// A valid configuration that still uses a deprecated form tells `warn`.
+export function readHostConfiguration(
+  path: string,
+  warn: (warning: string) => void,
+): HostConfiguration {
   let text;
   try {
     text = readFileSync(path, "utf8");
@@ -49,7 +65,10 @@ export function readHostConfiguration(path: string): HostConfiguration {
       cause: error,
     });
   }
-  const problems = hostConfigurationProblems(value);
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  const configuration = migrated(value, problems, warnings);
+  problems.push(...hostConfigurationProblems(configuration));
   if (problems.length > 0)
     throw new Error(
       [
@@ -57,10 +76,60 @@ export function readHostConfiguration(path: string): HostConfiguration {
         ...problems.map((problem) => `- ${problem}`),
       ].join("\n"),
     );
-  return value;
+  for (const warning of warnings)
+    warn(`The host configuration ${path}: ${warning}`);
+  return withDefaults(configuration as HostConfiguration);
 }
 
 type Check = (value: unknown, path: string, problems: string[]) => void;
+
+// For one factory release, the legacy `usageThreshold` is read as
+// `usage.drainThreshold`, with a warning; setting both is a problem rather
+// than a choice between them.
+function migrated(
+  value: unknown,
+  problems: string[],
+  warnings: string[],
+): unknown {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !Object.hasOwn(value, "usageThreshold")
+  )
+    return value;
+  const { usageThreshold, ...rest } = value as Record<string, unknown>;
+  if (Object.hasOwn(rest, "usage")) {
+    problems.push(
+      "usageThreshold: is the deprecated form of usage.drainThreshold and can't be set with usage; remove it",
+    );
+    return rest;
+  }
+  const found = problems.length;
+  percentage(usageThreshold, "usageThreshold", problems);
+  warnings.push(
+    `usageThreshold is deprecated and read as usage.drainThreshold for this factory release; replace it with "usage": { "drainThreshold": ${usageThreshold} }`,
+  );
+  // An invalid legacy value is named once, as itself.
+  return {
+    ...rest,
+    usage: {
+      drainThreshold: problems.length === found ? usageThreshold : null,
+    },
+  };
+}
+
+function withDefaults(configuration: HostConfiguration): HostConfiguration {
+  const usage: Partial<UsagePolicy> = configuration.usage;
+  return {
+    ...configuration,
+    usage: {
+      drainThreshold: usage.drainThreshold!,
+      pauseThreshold: usage.pauseThreshold ?? null,
+      afterDrain: usage.afterDrain ?? "auto-resume",
+    },
+  };
+}
 
 function hostConfigurationProblems(value: unknown): string[] {
   const problems: string[] = [];
@@ -95,9 +164,13 @@ function hostConfigurationProblems(value: unknown): string[] {
       (minutes) => timer(minutes * 60_000),
       "is not a positive number of minutes a timer can wait",
     ),
-    usageThreshold: number(
-      (percent) => percent >= 0 && percent <= 100,
-      "is not a percentage from 0 to 100",
+    usage: object(
+      {
+        drainThreshold: nullable(percentage),
+        pauseThreshold: nullable(percentage),
+        afterDrain,
+      },
+      ["pauseThreshold", "afterDrain"],
     ),
     pollSeconds: number(
       (seconds) => timer(seconds * 1000),
@@ -123,6 +196,15 @@ function hostConfigurationProblems(value: unknown): string[] {
     gitIdentity: object({ name: text(), email: text() }),
     github: object({ tokenCommand: list(text(), { nonEmpty: true }) }),
   })(value, "", problems);
+  const usage = (value as { usage?: Partial<UsagePolicy> } | null)?.usage;
+  const { drainThreshold: drain, pauseThreshold: pause } = usage ?? {};
+  if (
+    [drain, pause].every((percent) => valid(percentage, percent)) &&
+    pause! < drain!
+  )
+    problems.push(
+      `usage.pauseThreshold: ${pause} is below usage.drainThreshold, ${drain}`,
+    );
   if (problems.length === 0) {
     const configuration = value as HostConfiguration;
     const registry = createRegistry(configuration.providers);
@@ -133,6 +215,29 @@ function hostConfigurationProblems(value: unknown): string[] {
     }
   }
   return problems;
+}
+
+const percentage = number(
+  (percent) => percent >= 0 && percent <= 100,
+  "is not a percentage from 0 to 100",
+);
+
+// Owner holds are not in this factory release yet, so `owner-resume` is
+// refused rather than read as `auto-resume`.
+const afterDrain: Check = (value, path, problems) =>
+  value === "owner-resume"
+    ? problems.push(
+        `${path}: "owner-resume" needs owner holds, which this factory release does not have yet; use "auto-resume"`,
+      )
+    : text(
+        (choice) => (afterDrains as readonly string[]).includes(choice),
+        `is not one of ${afterDrains.join(", ")}`,
+      )(value, path, problems);
+
+function valid(check: Check, value: unknown): boolean {
+  const problems: string[] = [];
+  check(value, "", problems);
+  return problems.length === 0;
 }
 
 function timer(milliseconds: number): boolean {
@@ -223,6 +328,12 @@ function text(
       problems.push(`${path}: is not a non-empty string`);
     else if (!valid(value))
       problems.push(`${path}: ${JSON.stringify(value)} ${invalid}`);
+  };
+}
+
+function nullable(check: Check): Check {
+  return (value, path, problems) => {
+    if (value !== null) check(value, path, problems);
   };
 }
 

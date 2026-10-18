@@ -43,8 +43,8 @@ keeps its own service definition and credential files.
 - Serves many repositories from one process, with one oldest-first queue.
 - Accepts readiness only from a person holding a role the host authorizes.
 - Builds each toolchain image from the repository's `.factory/Dockerfile`.
-- Caps each provider's concurrent sandboxes and holds launches at high usage.
-- Pauses a run that hits its provider's usage limit and resumes it unattended.
+- Caps each provider's concurrent sandboxes and stops its new claims at high usage.
+- Pauses a provider's runs near or at its usage limit and resumes them unattended.
 - Retries a failed first attempt once, on the host's retry model.
 - Restarts without spending a run's retry.
 
