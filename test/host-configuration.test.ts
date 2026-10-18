@@ -59,7 +59,39 @@ test("a complete host configuration is read as written", () => {
     stateDirectory: "/var/lib/factory",
     gitIdentity: { name: "factory[bot]", email: "factory@example.com" },
     github: { tokenCommand: ["/usr/local/bin/factory-token", "--app", "7"] },
+    imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
   });
+});
+
+test("image retention has defaults, and each setting may be given alone", (t) => {
+  const path = join(directory(t), "host.json");
+  const valid = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const [given, retention] of [
+    [{}, { obsoletePairs: 3, cacheMinimumAgeHours: 24 }],
+    [{ obsoletePairs: 0 }, { obsoletePairs: 0, cacheMinimumAgeHours: 24 }],
+    [
+      { cacheMinimumAgeHours: 168 },
+      { obsoletePairs: 3, cacheMinimumAgeHours: 168 },
+    ],
+    [
+      { obsoletePairs: 10, cacheMinimumAgeHours: 1 },
+      { obsoletePairs: 10, cacheMinimumAgeHours: 1 },
+    ],
+  ]) {
+    writeFileSync(path, JSON.stringify({ ...valid, imageRetention: given }));
+    assert.deepEqual(read(path), {
+      configuration: {
+        ...read(fixture("valid")).configuration,
+        imageRetention: retention,
+      },
+      warnings: [],
+    });
+  }
+  writeFileSync(path, JSON.stringify({ ...valid, imageRetention: null }));
+  assert.deepEqual(refused(path), [
+    `The host configuration ${path} is invalid:`,
+    "- imageRetention: is not an object",
+  ]);
 });
 
 test("Claude Code accepts an optional absolute usage credential without changing other settings", (t) => {
@@ -106,6 +138,7 @@ test("unknown fields and providers without an adapter are refused", () => {
     "- providers.claude-code.env: is not a host configuration field",
     "- providers.cursor: has no adapter; choose claude-code or codex",
     "- usage.reserve: is not a host configuration field",
+    "- imageRetention.obsoleteImages: is not a host configuration field",
   ]);
 });
 
@@ -130,6 +163,8 @@ test("malformed values are refused with every correction", () => {
     '- stateDirectory: "state" is not an absolute path',
     "- gitIdentity.name: is not a non-empty string",
     "- github.tokenCommand: is empty",
+    "- imageRetention.obsoletePairs: 1.5 is not a whole number of image pairs",
+    "- imageRetention.cacheMinimumAgeHours: 0 is not a positive whole number of hours",
   ]);
 });
 

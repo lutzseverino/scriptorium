@@ -19,7 +19,8 @@ conventions this repository follows, where Scriptorium lived until
 
 ## Installation
 
-On a Linux host with Node.js 24 or 26, Git, the GitHub CLI and Docker, check out the
+On a Linux host with Node.js 24 or 26, Git, the GitHub CLI and Docker with
+Buildx, check out the
 latest release and start the process with the host configuration's path:
 
 ```sh
@@ -43,6 +44,7 @@ keeps its own service definition and credential files.
 - Serves many repositories from one process, with one oldest-first queue.
 - Accepts readiness only from a person holding a role the host authorizes.
 - Builds each toolchain image from the repository's `.factory/Dockerfile`.
+- Removes its own obsolete images and old build cache after it builds.
 - Caps each provider's concurrent sandboxes and stops its new claims at high usage.
 - Pauses a provider's runs near or at its usage limit and resumes them unattended.
 - Holds a drained provider's new claims until its owner resumes it, when the host asks.

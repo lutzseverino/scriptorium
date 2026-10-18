@@ -26,19 +26,21 @@ host that updates on its own lists the releases of `lutzseverino/scriptorium`
 for newer versions, since later releases are published only there.
 
 The process needs stable Node.js 24 or 26 (24 is the default), Git, the GitHub
-CLI and Docker on its `PATH`, and runs until it is stopped;
-[restarts](#restarts) describes stopping it. It builds sandbox images with its
-own user's UID and GID. An unreadable, malformed or invalid host configuration stops it at start
-with every problem named. The host keeps its own service setup: the service
-definition and its `PATH`, the provider credential files, and the host
-configuration itself.
+CLI and Docker with its Buildx plugin on its `PATH`, and runs until it is
+stopped; [restarts](#restarts) describes stopping it. It builds sandbox images
+with its own user's UID and GID, in its own Buildx builder, which it creates on
+its first build; [sandbox image retention](#sandbox-image-retention) describes
+the builder and what the factory removes. An unreadable, malformed or invalid
+host configuration stops it at start with every problem named. The host keeps
+its own service setup: the service definition and its `PATH`, the provider
+credential files, and the host configuration itself.
 
 ## Host configuration
 
 The host configuration is one JSON file. Every field is required except
-`providers.claude-code.usageCredential` and the fields whose default the table
-below gives. Unknown fields are refused, and nothing comes from environment
-variables.
+`providers.claude-code.usageCredential`, `imageRetention` and the fields whose
+default the table below gives. Unknown fields are refused, and nothing comes
+from environment variables.
 
 ```json
 {
@@ -66,7 +68,8 @@ variables.
   "unpushablePaths": [".github/workflows/"],
   "stateDirectory": "/var/lib/factory",
   "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
-  "github": { "tokenCommand": ["/usr/local/bin/factory-token"] }
+  "github": { "tokenCommand": ["/usr/local/bin/factory-token"] },
+  "imageRetention": { "obsoletePairs": 3, "cacheMinimumAgeHours": 24 }
 }
 ```
 
@@ -89,6 +92,8 @@ variables.
 | `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                    |
 | `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
 | `github.tokenCommand`                   | The executable and leading arguments that print a GitHub token for a repository.                                                                                                                                        |
+| `imageRetention.obsoletePairs`          | The whole number of obsolete sandbox image pairs kept across every repository, newest first; pairs in use stay beyond it. Optional; the default is 3. See [image retention](#sandbox-image-retention).                  |
+| `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned. Optional; the default is 24.                                                                                   |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -595,6 +600,77 @@ limit starts again at the relaunch.
 A sandbox container is any container from a factory sandbox image, which
 carries the `factory.agent.identity` label, so a host runs one factory process
 and starts no other containers from those images.
+
+## Sandbox image retention
+
+Each repository's sandbox image is a pair: the agent image
+`factory-sandbox:<hash>` and its toolchain image
+`factory-sandbox:<hash>-toolchain`, named by the
+[image tag](sandbox-image.md#image-tags-and-compatibility). A changed
+`.factory/Dockerfile` or agent layer builds a new pair and leaves the old one
+obsolete. After each pass the factory removes its own obsolete pairs beyond
+`imageRetention.obsoletePairs`, keeping the newest, and prunes its builder's
+cache that is at least `imageRetention.cacheMinimumAgeHours` old.
+
+The factory keeps, whatever the allowance:
+
+- every repository's current pair, which repositories with the same
+  `.factory/Dockerfile` share;
+- a pair the image of a run that has not exited belongs to, even if its
+  sandbox container does not exist yet;
+- a pair whose image any container on the host uses, running or stopped,
+  including an image a rebuild for a new UID and GID left untagged.
+
+The allowance counts these kept obsolete pairs too, so when they reach it the
+factory keeps them and no other obsolete pair: the host can hold more obsolete
+pairs than `imageRetention.obsoletePairs` for as long as they are in use. A
+pass removes nothing while any repository has no current image, because its
+`.factory/config.json` or `.factory/Dockerfile` is unavailable, its image did
+not build or it could not be read; that repository may still need any old
+pair. The process log says once that retention waits and for which
+repositories, and retention resumes on the first pass that prepares every
+repository's image. A failed build therefore never costs the last usable
+images.
+
+Only the factory's own images are candidates:
+
+- tags of the `factory-sandbox` repository that are exactly a 64-digit
+  lowercase hexadecimal hash, alone or followed by `-toolchain`;
+- the `factory-<owner>-<name>-<hash>:latest` images that factory releases from
+  `lutzseverino/repo-canon` built, but only under the exact name such a release
+  gave a repository the host configuration lists. Each counts as one pair, by
+  its age.
+
+Every other image stays, including other tags in `factory-sandbox`, lookalike
+names, legacy images of repositories the host no longer lists, and untagged
+images. The factory removes an image by its tag and never forces a removal, so
+another tag on the same image keeps that image, and Docker refuses to remove an
+image a container started meanwhile uses. It never runs Docker's image, system
+or builder prune commands, which act on the whole host.
+
+The factory builds every sandbox image in its own Buildx builder,
+`factory-sandbox`, which runs BuildKit in a container from the pinned
+`moby/buildkit` image. That builder's cache holds only the factory's builds,
+so the factory prunes it, and never the Docker daemon's own build cache or
+another builder's. Base images in a `.factory/Dockerfile` are pulled by that
+builder, with the host user's Docker login but without the daemon's registry
+mirrors. While its cache lasts, the builder holds a second copy of the layers
+it built besides the images it loads into Docker.
+
+Each removal, pruned cache, failed removal and failed inventory goes to the
+process log. A failure never pauses a repository or fails a run: a removal
+that fails leaves its pair in place, and an inventory that fails removes
+nothing that pass.
+
+### Upgrading to retention
+
+An existing host configuration needs no change: without `imageRetention` the
+host keeps three obsolete pairs and prunes cache a day old. The first pass
+that prepares every repository's image after the upgrade removes the
+obsolete pairs and served repositories' legacy images beyond the allowance.
+Build cache from earlier factory releases is in the Docker daemon's own
+builder, mixed with other builds on the host, so the factory leaves it alone;
+whether to prune it is the operator's choice.
 
 ## Repository pauses
 

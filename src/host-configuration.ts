@@ -26,6 +26,15 @@ export type HostConfiguration = {
   // The executable and arguments that print a token for the repository named
   // by the `<owner>/<name>` argument appended to them.
   github: { tokenCommand: string[] };
+  imageRetention: ImageRetention;
+};
+
+// How many obsolete sandbox image pairs the host keeps beyond every
+// repository's current pair and the pairs containers use, and how old the
+// factory builder's cache must be before it is pruned.
+export type ImageRetention = {
+  obsoletePairs: number;
+  cacheMinimumAgeHours: number;
 };
 
 // What each provider's usage does to its work: at or above `drainThreshold`
@@ -122,6 +131,7 @@ function migrated(
 
 function withDefaults(configuration: HostConfiguration): HostConfiguration {
   const usage: Partial<UsagePolicy> = configuration.usage;
+  const retention: Partial<ImageRetention> = configuration.imageRetention ?? {};
   return {
     ...configuration,
     usage: {
@@ -129,77 +139,100 @@ function withDefaults(configuration: HostConfiguration): HostConfiguration {
       pauseThreshold: usage.pauseThreshold ?? null,
       afterDrain: usage.afterDrain ?? "auto-resume",
     },
+    imageRetention: {
+      obsoletePairs: retention.obsoletePairs ?? 3,
+      cacheMinimumAgeHours: retention.cacheMinimumAgeHours ?? 24,
+    },
   };
 }
 
 function hostConfigurationProblems(value: unknown): string[] {
   const problems: string[] = [];
-  object({
-    repositories: list(
-      text((name) => /^[\w.-]+\/[\w.-]+$/.test(name), "is not <owner>/<name>"),
-      { unique: (name) => name.toLowerCase(), nonEmpty: true },
-    ),
-    providers: record(
-      (entry, path, problems, name) =>
-        object(
-          {
-            cap: number(
-              (cap) => Number.isSafeInteger(cap) && cap >= 0,
-              "is not a whole number of agents",
-            ),
-            credential: text(isAbsolute, "is not an absolute path"),
-            ...(name === "claude-code" && {
-              usageCredential: text(isAbsolute, "is not an absolute path"),
-            }),
-          },
-          ["usageCredential"],
-        )(entry, path, problems),
-      (name) =>
-        adapterNames.includes(name)
-          ? null
-          : `has no adapter; choose ${adapterNames.join(" or ")}`,
-    ),
-    models: object({ default: text(), retry: text() }),
-    // Both durations become timers, which wait at most 2^31 - 1 milliseconds.
-    timeLimitMinutes: number(
-      (minutes) => timer(minutes * 60_000),
-      "is not a positive number of minutes a timer can wait",
-    ),
-    usage: object(
-      {
-        drainThreshold: nullable(percentage),
-        pauseThreshold: nullable(percentage),
-        afterDrain: text(
-          (choice) => (afterDrains as readonly string[]).includes(choice),
-          `is not one of ${afterDrains.join(", ")}`,
-        ),
-      },
-      ["pauseThreshold", "afterDrain"],
-    ),
-    pollSeconds: number(
-      (seconds) => timer(seconds * 1000),
-      "is not a positive number of seconds a timer can wait",
-    ),
-    readiness: object({
-      authorizedRoles: list(
+  object(
+    {
+      repositories: list(
         text(
-          (role) => (roles as readonly string[]).includes(role),
-          `is not one of ${roles.join(", ")}`,
+          (name) => /^[\w.-]+\/[\w.-]+$/.test(name),
+          "is not <owner>/<name>",
         ),
-        { unique: (role) => role, nonEmpty: true },
+        { unique: (name) => name.toLowerCase(), nonEmpty: true },
       ),
-    }),
-    unpushablePaths: list(
-      text(
-        (prefix) => !isAbsolute(prefix) && !prefix.split("/").includes(".."),
-        "is not a path inside the repository",
+      providers: record(
+        (entry, path, problems, name) =>
+          object(
+            {
+              cap: number(
+                (cap) => Number.isSafeInteger(cap) && cap >= 0,
+                "is not a whole number of agents",
+              ),
+              credential: text(isAbsolute, "is not an absolute path"),
+              ...(name === "claude-code" && {
+                usageCredential: text(isAbsolute, "is not an absolute path"),
+              }),
+            },
+            ["usageCredential"],
+          )(entry, path, problems),
+        (name) =>
+          adapterNames.includes(name)
+            ? null
+            : `has no adapter; choose ${adapterNames.join(" or ")}`,
       ),
-      { unique: (prefix) => prefix },
-    ),
-    stateDirectory: text(isAbsolute, "is not an absolute path"),
-    gitIdentity: object({ name: text(), email: text() }),
-    github: object({ tokenCommand: list(text(), { nonEmpty: true }) }),
-  })(value, "", problems);
+      models: object({ default: text(), retry: text() }),
+      // Both durations become timers, which wait at most 2^31 - 1 milliseconds.
+      timeLimitMinutes: number(
+        (minutes) => timer(minutes * 60_000),
+        "is not a positive number of minutes a timer can wait",
+      ),
+      usage: object(
+        {
+          drainThreshold: nullable(percentage),
+          pauseThreshold: nullable(percentage),
+          afterDrain: text(
+            (choice) => (afterDrains as readonly string[]).includes(choice),
+            `is not one of ${afterDrains.join(", ")}`,
+          ),
+        },
+        ["pauseThreshold", "afterDrain"],
+      ),
+      pollSeconds: number(
+        (seconds) => timer(seconds * 1000),
+        "is not a positive number of seconds a timer can wait",
+      ),
+      readiness: object({
+        authorizedRoles: list(
+          text(
+            (role) => (roles as readonly string[]).includes(role),
+            `is not one of ${roles.join(", ")}`,
+          ),
+          { unique: (role) => role, nonEmpty: true },
+        ),
+      }),
+      unpushablePaths: list(
+        text(
+          (prefix) => !isAbsolute(prefix) && !prefix.split("/").includes(".."),
+          "is not a path inside the repository",
+        ),
+        { unique: (prefix) => prefix },
+      ),
+      stateDirectory: text(isAbsolute, "is not an absolute path"),
+      gitIdentity: object({ name: text(), email: text() }),
+      github: object({ tokenCommand: list(text(), { nonEmpty: true }) }),
+      imageRetention: object(
+        {
+          obsoletePairs: number(
+            (pairs) => Number.isSafeInteger(pairs) && pairs >= 0,
+            "is not a whole number of image pairs",
+          ),
+          cacheMinimumAgeHours: number(
+            (hours) => Number.isSafeInteger(hours) && hours > 0,
+            "is not a positive whole number of hours",
+          ),
+        },
+        ["obsoletePairs", "cacheMinimumAgeHours"],
+      ),
+    },
+    ["imageRetention"],
+  )(value, "", problems);
   const usage = (value as { usage?: Partial<UsagePolicy> } | null)?.usage;
   const { drainThreshold: drain, pauseThreshold: pause } = usage ?? {};
   if (

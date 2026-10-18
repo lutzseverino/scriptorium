@@ -11,3 +11,6 @@ This directory records consequential decisions local to the factory.
 - [Hold each provider, and never override the pause threshold](0003-hold-each-provider-and-never-override-the-pause-threshold.md):
   the drain and pause thresholds hold only the provider that reached them, and
   no owner action lifts the pause threshold.
+- [Retain sandbox images the factory can prove it owns](0004-retain-sandbox-images-the-factory-can-prove-it-owns.md):
+  automatic bounded retention of sandbox image pairs, and build cache isolated
+  in the factory's own builder so only that cache is pruned.

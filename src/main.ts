@@ -9,8 +9,9 @@ import { tokenCommand } from "./github-token.ts";
 import { createHost } from "./host.ts";
 import { readHostConfiguration } from "./host-configuration.ts";
 import { createRegistry } from "./providers.ts";
+import { pruneSandboxCache, retainSandboxImages } from "./image-retention.ts";
 import { resume, resumeUsage } from "./resume.ts";
-import { buildSandboxImage, stopSandboxes } from "./sandbox-image.ts";
+import { buildSandboxImage, docker, stopSandboxes } from "./sandbox-image.ts";
 
 if (process.argv[2] === "resume")
   process.exit(
@@ -85,6 +86,18 @@ const host = createHost(configuration, registry, {
       uid: process.getuid?.() ?? 1000,
       gid: process.getgid?.() ?? 1000,
     }),
+  retainImages: (current, running) =>
+    retainSandboxImages((args) => docker(args), {
+      repositories: configuration.repositories,
+      current,
+      running,
+      obsoletePairs: configuration.imageRetention.obsoletePairs,
+    }),
+  pruneBuildCache: () =>
+    pruneSandboxCache(
+      (args) => docker(args),
+      configuration.imageRetention.cacheMinimumAgeHours,
+    ),
   readUsage: (provider) => registry.providers.get(provider)!.readUsage(),
   launch: (provider, request) =>
     registry.providers.get(provider)!.launch(request),

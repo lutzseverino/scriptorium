@@ -41,6 +41,7 @@ import {
   writeSandboxToken,
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
+import type { Retention } from "./image-retention.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
 import type { UsageWindow } from "./providers/usage.ts";
 import type { PullRequestState } from "./run-outcome.ts";
@@ -64,6 +65,13 @@ export type HostPorts = {
   // Builds the sandbox image over the repository's toolchain Dockerfile and
   // resolves its tag.
   buildImage(dockerfile: string): Promise<string>;
+  // Removes the factory's obsolete sandbox images beyond the host's
+  // allowance, keeping every `current` and `running` image and every image a
+  // container uses. Rejects, removing nothing, when its inventory fails.
+  retainImages(current: string[], running: string[]): Promise<Retention>;
+  // Prunes the factory builder's cache past the host's minimum age, and
+  // resolves the space freed, or null when nothing was.
+  pruneBuildCache(): Promise<string | null>;
   // The provider's usage as its adapter reads it, rejecting with a
   // `UsageReadError` when the provider refuses the read.
   readUsage(provider: string): Promise<UsageWindow | null>;
@@ -83,6 +91,8 @@ type HostRun = Run & {
   // Keeps repository conventions available after restart if its config is invalid.
   configuration: FactoryConfiguration;
   base: string;
+  // The sandbox image the run launched from.
+  image: string;
   // The first attempt's start; a retry continues its pull request.
   pullRequestSince: string;
   // The run's private directory, holding its token directory and the
@@ -132,6 +142,8 @@ export function createHost(
   const report = (line: string) => ports.report(redactor.redact(line));
   let started = false;
   let interrupting = false;
+  // Why image retention last waited, reported once until it changes.
+  let retentionWait: string | null = null;
   const pending = new Set<Promise<void>>();
   const settings: Settings = {
     defaultModel: configuration.models.default,
@@ -521,6 +533,7 @@ export function createHost(
       configuration: pass.configuration!,
       repository,
       base,
+      image: pass.image!,
       issue,
       provider: decision.provider,
       model: decision.model,
@@ -773,7 +786,42 @@ export function createHost(
     } catch (error) {
       report(`the status file was not written: ${error}`);
     }
+    if (!interrupting) await retain(passes);
     return decisions;
+  }
+
+  // Once a pass has prepared every repository's image, the factory's obsolete
+  // images beyond the host's allowance go. A repository without one this pass
+  // could still need any of them, so until then none goes. The factory
+  // builder's old cache is pruned either way. A failure here is reported and
+  // leaves the pass and its images as they are.
+  async function retain(passes: Pass[]) {
+    const waiting = passes.filter((pass) => pass.image === null);
+    const wait = waiting.length
+      ? `sandbox image retention waits for the current images of ${waiting.map((pass) => pass.name).join(", ")}`
+      : null;
+    if (wait !== null && wait !== retentionWait) report(wait);
+    retentionWait = wait;
+    if (wait === null)
+      try {
+        const { removed, problems } = await ports.retainImages(
+          passes.map((pass) => pass.image!),
+          runs.filter((run) => !run.exited).map((run) => run.image),
+        );
+        if (removed.length > 0)
+          report(`removed obsolete sandbox images: ${removed.join(", ")}`);
+        for (const problem of problems)
+          report(`sandbox image retention: ${problem}`);
+      } catch (error) {
+        report(`sandbox image retention removed nothing: ${error}`);
+      }
+    try {
+      const freed = await ports.pruneBuildCache();
+      if (freed !== null)
+        report(`pruned the sandbox build cache, freeing ${freed}`);
+    } catch (error) {
+      report(`the sandbox build cache was not pruned: ${error}`);
+    }
   }
 
   // After launches have been stopped or finished, wait for their log and
