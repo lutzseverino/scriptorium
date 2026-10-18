@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
+import { readHostConfiguration } from "../src/host-configuration.ts";
 import { createRegistry } from "../src/providers.ts";
 import { UsageReadError } from "../src/providers/usage.ts";
 import { createUsage, retryAt, usageFreshMinutes } from "../src/usage.ts";
@@ -393,6 +394,155 @@ test("fallback deadlines count from receipt and a replaced credential recovers a
       /fixture-.*secret/,
     );
   }
+});
+
+test("a configured Claude usage login retains cache/backoff across replacement and restart", async (t) => {
+  for (const [status, retryAfter, deadline] of [
+    [403, undefined, 3900],
+    [429, undefined, 1500],
+    [403, "1148", 1448],
+    [429, "Wed, 14 Oct 2026 15:24:08 GMT", 1448],
+  ] as const) {
+    const root = directory(t);
+    const usageCredential = join(root, "claude-usage.json");
+    const hostPath = join(root, "host.json");
+    const configuration = JSON.parse(
+      readFileSync(
+        new URL("fixtures/host-configuration/valid.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    configuration.providers["claude-code"].usageCredential = usageCredential;
+    writeFileSync(hostPath, JSON.stringify(configuration));
+    const publish = (accessToken: string) =>
+      writeFileSync(
+        usageCredential,
+        JSON.stringify({
+          claudeAiOauth: { accessToken, expiresAt: Date.now() + 3_600_000 },
+        }),
+      );
+    publish("synthetic-first-secret");
+    const tokens: string[] = [];
+    const adapter = createRegistry(
+      readHostConfiguration(hostPath).providers,
+      fakePorts({
+        fetch: async (_url, init) => {
+          tokens.push(new Headers(init?.headers).get("authorization")!);
+          if (tokens.length === 2)
+            return new Response("synthetic-response-secret", {
+              status,
+              headers:
+                retryAfter === undefined ? {} : { "retry-after": retryAfter },
+            });
+          return new Response('{"five_hour":{"utilization":42}}');
+        },
+      }).ports,
+    ).providers.get("claude-code")!;
+    let now = start;
+    const reports: string[] = [];
+    const path = join(root, "usage.json");
+    const ports = {
+      providers: ["claude-code"],
+      read: () => adapter.readUsage(),
+      now: () => now,
+      report: (line: string) => reports.push(line),
+      path,
+    };
+    const first = createUsage(ports);
+    const reading = { used: 42, at: start.toISOString() };
+    assert.deepEqual((await first.read())["claude-code"], reading);
+    now = later(300);
+    assert.deepEqual((await first.read())["claude-code"], reading);
+    publish("synthetic-renewed-secret");
+    const restarted = createUsage(ports);
+    now = later(600);
+    assert.deepEqual((await restarted.read())["claude-code"], reading);
+    now = later(1201);
+    assert.equal((await restarted.read())["claude-code"], null);
+    now = later(deadline - 1);
+    assert.equal((await restarted.read())["claude-code"], null);
+    assert.equal(tokens.length, 2);
+    assert.equal(reports.length, 1);
+    now = later(deadline);
+    assert.deepEqual((await restarted.read())["claude-code"], {
+      used: 42,
+      at: now.toISOString(),
+    });
+    assert.deepEqual(tokens, [
+      "Bearer synthetic-first-secret",
+      "Bearer synthetic-first-secret",
+      "Bearer synthetic-renewed-secret",
+    ]);
+    assert.equal(reports.length, 2);
+    assert.match(reports[1], /readable again/);
+    assert.doesNotMatch(
+      reports.join("\n") + readFileSync(path, "utf8"),
+      /synthetic-.*secret/,
+    );
+  }
+});
+
+test("missing, expired and malformed usage copies and empty windows stay unknown and recover once", async (t) => {
+  const root = directory(t);
+  const usageCredential = join(root, "claude-usage.json");
+  const path = join(root, "usage.json");
+  const reports: string[] = [];
+  let response = '{"five_hour":null,"seven_day":null}';
+  let requests = 0;
+  const adapter = createRegistry(
+    {
+      "claude-code": {
+        credential: join(root, "unused-launch-token"),
+        usageCredential,
+      },
+    },
+    fakePorts({
+      fetch: async () => {
+        requests++;
+        return new Response(response);
+      },
+    }).ports,
+  ).providers.get("claude-code")!;
+  const reader = createUsage({
+    providers: ["claude-code"],
+    read: () => adapter.readUsage(),
+    now: () => start,
+    report: (line) => reports.push(line),
+    path,
+  });
+  for (const content of [
+    undefined,
+    "synthetic-login-secret invalid JSON",
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "synthetic-expired-secret", expiresAt: 1 },
+    }),
+  ]) {
+    if (content === undefined) rmSync(usageCredential, { force: true });
+    else writeFileSync(usageCredential, content);
+    assert.equal((await reader.read())["claude-code"], null);
+  }
+  assert.equal(requests, 0);
+  assert.equal(reports.length, 1);
+  writeFileSync(
+    usageCredential,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "synthetic-valid-secret",
+        expiresAt: Date.now() + 3_600_000,
+      },
+    }),
+  );
+  assert.equal((await reader.read())["claude-code"], null);
+  assert.equal(reports.length, 2);
+  response = '{"seven_day":{"utilization":64}}';
+  assert.equal((await reader.read())["claude-code"]?.used, 64);
+  await reader.read();
+  assert.equal(reports.length, 3);
+  assert.match(reports[2], /readable again/);
+  assert.doesNotMatch(
+    reports.join("\n") + readFileSync(path, "utf8"),
+    /synthetic-.*secret/,
+  );
 });
 
 test("legacy records without episode metadata retain fresh low and high readings during a persisted cooldown", async (t) => {

@@ -35,14 +35,19 @@ configuration itself.
 
 ## Host configuration
 
-The host configuration is one JSON file. Every field is required, an unknown
-field is refused, and nothing comes from environment variables.
+The host configuration is one JSON file. Every field is required except
+`providers.claude-code.usageCredential`. Unknown fields are refused, and nothing
+comes from environment variables.
 
 ```json
 {
   "repositories": ["acme/widgets", "acme/gadgets"],
   "providers": {
-    "claude-code": { "cap": 2, "credential": "/etc/factory/claude-token" },
+    "claude-code": {
+      "cap": 2,
+      "credential": "/etc/factory/claude-token",
+      "usageCredential": "/etc/factory/claude-usage.json"
+    },
     "codex": { "cap": 1, "credential": "/etc/factory/codex-auth.json" }
   },
   "models": {
@@ -60,22 +65,23 @@ field is refused, and nothing comes from environment variables.
 }
 ```
 
-| Field                         | Value                                                                                                                                                                                                                   |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `repositories`                | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                                                   |
-| `providers.<name>`            | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                                                         |
-| `providers.<name>.cap`        | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                    |
-| `providers.<name>.credential` | The absolute path of the provider's one credential file: the Claude Code token file from `claude setup-token`, or the Codex login (`auth.json`). It is read at each launch and usage read.                              |
-| `models.default`              | The model an issue without a model label runs on.                                                                                                                                                                       |
-| `models.retry`                | The model a failed first attempt retries on.                                                                                                                                                                            |
-| `timeLimitMinutes`            | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                             |
-| `usageThreshold`              | The provider usage percentage, from 0 to 100, at or above which that provider launches nothing.                                                                                                                         |
-| `pollSeconds`                 | The wait between passes.                                                                                                                                                                                                |
-| `readiness.authorizedRoles`   | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                               |
-| `unpushablePaths`             | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
-| `stateDirectory`              | The absolute path of the directory the process owns.                                                                                                                                                                    |
-| `gitIdentity`                 | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
-| `github.tokenCommand`         | The executable and leading arguments that print a GitHub token for a repository.                                                                                                                                        |
+| Field                                   | Value                                                                                                                                                                                                                   |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repositories`                          | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                                                   |
+| `providers.<name>`                      | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                                                         |
+| `providers.<name>.cap`                  | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                    |
+| `providers.<name>.credential`           | The absolute path of the launch credential: the Claude Code setup-token file, or the Codex login (`auth.json`). Claude also uses it for usage reads when `usageCredential` is omitted.                                  |
+| `providers.claude-code.usageCredential` | Optional absolute path of a host-renewed Claude interactive-login copy, used only for usage reads. A configured but unusable copy never falls back to the launch token. See [Claude usage login](#claude-usage-login).  |
+| `models.default`                        | The model an issue without a model label runs on.                                                                                                                                                                       |
+| `models.retry`                          | The model a failed first attempt retries on.                                                                                                                                                                            |
+| `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                             |
+| `usageThreshold`                        | The provider usage percentage, from 0 to 100, at or above which that provider launches nothing.                                                                                                                         |
+| `pollSeconds`                           | The wait between passes.                                                                                                                                                                                                |
+| `readiness.authorizedRoles`             | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                               |
+| `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
+| `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                    |
+| `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
+| `github.tokenCommand`                   | The executable and leading arguments that print a GitHub token for a repository.                                                                                                                                        |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -111,10 +117,11 @@ host configuration names: Claude Code and Codex. Each adapter launches its
 agent through Sandcastle, lists its reasoning efforts, routes bare model slugs
 by its vendor prefix (`claude-*` or `gpt-*`), supplies the prompt's
 `{skillPrefix}` (`/` or `$`), reads its usage, and recognizes its own
-usage-limit error at the end of an ended run's raw log. Its one credential is a
-host file, read again at every launch and usage read: the Claude Code token
-file from `claude setup-token`, or the Codex login (`auth.json`) the host keeps
-renewing. No provider credential comes from an environment variable.
+usage-limit error at the end of an ended run's raw log. Its launch credential
+is a host file: the Claude Code setup-token file, or the Codex login
+(`auth.json`) the host keeps renewing. Claude can use a separate host-renewed
+login copy for usage. Each credential is read again when needed; no provider
+credential comes from an environment variable.
 
 Claude Code's documented setup token supports launches but should not be
 expected to read its undocumented, best-effort usage endpoint. A 403 can be a
@@ -349,19 +356,82 @@ The readings, read deadlines and safe episode categories are kept in
 `usage.json`, so a restart neither reads too early nor loses them or repeats
 the same warning. Older records without episode metadata still load normally.
 
-The host keeps supplying one credential file, read at each launch and eligible
-usage probe. Replacing it takes effect at the next eligible probe without
-deleting `usage.json`; the factory neither inspects token scopes nor manages a
-new login or refresh flow. For this service, evaluating a permitted
-usage-capable credential and its renewal or rotation belongs in
-`lutzseverino/homelab`, which owns credential provisioning. An interactive login
-may have broader scopes but a different lifetime and refresh contract; copying
-a short-lived access token alone is not a durable fix. Factory refusal handling
-works independently of that separate host decision.
+Replacing a credential takes effect at the next eligible usage probe without
+restarting or deleting `usage.json`; it does not bypass an active refusal
+backoff. Codex continues to use its host-renewed `auth.json` for both launches
+and usage. Claude uses the separate copy below when configured; omitting it
+keeps the existing best-effort setup-token usage read.
+
+### Claude usage login
+
+`providers.claude-code.credential` remains a plain setup-token file for
+launches. `providers.claude-code.usageCredential` optionally names a separate
+JSON copy of an interactive claude.ai login. The usage endpoint needs
+`user:profile` permission; a setup token for model requests does not establish
+that permission. The endpoint remains undocumented and best-effort even with
+an interactive login.
+
+The factory consumes this copy format (values below are examples):
+
+```json
+{
+  "claudeAiOauth": {
+    "accessToken": "<ACCESS_TOKEN>",
+    "expiresAt": 1893456000000
+  }
+}
+```
+
+`accessToken` must be a non-empty string without whitespace. `expiresAt` is a
+finite number of milliseconds since the Unix epoch, later than the current
+host time. Preserve the expiry from the renewed login; do not invent a longer
+lifetime. Extra metadata, such as `scopes`, is ignored. No refresh token is
+required or used. Publish only the fields above so the factory has no refresh
+authority.
+
+The host owner provisions and renews it; for this service that is
+`lutzseverino/homelab`'s responsibility:
+
+1. As root, install Claude Code and complete its
+   [interactive claude.ai login](https://code.claude.com/docs/en/authentication#log-in-to-claude-code)
+   in a dedicated root-owned configuration directory, for example by running
+   `CLAUDE_CONFIG_DIR=/root/.claude-factory-usage claude`. Keep the original
+   login, including its refresh token, readable only by root. Do not give the
+   factory access to that directory.
+2. Arrange host-owned renewal before the access token expires. On Linux, the
+   interactive login is in that directory's `.credentials.json`; export only
+   `claudeAiOauth.accessToken` and `claudeAiOauth.expiresAt` from each renewed
+   login into the copy above. Verify that the login has `user:profile`
+   permission; local scope metadata alone does not prove endpoint access.
+3. Publish the copy atomically at the configured absolute path, for example
+   `/etc/factory/claude-usage.json`: write a temporary file in that directory,
+   set its ownership and permissions, then rename it over the old copy. A
+   root-owned file with mode `0640` and a group containing the factory's
+   service user lets the factory read it without changing it. The service user
+   also needs directory traversal permission. Keep the root login and refresh
+   token out of this copy, its directory and the service's environment.
+4. Set `usageCredential` in the host configuration when starting the factory.
+   Later file replacements need no restart. The factory reads the copy only
+   on the host for usage, never mounts it in a sandbox, and never renews it or
+   substitutes it for the launch token.
+
+A missing, unreadable, malformed or expired copy fails the usage read before
+any endpoint request and never falls back to setup-token. It leaves usage
+unknown once any recent cached reading expires, through the same bounded
+unavailable/recovery reporting as other read failures. Launches still use the
+setup token. An empty-window answer is also unknown, not recovery.
+
+To troubleshoot, check the configured path, service-user access, JSON shape,
+expiry, host clock and root renewer's operation without printing credentials.
+For HTTP 403, check the interactive account and usage-read permission; for
+HTTP 429, wait for the recorded read deadline. Renewing or replacing a copy
+respects that deadline. Numeric recovery is reported on the next eligible
+successful read. Tokens, raw errors and response bodies stay out of process
+logs, status and usage records.
 
 ## Restarts
 
-A restart, such as for a factory upgrade or a changed credential file, never
+A restart, such as for a factory upgrade or a changed host configuration, never
 spends a run's retry. On `SIGTERM` or `SIGINT` the process stops claiming and
 launching, records each running run as interrupted, removes the sandbox
 containers and the runs' private directories, and exits without waiting for the runs to finish. On startup, before

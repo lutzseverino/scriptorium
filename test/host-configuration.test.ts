@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,31 @@ test("a complete host configuration is read as written", () => {
     gitIdentity: { name: "factory[bot]", email: "factory@example.com" },
     github: { tokenCommand: ["/usr/local/bin/factory-token", "--app", "7"] },
   });
+});
+
+test("Claude Code accepts an optional absolute usage credential without changing other settings", (t) => {
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  configuration.providers["claude-code"].usageCredential =
+    "/etc/factory/claude-usage.json";
+  const path = join(directory(t), "host.json");
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(readHostConfiguration(path), configuration);
+
+  for (const value of [null, "", 42, "relative/login.json"]) {
+    configuration.providers["claude-code"].usageCredential = value;
+    writeFileSync(path, JSON.stringify(configuration));
+    assert.throws(
+      () => readHostConfiguration(path),
+      /providers\.claude-code\.usageCredential:/,
+    );
+  }
+  delete configuration.providers["claude-code"].usageCredential;
+  configuration.providers.codex.usageCredential = "/etc/factory/other.json";
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.throws(
+    () => readHostConfiguration(path),
+    /providers\.codex\.usageCredential: is not a host configuration field/,
+  );
 });
 
 test("every missing field is named, since none has a default", () => {

@@ -1,4 +1,5 @@
-// Claude Code: its credential is the token file `claude setup-token` writes.
+// Claude Code launches with a setup token and can read usage with a separate
+// host-renewed interactive login copy, without refresh authority.
 import { readFile } from "node:fs/promises";
 import { claudeCode } from "@ai-hero/sandcastle";
 import type {
@@ -18,6 +19,7 @@ export const usageEndpoint = "https://api.anthropic.com/api/oauth/usage";
 export function claudeCodeAdapter(
   credential: string,
   ports: ProviderPorts,
+  usageCredential?: string,
 ): ProviderAdapter {
   return {
     name: "claude-code",
@@ -41,15 +43,26 @@ export function claudeCodeAdapter(
     // Claude Code publishes no usage read; this one is best-effort. A refusal
     // names its status and passes on its `Retry-After`, never its body.
     async readUsage() {
-      const response = await ports.fetch(usageEndpoint, {
-        headers: {
-          authorization: `Bearer ${await readToken(credential)}`,
-          "anthropic-beta": "oauth-2025-04-20",
-        },
-        signal: AbortSignal.timeout(30_000),
-      });
+      const token =
+        usageCredential === undefined
+          ? await readToken(credential)
+          : await readUsageToken(usageCredential);
+      let response;
+      try {
+        response = await ports.fetch(usageEndpoint, {
+          headers: {
+            authorization: `Bearer ${token}`,
+            "anthropic-beta": "oauth-2025-04-20",
+          },
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch {
+        throw new UsageReadError("the Claude Code usage request failed");
+      }
       if (!response.ok) {
-        await response.body?.cancel();
+        // A failed cancellation must not mask the safe refusal or expose a
+        // transport error containing request/response details.
+        await response.body?.cancel().catch(() => {});
         throw new UsageReadError(
           `the usage endpoint answered HTTP ${response.status}`,
           {
@@ -96,6 +109,34 @@ async function readToken(path: string): Promise<string> {
   if (token === "")
     throw new Error(`the Claude Code token file ${path} is empty`);
   return token;
+}
+
+// The host replaces this copy after renewing the root-held login. It is never
+// passed to an agent or used to refresh a token.
+async function readUsageToken(path: string): Promise<string> {
+  let login;
+  try {
+    login = JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    // JSON parse errors may quote secrets; keep neither the error nor a cause.
+    throw new UsageReadError(
+      "the Claude Code usage login is not readable JSON",
+    );
+  }
+  const oauth = login?.claudeAiOauth;
+  if (
+    typeof oauth?.accessToken !== "string" ||
+    oauth.accessToken === "" ||
+    /\s/.test(oauth.accessToken) ||
+    typeof oauth?.expiresAt !== "number" ||
+    !Number.isFinite(oauth.expiresAt)
+  )
+    throw new UsageReadError(
+      "the Claude Code usage login needs an access token and expiry",
+    );
+  if (oauth.expiresAt <= Date.now())
+    throw new UsageReadError("the Claude Code usage login has expired");
+  return oauth.accessToken;
 }
 
 // The usage endpoint's result.
