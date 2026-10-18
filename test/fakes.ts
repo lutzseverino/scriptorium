@@ -34,6 +34,12 @@ export function fakePorts(overrides: Partial<ProviderPorts> = {}) {
       },
       async run(options) {
         runs.push({ run: options, docker: docker! });
+        return {
+          branch: request.branch,
+          iterations: [],
+          commits: [],
+          stdout: "",
+        };
       },
     },
     fetch: () => {

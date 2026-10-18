@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
-import type { RunOptions } from "@ai-hero/sandcastle";
+import type { RunOptions, RunResult } from "@ai-hero/sandcastle";
 import type { DockerOptions } from "@ai-hero/sandcastle/sandboxes/docker";
 import { sandboxEnvironment } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
@@ -148,6 +148,11 @@ function fakeGitHub(
     assert.ok(issue, `${repository}#${number} exists`);
     return issue;
   };
+  // Existing convention checks isolate the configured invocation; the contract
+  // itself is verified through whole launches below.
+  const invocation = (text: string | undefined) =>
+    text?.split("\n\nUnattended execution:\n")[0];
+
   const value = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
   const field = (args: string[], name: string) =>
     args
@@ -350,7 +355,7 @@ function fakeSandcastle() {
     options: RunOptions;
     docker: DockerOptions;
     hosts: string;
-    finish(error?: Error): void;
+    finish(error?: Error, result?: Partial<RunResult>): void;
     removed: boolean;
   }[] = [];
   let docker: DockerOptions;
@@ -370,25 +375,42 @@ function fakeSandcastle() {
         const github = docker.mounts?.find(
           (mount) => mount.sandboxPath === "/run/factory/github",
         );
-        return new Promise((resolve, reject) => {
+        return new Promise<RunResult>((resolve, reject) => {
+          const complete = (result?: Partial<RunResult>) =>
+            resolve({
+              branch:
+                options.branchStrategy?.type === "branch"
+                  ? options.branchStrategy.branch
+                  : "unused",
+              iterations: [],
+              commits: [],
+              stdout: "",
+              ...result,
+            });
           launched.push({
             options,
             docker,
             hosts: github
               ? readFileSync(join(github.hostPath, "hosts.yml"), "utf8")
               : "",
-            finish: (error) => (error ? reject(error) : resolve(undefined)),
+            finish: (error, result) =>
+              error ? reject(error) : complete(result),
             removed: false,
           });
           options.signal?.addEventListener("abort", () => {
             if (!control.ignoreAborts) reject(options.signal!.reason);
           });
-          if (closing) resolve(undefined);
+          if (closing) complete();
         });
       },
     },
   };
 }
+
+// Existing convention checks isolate the configured invocation; the contract
+// itself is verified through whole launches below.
+const invocation = (text: string | undefined) =>
+  text?.split("\n\nUnattended execution:\n")[0];
 
 const value = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 
@@ -688,7 +710,7 @@ test("one process launches each repository's ready issues from that repository's
         name: options.name,
         cwd: options.cwd,
         agent: options.agent.name,
-        prompt: options.prompt,
+        prompt: invocation(options.prompt),
         branch: options.branchStrategy,
         // Sandcastle writes the raw log into the run's private directory.
         log: rawLog(options).replace(/-\w{6}\/agent\.log$/, "-*/agent.log"),
@@ -1631,7 +1653,7 @@ test("a failed first run retries with its failure and log tail after the provide
   assert.equal(run.launched.length, 2);
   assert.equal(run.launched[1].options.agent.name, "codex");
   assert.equal(
-    run.launched[1].options.prompt,
+    invocation(run.launched[1].options.prompt),
     [
       "$implement #4",
       "First attempt failure: the run ended without an open pull request",
@@ -1658,6 +1680,165 @@ test("a failed first run retries with its failure and log tail after the provide
     "factory:failed",
   ]);
 });
+
+test("an incomplete run records recovery identities and a retry revalidates preserved work", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const clone = run.clone("acme/widgets");
+  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  write(work, {
+    "committed.txt": "finished code",
+    "staged.txt": "staged",
+    "untracked.txt": "untracked",
+  });
+  git(work, ["add", "committed.txt"]);
+  git(work, ["commit", "--quiet", "-m", "preserved implementation"]);
+  git(work, ["add", "staged.txt"]);
+  write(work, { "staged.txt": "unstaged edit" });
+  const head = git(work, ["rev-parse", "HEAD"]).trim();
+  const status = git(work, ["status", "--porcelain"]);
+  run.launched[0].finish(undefined, {
+    preservedWorktreePath: work,
+    iterations: [
+      { sessionId: "session-4", sessionFilePath: "/srv/sessions/4.jsonl" },
+    ],
+  });
+  await run.drain();
+  const record = JSON.parse(
+    readFileSync(
+      join(run.state, "repositories/acme/widgets/runs/issue-4-attempt-1.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(record.launchResult.sessionId, "session-4");
+  assert.equal(record.launchResult.preservedWorktreePath, work);
+  assert.deepEqual(record.recovery, {
+    branch: "factory/issue-4",
+    head,
+    worktree: work,
+  });
+  assert.ok(
+    run.reports.some(
+      (line) =>
+        line.includes("without completion signal") && line.includes(work),
+    ),
+  );
+  await run.tick();
+  const retry = run.launched[1].options.prompt!;
+  assert.match(retry, /Recovery state:/);
+  assert.ok(retry.includes(head));
+  assert.match(retry, /Revalidate recovered work before publication/);
+  assert.equal(git(work, ["status", "--porcelain"]), status);
+  assert.equal(git(work, ["rev-parse", "HEAD"]).trim(), head);
+  assert.equal(
+    git(clone, ["ls-remote", "--heads", "origin", "factory/issue-4"]),
+    "",
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).pullRequests, []);
+});
+
+test("custom prompts and retries retain the unattended execution and completion contract", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify({
+          ...JSON.parse(factoryFiles[".factory/config.json"]),
+          prompt: "{skillPrefix}ship #{issue}",
+        }),
+      }),
+    },
+  });
+  await run.tick();
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  for (const { options } of run.launched) {
+    assert.match(options.prompt!, /ship #4/);
+    assert.match(options.prompt!, /no interactive notification or resume loop/);
+    assert.match(options.prompt!, /foreground/);
+    assert.match(options.prompt!, /detaching shell commands/);
+    assert.match(options.prompt!, /timeout is a failure/);
+    assert.match(
+      options.prompt!,
+      /only after.*delivery or explicit owner handoff.*recorded/,
+    );
+    assert.ok(options.prompt!.includes(String(options.completionSignal)));
+    assert.equal(options.maxIterations, 1);
+  }
+});
+
+test("an aborted launch retains dirty recovery state across restart without publishing it", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const clone = run.clone("acme/widgets");
+  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  write(work, { unfinished: "retain me" });
+  run.interrupt();
+  run.launched[0].finish(new Error("aborted"));
+  await run.drain();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+  assert.match(run.launched[1].options.prompt!, /Recovery state:/);
+  assert.ok(run.launched[1].options.prompt!.includes(work));
+  assert.equal(readFileSync(join(work, "unfinished"), "utf8"), "retain me");
+  assert.equal(
+    git(clone, ["ls-remote", "--heads", "origin", "factory/issue-4"]),
+    "",
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).pullRequests, []);
+});
+
+for (const outcome of [
+  "signal only",
+  "PR without signal",
+  "owner handoff without signal",
+  "timeout with signal",
+])
+  test(`completion is loop control and GitHub determines delivery: ${outcome}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    if (outcome === "PR without signal") issue.pullRequests.push("OPEN");
+    if (outcome === "owner handoff without signal")
+      issue.labels.push("factory:needs-input");
+    if (outcome === "timeout with signal")
+      run.clock.now = new Date("2026-10-09T16:00:00Z");
+    run.launched[0].finish(
+      undefined,
+      outcome.includes("signal") && !outcome.includes("without")
+        ? { completionSignal: "<promise>COMPLETE</promise>" }
+        : {},
+    );
+    await run.drain();
+    const decisions = await run.tick();
+    if (outcome === "PR without signal")
+      assert.ok(decisions.some((decision) => decision.kind === "keep"));
+    else if (outcome === "owner handoff without signal")
+      assert.ok(decisions.some((decision) => decision.kind === "release"));
+    else {
+      assert.equal(run.launched.length, 2);
+      assert.match(
+        run.launched[1].options.prompt!,
+        outcome === "signal only"
+          ? /ended without an open pull request/
+          : /exceeded the time limit/,
+      );
+    }
+  });
 
 for (const timedOut of [false, true])
   test(`a run whose pull request is open keeps its claim and frees its cap slot, timed out: ${timedOut}`, async (t) => {
@@ -1872,7 +2053,7 @@ test("the configured template and state labels drive first attempts, retries and
   });
   await run.tick();
   assert.equal(
-    run.launched[0].options.prompt,
+    invocation(run.launched[0].options.prompt),
     "Handle #4 using $ship; issue=4",
   );
   assert.deepEqual(
@@ -1890,7 +2071,7 @@ test("the configured template and state labels drive first attempts, retries and
   await settled();
   await run.tick();
   assert.equal(
-    run.launched[1].options.prompt,
+    invocation(run.launched[1].options.prompt),
     [
       "Handle #4 using /ship; issue=4",
       "First attempt failure: the run ended without an open pull request",
@@ -2061,7 +2242,7 @@ test("prompt edits on the default branch apply on the next pass, ignoring run br
   await settled();
   await run.tick();
   assert.equal(
-    run.launched[1].options.prompt,
+    invocation(run.launched[1].options.prompt),
     "$ship #4\n\nFirst attempt failure: the run ended without an open pull request",
   );
 });
@@ -2088,7 +2269,7 @@ test("configuration follows a changed remote default branch on the next pass", a
   await settled();
   await run.tick();
   assert.equal(
-    run.launched[1].options.prompt,
+    invocation(run.launched[1].options.prompt),
     "$ship #4\n\nFirst attempt failure: the run ended without an open pull request",
   );
 });
@@ -2623,7 +2804,7 @@ for (const ended of ["timed out", "orphaned"] as const)
     const launch = decisions.find((decision) => decision.kind === "launch");
     assert.equal(launch?.attempt, 1);
     assert.equal(run.launched.length, 3);
-    assert.equal(run.launched[2].options.prompt, "/implement #4");
+    assert.equal(invocation(run.launched[2].options.prompt), "/implement #4");
     assert.deepEqual(run.launched[2].options.branchStrategy, {
       type: "branch",
       branch: "factory/issue-4",
@@ -3425,7 +3606,7 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
   assert.equal(run.launched.length, 3);
   const [widgets4, gadgets6, gadgets7] = [4, 6, 7].map((number) =>
     run.launched.find((launch) =>
-      launch.options.prompt?.endsWith(`#${number}`),
+      invocation(launch.options.prompt)?.endsWith(`#${number}`),
     )!,
   );
 

@@ -39,13 +39,15 @@ test("a Claude Code launch runs the model and effort with the token file's curre
   const [first, second] = runs;
   assert.match(
     command(first.run),
-    /^claude --print .* --model 'claude-opus-5-5' --effort max -p -$/,
+    /^claude --print .* --model 'claude-opus-5-5' --effort max .* -p -$/,
   );
   assert.deepEqual(first.run.agent.env, {
     CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-first",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
   });
   assert.deepEqual(second.run.agent.env, {
     CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-renewed",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
   });
   // The token travels in the agent's environment; the sandbox gets only the
   // host's mounts.
@@ -58,6 +60,15 @@ test("a Claude Code launch runs the model and effort with the token file's curre
   });
   assert.deepEqual(first.run.logging, { type: "file", path: request.log });
   assert.equal(first.run.idleTimeoutSeconds, request.idleTimeoutSeconds);
+  const settings = /--settings '([^']+)'/.exec(command(first.run));
+  assert.ok(settings, "launch policy overrides project and user env settings");
+  assert.deepEqual(JSON.parse(settings[1]), {
+    env: {
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+      BASH_DEFAULT_TIMEOUT_MS: "1800000",
+      BASH_MAX_TIMEOUT_MS: "3600000",
+    },
+  });
 });
 
 test("a Claude Code launch tells the host the token it delivers", async (t) => {
@@ -68,6 +79,28 @@ test("a Claude Code launch tells the host the token it delivers", async (t) => {
     delivered: (secret) => delivered.push(secret),
   });
   assert.deepEqual(delivered, ["sk-ant-oat01-first"]);
+});
+
+test("a launch returns completion and recovery identities without raw output or resume closures", async (t) => {
+  const ports = fakePorts();
+  ports.ports.sandcastle.run = async () => ({
+    completionSignal: "<promise>COMPLETE</promise>",
+    branch: request.branch,
+    preservedWorktreePath: "/srv/repo/.sandcastle/worktrees/factory-issue-7",
+    iterations: [
+      { sessionId: "session-7", sessionFilePath: "/srv/sessions/7.jsonl" },
+    ],
+    stdout: "private raw output",
+    commits: [],
+  });
+  const { adapter } = claudeCode(t, ports);
+  assert.deepEqual(await adapter.launch(request), {
+    completionSignal: "<promise>COMPLETE</promise>",
+    branch: request.branch,
+    preservedWorktreePath: "/srv/repo/.sandcastle/worktrees/factory-issue-7",
+    sessionId: "session-7",
+    sessionFilePath: "/srv/sessions/7.jsonl",
+  });
 });
 
 test("a Claude Code launch with an empty token file is refused before Sandcastle", async (t) => {
@@ -156,6 +189,7 @@ test("a renewed Claude usage login is reread independently of the launch token",
   assert.deepEqual(delivered, ["synthetic-launch-token"]);
   assert.deepEqual(ports.runs[0].run.agent.env, {
     CLAUDE_CODE_OAUTH_TOKEN: "synthetic-launch-token",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
   });
   assert.deepEqual(ports.runs[0].docker.mounts, []);
 });

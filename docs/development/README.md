@@ -138,6 +138,18 @@ without launching a container or an agent. Its public types reference
 The package pins it as a development dependency so `tsc --noEmit` checks the
 dependency types as well as our own. Revisit that pin when upgrading Sandcastle.
 
+`test/sandcastle.test.ts` also drives the pinned dependency's actual worktree
+creation and cleanup to check preservation of commits, the index, working tree
+and untracked files through recovery. `test/claude-foreground.test.ts` runs
+the pinned Claude CLI against a local scripted HTTP API with synthetic
+credentials and a private home, without a live provider. It attempts explicit
+backgrounding, then runs validation beyond the usual automatic background
+window with success, failure and timeout outcomes, checks the Bash result
+reaches the next turn, and exercises conflicting project settings. It skips
+when the pinned CLI is absent. Run it alone with
+`node --test test/claude-foreground.test.ts`. This verifies CLI/tool behavior;
+it does not demonstrate a live model's delivery decisions or publish a PR.
+
 ## Documents
 
 - [Release procedure](release.md): independent versioning, owner-only tag setup,

@@ -31,14 +31,37 @@ export function claudeCodeAdapter(
     async launch(request: LaunchRequest) {
       const token = await readToken(credential);
       request.delivered?.(token);
-      await launchAgent(
-        ports.sandcastle,
-        request,
-        claudeCode(request.model, {
-          effort: request.effort as Effort,
-          env: { CLAUDE_CODE_OAUTH_TOKEN: token },
-        }),
-      );
+      const agent = claudeCode(request.model, {
+        effort: request.effort as Effort,
+        env: {
+          CLAUDE_CODE_OAUTH_TOKEN: token,
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+        },
+      });
+      // CLI settings outrank user/project env settings, which otherwise
+      // replace inherited environment values. Managed settings remain owned
+      // by the factory image. No credential belongs in the command line.
+      const maximum = request.idleTimeoutSeconds * 1000;
+      const settings = JSON.stringify({
+        env: {
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+          BASH_DEFAULT_TIMEOUT_MS: String(Math.min(1_800_000, maximum)),
+          BASH_MAX_TIMEOUT_MS: String(maximum),
+        },
+      });
+      return launchAgent(ports.sandcastle, request, {
+        ...agent,
+        buildPrintCommand(options) {
+          const built = agent.buildPrintCommand(options);
+          return {
+            ...built,
+            command: built.command.replace(
+              " -p -",
+              ` --settings '${settings}' -p -`,
+            ),
+          };
+        },
+      });
     },
     // Claude Code publishes no usage read; this one is best-effort. A refusal
     // names its status and passes on its `Retry-After`, never its body.

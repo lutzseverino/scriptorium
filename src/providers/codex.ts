@@ -38,7 +38,7 @@ export function codexAdapter(
     async launch(request: LaunchRequest) {
       for (const secret of await loginSecrets(credential))
         request.delivered?.(secret);
-      await launchAgent(
+      return launchAgent(
         ports.sandcastle,
         request,
         codex(request.model, { effort: request.effort as Effort }),
