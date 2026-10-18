@@ -1440,6 +1440,10 @@ test("the configured template and state labels drive first attempts, retries and
     },
     modelLabelPrefix: "agent:",
     prompt: "Handle #{issue} using {skillPrefix}ship; issue={issue}",
+    comments: {
+      failure:
+        "{failure}: {provider}/{model}@{effort} #{attempt}{#log} log={log}{/log}; {label}{#unpushableCount} blocked={unpushableCount}{/unpushableCount}",
+    },
   };
   const run = host(t, {
     repositories: {
@@ -1490,9 +1494,9 @@ test("the configured template and state labels drive first attempts, retries and
     "agent:gpt-5.5",
     "broken",
   ]);
-  assert.match(
+  assert.equal(
     run.github.find("acme/widgets", 4).comments[0],
-    /Remove `broken`/,
+    `the run ended without an open pull request: claude-code/claude-opus-5-5@high #2 log=${join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-2.log")}; broken`,
   );
   assert.equal(
     run.github.calls.some((args) =>
@@ -1509,6 +1513,7 @@ test("the configured template and state labels drive first attempts, retries and
 for (const fault of [
   "missing configuration",
   "invalid configuration",
+  "invalid comment template",
   "missing Dockerfile",
 ])
   test(`${fault} pauses pickup while existing runs settle and other repositories continue`, async (t) => {
@@ -1531,6 +1536,13 @@ for (const fault of [
     const work = join(dirname(bare), "work");
     if (fault === "invalid configuration")
       write(work, { ".factory/config.json": "{}" });
+    else if (fault === "invalid comment template")
+      write(work, {
+        ".factory/config.json": JSON.stringify({
+          ...conventions,
+          comments: { pause: "{unknown}" },
+        }),
+      });
     else
       git(work, [
         "rm",
@@ -1574,6 +1586,8 @@ for (const fault of [
       ),
     );
     assert.ok(status.held.some((held: { issue: number }) => held.issue === 3));
+    assert.deepEqual(run.github.find("acme/widgets", 2).comments, []);
+    assert.deepEqual(run.github.find("acme/widgets", 3).comments, []);
     // Restoring the default branch resumes pickup on the next pass.
     git(work, ["revert", "--no-edit", "HEAD"]);
     git(work, ["push", "--quiet", bare, "main"]);
@@ -1853,6 +1867,45 @@ test("recovered runs retain configured state labels while invalid configuration 
   assert.equal(run.launched.length, 1);
 });
 
+test("settlement after restart uses the last valid comment template while invalid templates pause pickup", async (t) => {
+  const configuration = {
+    ...conventions,
+    comments: { failure: "Saved wording: {failure}; {label}" },
+  };
+  const bare = remote(t, {
+    ...factoryFiles,
+    ".factory/config.json": JSON.stringify(configuration),
+  });
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+    remotes: { "acme/widgets": bare },
+    caps: { "claude-code": 1, codex: 1 },
+  });
+  await run.tick();
+  run.launched[0].finish();
+  await run.drain();
+  const work = join(dirname(bare), "work");
+  write(work, {
+    ".factory/config.json": JSON.stringify({
+      ...configuration,
+      comments: { close: "{failure}" },
+    }),
+  });
+  git(work, ["commit", "--quiet", "-am", "invalid comment template"]);
+  git(work, ["push", "--quiet", bare, "main"]);
+  run.github.find("acme/widgets", 4).pullRequests.push("MERGED");
+  await run.restart().tick();
+  assert.equal(run.status().repositories[0].state, "paused");
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, [
+    "Saved wording: its pull request merged without closing the issue; close the issue if that finished it; factory:failed",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
+    "ready-for-agent",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
+  assert.equal(run.launched.length, 1);
+});
+
 // Readiness the adapter reads from timeline fixtures.
 const ready = "ready-for-agent";
 const reviewed = "2026-10-09T10:00:00Z";
@@ -2041,6 +2094,39 @@ test("a parent's readiness releases its tickets and closes it only when it count
   assert.equal(run.github.find("acme/widgets", 5).state, "OPEN");
   assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
   assert.equal(run.github.find("acme/widgets", 6).state, "CLOSED");
+  assert.deepEqual(run.github.find("acme/widgets", 6).comments, [
+    "All sub-issues are closed. Closing this parent.\n\n- #8",
+  ]);
+});
+
+test("the parent close template controls the whole comment and iterates ticket references", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 1,
+          subIssues: [
+            { number: 2, state: "CLOSED" },
+            { number: 3, state: "CLOSED" },
+          ],
+        },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify({
+          ...conventions,
+          comments: { close: "Completed:{#tickets} [{tickets}]{/tickets}" },
+        }),
+      }),
+    },
+  });
+  await run.tick();
+  assert.deepEqual(run.github.find("acme/widgets", 1).comments, [
+    "Completed: [#2] [#3]",
+  ]);
+  assert.equal(run.github.find("acme/widgets", 1).state, "CLOSED");
 });
 
 test("a timed-out run fails at once when its branch has unpushable commits", async (t) => {
@@ -2153,30 +2239,75 @@ test("an orphaned second attempt with no interrupted record fails after startup 
   assert.equal(recordOf(run.state, 4, 2).settled, true);
 });
 
-test("a claim with no run record observes its branch and fails unpushable commits without retry", async (t) => {
+for (const override of [false, true])
+  test(`a claim with no run record fails unpushable commits with ${override ? "configured" : "default"} wording`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4, labels: [] }] },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".factory/config.json": JSON.stringify({
+            ...conventions,
+            comments: override
+              ? {
+                  failure:
+                    "{#unpushableCount}{unpushableCount} paths:\n{/unpushableCount}{#unpushable}- {unpushable}\n{/unpushable}{#unpushableCount}Deliver once.{/unpushableCount}{#provider}Unexpected run{/provider}{#log}Unexpected log{/log}",
+                }
+              : {},
+          }),
+        }),
+      },
+    });
+    await run.tick();
+    const clone = run.clone("acme/widgets");
+    const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+    git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+    write(work, {
+      ".github/workflows/new.yml": "changed\n",
+      ".github/workflows/other.yml": "other\n",
+    });
+    git(work, ["add", "."]);
+    git(work, ["commit", "--quiet", "-m", "unpushable work"]);
+    run.github.find("acme/widgets", 4).labels = [
+      "ready-for-agent",
+      "factory:running",
+    ];
+    // The next process has no factory-owned run record for this claim.
+    const [decision] = await run.restart().tick();
+    assert.equal(decision.kind, "fail");
+    assert.equal(run.launched.length, 0);
+    assert.equal(
+      run.github.find("acme/widgets", 4).comments[0],
+      override
+        ? "2 paths:\n- .github/workflows/new.yml\n- .github/workflows/other.yml\nDeliver once."
+        : "The factory run failed: the run's branch changes paths the factory's GitHub App can't push.\n\n- Unpushable: `.github/workflows/new.yml`\n- Unpushable: `.github/workflows/other.yml`\n\nA person with permission to push these paths must deliver the change.\n\nRemove `factory:failed` to let the factory pick this issue up again.",
+    );
+  });
+
+test("a failed claim without a run supplies empty run facts to its template", async (t) => {
   const run = host(t, {
-    repositories: { "acme/widgets": [{ number: 4, labels: [] }] },
-    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["factory:running"], pullRequests: ["MERGED"] },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify({
+          ...conventions,
+          comments: {
+            failure:
+              "{failure}; {label}{#provider} provider={provider}{/provider}{#model} model={model}{/model}{#effort} effort={effort}{/effort}{#attempt} attempt={attempt}{/attempt}{#log} log={log}{/log}{#unpushable} path={unpushable}{/unpushable}{#unpushableCount} count={unpushableCount}{/unpushableCount}",
+          },
+        }),
+      }),
+    },
   });
   await run.tick();
-  const clone = run.clone("acme/widgets");
-  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
-  write(work, { ".github/workflows/new.yml": "changed\n" });
-  git(work, ["add", "."]);
-  git(work, ["commit", "--quiet", "-m", "unpushable work"]);
-  run.github.find("acme/widgets", 4).labels = [
-    "ready-for-agent",
-    "factory:running",
-  ];
-  // The next process has no factory-owned run record for this claim.
-  const [decision] = await run.restart().tick();
-  assert.equal(decision.kind, "fail");
-  assert.equal(run.launched.length, 0);
-  assert.match(
-    run.github.find("acme/widgets", 4).comments[0],
-    /Unpushable: `.github\/workflows\/new.yml`/,
-  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, [
+    "its pull request merged without closing the issue; close the issue if that finished it; factory:failed",
+  ]);
 });
 
 test("claim settling reads pull requests separately from issue closure and gives merged work precedence over needs input", async (t) => {
@@ -2282,6 +2413,44 @@ const pauseComment = [
   "",
   "The factory resumes the run by itself and removes `factory:paused` when it does; nobody needs to act.",
 ].join("\n");
+
+for (const cause of ["usage limit", "pause threshold"] as const)
+  test(`the pause template receives ${cause} facts and is delivered once across restart`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".factory/config.json": JSON.stringify({
+            ...conventions,
+            comments: {
+              pause:
+                "{provider}/{model}@{effort} #{attempt}: {cause}{#reset} reset={reset}{/reset}{#threshold} threshold={threshold}{/threshold}; {label}",
+            },
+          }),
+        }),
+      },
+      configuration: { usage: thresholds },
+    });
+    await run.tick();
+    if (cause === "usage limit") {
+      endOnLimit(run.launched[0]);
+      run.launched[0].finish();
+    } else {
+      run.usage["claude-code"] = { used: 96, reset };
+      await run.tick();
+    }
+    await settled();
+    await until(() => recordOf(run.state, 4, 1).exited);
+    await run.tick();
+    const expected =
+      cause === "usage limit"
+        ? "claude-code/claude-sonnet-5-5@high #1: usage limit reset=12:50pm (UTC); factory:paused"
+        : `claude-code/claude-sonnet-5-5@high #1: pause threshold reset=${reset} threshold=95; factory:paused`;
+    assert.deepEqual(run.github.find("acme/widgets", 4).comments, [expected]);
+    await run.restart().tick();
+    assert.deepEqual(run.github.find("acme/widgets", 4).comments, [expected]);
+  });
 
 for (const ended of [
   "without a pull request",

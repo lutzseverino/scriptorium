@@ -1,5 +1,6 @@
 // Repository conventions, read from the default branch on every pass.
 import { readFileSync } from "node:fs";
+import { validateCommentTemplate } from "./comment-template.ts";
 
 export type FactoryConfiguration = {
   version: 1;
@@ -12,6 +13,7 @@ export type FactoryConfiguration = {
   };
   modelLabelPrefix: string;
   prompt: string;
+  comments?: { pause?: string; failure?: string; close?: string };
 };
 
 export const factoryConfigurationPath = ".factory/config.json";
@@ -35,14 +37,19 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     });
   }
   const problems: string[] = [];
-  const object = (value: unknown, fields: string[], path: string) => {
+  const object = (
+    value: unknown,
+    fields: string[],
+    path: string,
+    optional: string[] = [],
+  ) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       problems.push(`${path || "the configuration"}: is not an object`);
       return null;
     }
     const record = value as Record<string, unknown>;
     for (const name of Object.keys(record))
-      if (!fields.includes(name))
+      if (!fields.includes(name) && !optional.includes(name))
         problems.push(`${path}${name}: is not a factory configuration field`);
     for (const name of fields)
       if (!Object.hasOwn(record, name))
@@ -53,6 +60,7 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     value,
     ["version", "labels", "modelLabelPrefix", "prompt"],
     "",
+    ["comments"],
   );
   const text = (value: unknown, path: string) => {
     if (
@@ -93,6 +101,28 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
         !root.prompt.includes("{issue}"))
     )
       problems.push("prompt: must contain {skillPrefix} and {issue}");
+    if (Object.hasOwn(root, "comments")) {
+      const comments = object(root.comments, [], "comments.", [
+        "pause",
+        "failure",
+        "close",
+      ]);
+      if (comments)
+        for (const name of ["pause", "failure", "close"] as const) {
+          if (!Object.hasOwn(comments, name)) continue;
+          const template = comments[name];
+          if (typeof template !== "string" || template.length === 0)
+            problems.push(`comments.${name}: is not a non-empty string`);
+          else
+            try {
+              validateCommentTemplate(name, template);
+            } catch (error) {
+              problems.push(
+                `comments.${name}: ${error instanceof Error ? error.message : error}`,
+              );
+            }
+        }
+    }
   }
   if (problems.length > 0)
     throw new Error(

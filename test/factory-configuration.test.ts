@@ -122,3 +122,43 @@ for (const name of [
       /factory configuration.*invalid/,
     );
   });
+
+test("comment templates are optional and individually configurable in version 1", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const comments of [
+    {},
+    { pause: "Waiting: {cause}" },
+    { failure: "{unpushableCount}", close: "Done.\n" },
+  ]) {
+    writeFileSync(path, JSON.stringify({ ...configuration, comments }));
+    assert.deepEqual(readFactoryConfiguration(path), {
+      ...configuration,
+      comments,
+    });
+  }
+});
+
+test("every supplied comment template is validated before any comment is needed", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const comments of [
+    null,
+    [],
+    "text",
+    1,
+    { other: "unknown" },
+    { pause: "" },
+    { failure: null },
+    { close: {} },
+    { pause: "{failure}" },
+    { failure: "{reset}" },
+    { close: "{provider}" },
+    { pause: "{#reset}never closed" },
+    { failure: "{/log}" },
+    { close: "{#tickets}{unknown}{/tickets}" },
+  ]) {
+    writeFileSync(path, JSON.stringify({ ...configuration, comments }));
+    assert.throws(() => readFactoryConfiguration(path), /comments\./);
+  }
+});

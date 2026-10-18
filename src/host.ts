@@ -51,6 +51,7 @@ import { pauseDeadline } from "./pause.ts";
 import { followRunLog, readLogEnd } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
 import { createUsage } from "./usage.ts";
+import { renderComment } from "./comment-template.ts";
 
 export type HostPorts = {
   // Runs the GitHub CLI as the token's holder.
@@ -245,6 +246,7 @@ export function createHost(
       name,
       pass.configuration.labels,
       async (args) => ports.gh(await tokens.get(name), args),
+      pass.configuration.comments?.close,
     );
     pass.github = github;
     try {
@@ -674,7 +676,7 @@ export function createHost(
         await github.fail(
           decision.issue,
           failureComment(
-            pass.configuration!.labels.failed,
+            pass.configuration!,
             decision.failure,
             decision.log,
             find(decision),
@@ -700,7 +702,12 @@ export function createHost(
         if (!ended) return;
         await github.pause(
           decision.issue,
-          pauseComment(pass.configuration!.labels.paused, decision.pause, run),
+          pauseComment(
+            pass.configuration!,
+            decision.pause,
+            run,
+            configuration.usage.pauseThreshold,
+          ),
         );
         // Recorded as told, so neither a later pass nor a restart tells it
         // again.
@@ -898,44 +905,41 @@ function recoveredPause(recorded: {
 }
 
 // Each pause tells its issue once; it names no log output.
-function pauseComment(pausedLabel: string, pause: Pause, run: HostRun): string {
-  return [
-    `The factory paused this run: ${run.provider} ${pause.cause}${pause.reset === null ? "" : `, resets ${pause.reset}`}.`,
-    "",
-    `- Model: \`${run.provider}/${run.model}@${run.effort}\`, attempt ${run.attempt}`,
-    "",
-    `The factory resumes the run by itself and removes \`${pausedLabel}\` when it does; nobody needs to act.`,
-  ].join("\n");
+function pauseComment(
+  configuration: FactoryConfiguration,
+  pause: Pause,
+  run: HostRun,
+  threshold: number | null,
+): string {
+  return renderComment("pause", configuration.comments?.pause, {
+    provider: run.provider,
+    model: run.model,
+    effort: run.effort,
+    attempt: run.attempt,
+    cause: pause.cause,
+    reset: pause.reset,
+    threshold: pause.cause === "pause threshold" ? threshold : null,
+    label: configuration.labels.paused,
+  });
 }
 
 // A claim no run holds has no model or log to name.
 function failureComment(
-  failedLabel: string,
+  configuration: FactoryConfiguration,
   failure: string,
   log: string | null,
   run?: HostRun,
   unpushed?: string[],
 ): string {
-  const details = [
-    ...(run
-      ? [
-          `- Model: \`${run.provider}/${run.model}@${run.effort}\`, attempt ${run.attempt}`,
-        ]
-      : []),
-    ...(log ? [`- Log: \`${log}\` on the factory host`] : []),
-  ];
-  return [
-    `The factory run failed: ${failure}.`,
-    "",
-    ...(details.length > 0 ? [...details, ""] : []),
-    ...(unpushed?.length
-      ? [
-          ...unpushed.map((path) => `- Unpushable: \`${path}\``),
-          "",
-          "A person with permission to push these paths must deliver the change.",
-          "",
-        ]
-      : []),
-    `Remove \`${failedLabel}\` to let the factory pick this issue up again.`,
-  ].join("\n");
+  return renderComment("failure", configuration.comments?.failure, {
+    failure,
+    provider: run?.provider,
+    model: run?.model,
+    effort: run?.effort,
+    attempt: run?.attempt,
+    log,
+    unpushable: unpushed,
+    unpushableCount: unpushed?.length || undefined,
+    label: configuration.labels.failed,
+  });
 }
