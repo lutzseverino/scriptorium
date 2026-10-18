@@ -95,6 +95,11 @@ export type OwnerPorts = {
   // Writes a line to the process log.
   report(line: string): void;
   stateDirectory: string;
+  // The host commits the policy write with its operational events.
+  persist?(
+    text: string,
+    resume?: { provider: string; reserveGranted: boolean },
+  ): void;
 };
 
 export function createOwner(ports: OwnerPorts) {
@@ -150,9 +155,23 @@ export function createOwner(ports: OwnerPorts) {
 
   // Replaces the file whole and at once, and only when it changed. A request
   // is applied only once this write has kept its effect.
-  function save(current: OwnerRecord): boolean {
+  function save(
+    current: OwnerRecord,
+    resume?: { provider: string; reserveGranted: boolean },
+  ): boolean {
     const text = `${JSON.stringify(current, null, 2)}\n`;
     if (text === saved) return true;
+    if (ports.persist) {
+      try {
+        ports.persist(text, resume);
+        saved = text;
+      } catch (error) {
+        state = null;
+        saved = "";
+        throw error;
+      }
+      return true;
+    }
     try {
       mkdirSync(ports.stateDirectory, { recursive: true });
       writeFileSync(`${path}.partial`, text);
@@ -305,6 +324,9 @@ export function createOwner(ports: OwnerPorts) {
     const files = waiting();
     // An applied request whose file is gone is forgotten.
     current.applied = current.applied.filter((id) => files.includes(id));
+    // Preserve a hold that is set and lifted by a request in the same pass
+    // as two distinct durable transitions.
+    if (ports.persist) save(current);
     for (const id of files) {
       if (current.applied.includes(id)) continue;
       const request = read(id);
@@ -319,6 +341,16 @@ export function createOwner(ports: OwnerPorts) {
           holds[request.provider] ?? null,
         );
       current.applied.push(id);
+      if (ports.persist)
+        save(
+          current,
+          typeof request === "string"
+            ? undefined
+            : {
+                provider: request.provider,
+                reserveGranted: request.drainThreshold !== undefined,
+              },
+        );
     }
     // A request's file goes only once the record keeps its effect, so a
     // restart before then applies it again, and one after never does.
@@ -334,6 +366,7 @@ export function createOwner(ports: OwnerPorts) {
 
   // Each provider's control as the latest pass left it.
   function controls(): Record<string, OwnerControl | null> {
+    state ??= load();
     return Object.fromEntries(
       ports.providers.map((provider) => {
         const entry = state?.providers[provider];

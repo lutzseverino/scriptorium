@@ -3,6 +3,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Decision } from "./factory.ts";
+import type { ProviderStatus } from "./events.ts";
 
 export type RepositoryStatus = {
   repository: string;
@@ -13,7 +14,11 @@ export type RepositoryStatus = {
   held: { issue: number; reason: string }[];
 };
 
-export type Status = { updatedAt: string; repositories: RepositoryStatus[] };
+export type Status = {
+  updatedAt: string;
+  repositories: RepositoryStatus[];
+  providers: ProviderStatus[];
+};
 
 // Each repository in the order given, with its pause reason or null, and
 // the issues this pass skipped there.
@@ -21,9 +26,11 @@ export function hostStatus(
   updatedAt: string,
   repositories: { name: string; paused: string | null }[],
   decisions: Decision[],
+  providers: ProviderStatus[],
 ): Status {
   return {
     updatedAt,
+    providers,
     repositories: repositories.map(({ name, paused }) => ({
       repository: name,
       ...(paused === null

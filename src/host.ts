@@ -52,6 +52,7 @@ import { followRunLog, readLogEnd } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
 import { createUsage } from "./usage.ts";
 import { renderComment } from "./comment-template.ts";
+import { createEvents, providerStatus } from "./events.ts";
 
 export type HostPorts = {
   // Runs the GitHub CLI as the token's holder.
@@ -146,6 +147,9 @@ export function createHost(
   // Why image retention last waited, reported once until it changes.
   let retentionWait: string | null = null;
   const pending = new Set<Promise<void>>();
+  const events = createEvents(configuration.stateDirectory);
+  let providerReadings: Snapshot["usage"] = {};
+  let providerHolds: Snapshot["holds"] = {};
   const settings: Settings = {
     defaultModel: configuration.models.default,
     retryModel: configuration.models.retry,
@@ -167,6 +171,11 @@ export function createHost(
     now: ports.now,
     report,
     path: join(configuration.stateDirectory, "usage.json"),
+    persist(text, readings, holds) {
+      providerReadings = readings;
+      providerHolds = holds;
+      events.commit(providerStatuses(), { file: "usage.json", text });
+    },
   });
   const owner = createOwner({
     providers: Object.keys(configuration.providers),
@@ -174,7 +183,33 @@ export function createHost(
     now: ports.now,
     report,
     stateDirectory: configuration.stateDirectory,
+    persist(text, resume) {
+      events.commit(providerStatuses(), { file: "owner.json", text }, resume);
+    },
   });
+
+  function providerStatuses() {
+    const controls = owner.controls();
+    return Object.keys(configuration.providers).map((provider) =>
+      providerStatus(
+        provider,
+        ports.now().toISOString(),
+        providerReadings[provider] ?? null,
+        providerHolds[provider] ?? null,
+        controls[provider] ?? null,
+        configuration.usage,
+        runs.filter(
+          (run) =>
+            run.provider === provider &&
+            (!run.exited || (run.ended && "interrupted" in run.ended)),
+        ).length,
+        runs.filter(
+          (run) =>
+            run.provider === provider && (run.pausing || pausedEnding(run)),
+        ).length,
+      ),
+    );
+  }
 
   // Everything the process owns for a repository lives under its directory.
   function directory(repository: string) {
@@ -728,6 +763,9 @@ export function createHost(
 
   async function tick(): Promise<Decision[]> {
     if (interrupting) return [];
+    // Finish any earlier append and policy write before loading policy or
+    // making a new observation. Persistence failure prevents this pass.
+    events.recover();
     if (!started) {
       start();
       started = true;
@@ -740,6 +778,8 @@ export function createHost(
     );
     const readings = await usage.read();
     const holds = usage.holds();
+    providerReadings = readings;
+    providerHolds = holds;
     const snapshot: Snapshot = {
       now: ports.now().toISOString(),
       repositories: passes.flatMap((pass) => (pass.read ? [pass.read] : [])),
@@ -785,10 +825,12 @@ export function createHost(
         );
       }
     }
+    const providers = providerStatuses();
+    events.commit(providers);
     try {
       await writeStatus(
         join(configuration.stateDirectory, "status.json"),
-        hostStatus(snapshot.now, passes, decisions),
+        hostStatus(snapshot.now, passes, decisions, providers),
       );
     } catch (error) {
       report(`the status file was not written: ${error}`);
