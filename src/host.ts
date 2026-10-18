@@ -13,7 +13,13 @@ import {
 } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { updateClone, unpushedChanges, type Git } from "./clone.ts";
+import {
+  updateClone,
+  unpushedChanges,
+  readRecovery,
+  type Recovery,
+  type Git,
+} from "./clone.ts";
 import {
   factoryConfigurationPath,
   readFactoryConfiguration,
@@ -42,7 +48,12 @@ import {
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
 import type { Retention } from "./image-retention.ts";
-import type { LaunchRequest, Registry } from "./providers.ts";
+import {
+  completionSignal,
+  type LaunchRequest,
+  type LaunchResult,
+  type Registry,
+} from "./providers.ts";
 import type { UsageWindow } from "./providers/usage.ts";
 import type { PullRequestState } from "./run-outcome.ts";
 import { createOwner } from "./owner.ts";
@@ -78,7 +89,7 @@ export type HostPorts = {
   // `UsageReadError` when the provider refuses the read.
   readUsage(provider: string): Promise<UsageWindow | null>;
   // Resolves or rejects when the run's agent exits.
-  launch(provider: string, request: LaunchRequest): Promise<void>;
+  launch(provider: string, request: LaunchRequest): Promise<LaunchResult>;
   // Removes every sandbox container on the host before it returns.
   stopSandboxes(): void;
   now(): Date;
@@ -90,6 +101,8 @@ export type HostPorts = {
 export const dockerfilePath = ".factory/Dockerfile";
 
 type HostRun = Run & {
+  launchResult?: LaunchResult;
+  recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
   configuration: FactoryConfiguration;
   base: string;
@@ -541,6 +554,11 @@ export function createHost(
       await ports.git(token, paths.clone, ["rev-parse", "HEAD"])
     ).trim();
     const previous = find(decision);
+    const recovery = await readRecovery(
+      async (cwd, args) => ports.git(await tokens.get(repository), cwd, args),
+      paths.clone,
+      runBranch(issue),
+    );
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
     // A relaunch appends to its attempt's log.
@@ -591,6 +609,7 @@ export function createHost(
       pausing: null,
       interrupted: false,
       settled: false,
+      recovery,
     };
     try {
       record(run);
@@ -612,6 +631,7 @@ export function createHost(
           registry.providers.get(run.provider)!.skillPrefix,
           issue,
           decision.retry,
+          recovery,
         ),
         branch: runBranch(issue),
         log: raw,
@@ -621,10 +641,43 @@ export function createHost(
         signal: controller.signal,
         delivered: redactor.add,
       })
+      .then((result) => {
+        // Metadata is selected by the launcher; redact even these identities
+        // before they become durable records or operator diagnostics.
+        run.launchResult = Object.fromEntries(
+          Object.entries(result).map(([key, value]) => [
+            key,
+            typeof value === "string" ? redactor.redact(value) : value,
+          ]),
+        ) as LaunchResult;
+      })
       .catch((error) =>
         report(`run for ${repository}#${issue} ended with an error: ${error}`),
       )
       .then(async () => {
+        // An interrupted run's successor owns the durable record now. The
+        // successor inspects its preserved branch before relaunching.
+        if (run.exited) {
+          await follower.close().catch(() => {});
+          return;
+        }
+        try {
+          run.recovery = await readRecovery(
+            async (cwd, args) =>
+              ports.git(await tokens.get(repository), cwd, args),
+            paths.clone,
+            runBranch(issue),
+          );
+        } catch (error) {
+          report(
+            `recovery inspection for ${repository}#${issue} failed; retain the clone and inspect its run branch before retry: ${error}`,
+          );
+        }
+        if (!run.launchResult?.completionSignal) {
+          report(
+            `${repository}#${issue} exited without completion signal; GitHub still decides delivery. Recovery state: ${JSON.stringify(run.recovery ?? { branch: runBranch(issue) })}; launch metadata: ${JSON.stringify(run.launchResult ?? null)}. Retain this clone and revalidate recovered work before publication.`,
+          );
+        }
         // A run the stop signal recorded has its record and directory settled.
         if (run.exited) {
           await follower.close().catch(() => {});
@@ -887,13 +940,24 @@ export function prompt(
   skillPrefix: string,
   issue: number,
   retry?: { failure: string; log: string },
+  recovery?: Recovery,
 ): string {
   const start = template.replace(
     /\{(skillPrefix|issue)\}/g,
     (_match, field: string) =>
       field === "skillPrefix" ? skillPrefix : String(issue),
   );
-  if (!retry) return start;
+  const guidance = [
+    "Unattended execution:",
+    "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
+    `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes still determine delivery.`,
+    ...(recovery
+      ? [
+          `Recovery state: ${JSON.stringify(recovery)}. Continue this preserved branch and worktree, including staged, unstaged and untracked changes. Revalidate recovered work before publication. Recovery itself must not push, open a PR, merge, close the issue or grant readiness.`,
+        ]
+      : []),
+  ].join("\n");
+  if (!retry) return `${start}\n\n${guidance}`;
   let tail = "";
   try {
     const log = readFileSync(retry.log, "utf8");
@@ -913,6 +977,7 @@ export function prompt(
     start,
     `First attempt failure: ${retry.failure}`,
     ...(tail ? [`First attempt log tail:\n${tail}`] : []),
+    guidance,
   ].join("\n\n");
 }
 

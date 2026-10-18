@@ -1,6 +1,6 @@
 // The provider registry: each provider is one adapter behind the seam below,
 // and only the providers the host configuration names are in the registry.
-import { run, type RunOptions } from "@ai-hero/sandcastle";
+import { run, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import {
   docker,
   type DockerOptions,
@@ -13,7 +13,7 @@ export type Mount = NonNullable<DockerOptions["mounts"]>[number];
 
 // The part of Sandcastle an adapter launches its agent through.
 export type Sandcastle = {
-  run(options: RunOptions): Promise<unknown>;
+  run(options: RunOptions): Promise<RunResult>;
   docker(options: DockerOptions): RunOptions["sandbox"];
 };
 
@@ -36,6 +36,15 @@ export type LaunchRequest = {
   delivered?: (secret: string) => void;
 };
 
+// Only recovery identities cross into the host record; raw output and
+// provider-owned resume closures stay in Sandcastle.
+export type LaunchResult = Pick<
+  RunResult,
+  "completionSignal" | "branch" | "preservedWorktreePath"
+> & { sessionId?: string; sessionFilePath?: string };
+
+export const completionSignal = "<promise>COMPLETE</promise>";
+
 export type ProviderAdapter = {
   readonly name: string;
   // The host file holding the provider's launch credential.
@@ -50,7 +59,7 @@ export type ProviderAdapter = {
   readonly skillPrefix: string;
   // Runs the agent through Sandcastle, delivering the credential as it stands
   // at this launch.
-  launch(request: LaunchRequest): Promise<void>;
+  launch(request: LaunchRequest): Promise<LaunchResult>;
   // The fullest usage window's percentage and reset, or null when the
   // provider's answer holds no usage window. A read that failed throws, a
   // provider's refusal as a `UsageReadError`.

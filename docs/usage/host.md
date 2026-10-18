@@ -387,6 +387,57 @@ paused label that no run on the host holds is such a claim. Failing or
 releasing a claim removes whichever of the two labels it carries, and a claim
 kept awaiting merge or retried carries the running label.
 
+### Foreground execution and incomplete runs
+
+The factory adds an unattended execution contract to the configured prompt,
+including retries. There is no interactive notification or resume loop:
+validation must finish in the foreground and its exit status must be checked
+before delivery. Shell detachment (`&`, `nohup`, `disown`) cannot keep work
+running after the sandbox closes. A command timeout must be resolved as a
+failure; it never counts as passing validation.
+
+Claude launches with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, both in the
+provider environment and in CLI `--settings`. The CLI settings override
+conflicting user and project `env` settings; managed settings remain owned by
+the factory image. This removes explicit background tools and automatic
+backgrounding. Claude's default Bash timeout is 30 minutes, capped by the
+host's `timeLimitMinutes`; its maximum Bash timeout is that host limit.
+Commands must still fit the run's remaining time, and the host can stop the
+whole run sooner. Codex keeps its existing command timeout behavior.
+
+The prompt requests `<promise>COMPLETE</promise>` only after the requested
+delivery or explicit owner handoff is recorded, matching the launcher's
+completion signal. A signal ends loop control and proves no GitHub outcome.
+The table above still applies: a signal without delivery fails, while a valid
+PR or owner handoff remains valid without a signal. Runs use one Sandcastle
+iteration; another iteration would launch a fresh invocation.
+
+When a run returns without the signal, the process log gives a diagnostic
+and recovery identities. Its run record holds `launchResult`: the returned
+branch, completion signal, preserved worktree path, and captured session ID
+and session file path when available. Raw output and resume functions are
+excluded. The host also inspects local Git state into `recovery`, containing
+the branch, its commit (`head`), and any registered worktree. This inspection
+also covers launcher errors that return no metadata. A recovery-inspection
+failure is reported; keep the clone for inspection.
+
+Committed work remains on `factory/issue-<n>`. Sandcastle preserves dirty
+worktrees, including staged, unstaged and untracked changes, and reuses them
+on retry without resetting those changes. Before each launch the host reads
+the preserved state again and tells the agent to continue it and revalidate
+before publication. Recovery performs no push or PR creation and grants no
+readiness. Pauses and interruptions retain their existing relaunch rules.
+
+For manual recovery after a final failure, retain the repository's clone and
+`.sandcastle/` directory together. Inspect the run record and use
+`git -C <clone> worktree list --porcelain` to locate its worktree. Review the
+branch's commits and the worktree's `git status`, including its index and
+untracked files. Continue in that worktree, or let the factory reuse it after
+removing the failed label when the failure has been addressed. Revalidate the
+recovered work before delivering it. Do not remove the clone or force-remove
+the worktree while it holds work you need. A captured session is diagnostic
+context; the factory does not resume a live session or a background process.
+
 ## Paused runs
 
 A paused run is one whose agent exited on its provider's usage limit, or one

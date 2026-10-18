@@ -7,6 +7,34 @@ import { dirname, join } from "node:path";
 // Runs Git in `cwd` and resolves its standard output.
 export type Git = (cwd: string, args: string[]) => Promise<string>;
 
+export type Recovery = { branch: string; head: string; worktree?: string };
+
+// Read local identities without checking out, cleaning, pushing or changing
+// the branch. This also works when a killed launcher returned no metadata.
+export async function readRecovery(
+  git: Git,
+  clone: string,
+  branch: string,
+): Promise<Recovery | undefined> {
+  const head = (
+    await git(clone, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      `refs/heads/${branch}`,
+    ])
+  ).trim();
+  if (!head) return undefined;
+  const listed = await git(clone, ["worktree", "list", "--porcelain", "-z"]);
+  const entry = listed
+    .split("\0\0")
+    .find((entry) => entry.split("\0").includes(`branch refs/heads/${branch}`));
+  const worktree = entry
+    ?.split("\0")
+    .find((field) => field.startsWith("worktree "))
+    ?.slice("worktree ".length);
+  return { branch, head, ...(worktree && { worktree }) };
+}
+
 // Clones the repository when the clone is missing, otherwise brings it to
 // the remote's default branch, discarding anything else in its working tree.
 // Sandcastle's directory is excluded locally, since the repository need not
