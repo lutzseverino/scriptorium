@@ -809,6 +809,11 @@ drain, pause and drained transitions, followed by reserve grants and resumes.
 An owner hold set and released by a request in one pass remains two distinct
 transitions. Events can precede the final atomic status snapshot.
 
+If running work finishes and usage recovers between observations, `drained`
+precedes release and resume. Its `state` already describes the recovered
+observation, so `state.claimsHeld` and `state.drained` can both be false. The
+completion event does not keep the provider held for an extra pass.
+
 The factory syncs a write-ahead checkpoint containing the allocated IDs and
 exact append bytes, then syncs the append, commits the associated usage or
 owner record, and completes the checkpoint. Recovery finishes this work before

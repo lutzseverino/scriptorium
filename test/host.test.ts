@@ -1258,6 +1258,31 @@ test("usage release, owner release and each accepted reserve request have distin
   );
 });
 
+test("work completing between passes is drained even when the next usage reading reopens claims", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+  });
+  await run.tick();
+  run.usage["claude-code"] = 92;
+  await run.tick();
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  run.usage["claude-code"] = 89;
+  await run.tick();
+  assert.deepEqual(
+    replay(run)
+      .slice(-3)
+      .map(({ type }) => type),
+    ["drained", "released", "resumed"],
+  );
+  assert.equal(run.status().providers[0].claimsHeld, false);
+  await run.tick();
+  assert.equal(replay(run).filter(({ type }) => type === "drained").length, 1);
+});
+
 test("unknown usage retains hold evidence until reset and public output excludes provider errors and raw fields", async (t) => {
   const secret = "provider-secret-raw-output";
   const run = host(t, {
@@ -1544,10 +1569,10 @@ test("image retention and cache pruning failures are reported without changing t
   });
   await run.tick();
   // The providers' launches can finish in either order.
-  assert.deepEqual(
-    run.launched.map(({ options }) => options.name).sort(),
-    ["acme/widgets#4", "acme/widgets#5"],
-  );
+  assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
+    "acme/widgets#4",
+    "acme/widgets#5",
+  ]);
   assert.equal(run.status().repositories[0].state, "running");
   await run.tick();
   assert.deepEqual(
@@ -3441,19 +3466,33 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
     assert.deepEqual(issue.comments, [thresholdComment()]);
     assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
   }
+  const provider = run.status().providers[0];
+  assert.equal(provider.running, 0);
+  assert.equal(provider.paused, 2);
+  assert.equal(provider.drained, true);
+  const thresholdEvents = replay(run).filter(
+    ({ type }) => type === "paused_at_threshold",
+  );
+  assert.equal(thresholdEvents.length, 1);
+  assert.equal(thresholdEvents[0].state.running, 2);
+  assert.equal(replay(run).at(-1)?.type, "drained");
   assert.equal(
     held(run, 4),
     `relaunch waits: claude-code reached its pause threshold (resets ${reset}); usage 96% is at or above the 95% pause threshold`,
   );
   // The drain threshold still holds it; a reading below it relaunches both.
   run.usage["claude-code"] = 92;
-  await run.tick();
+  const beforeRestart = replay(run);
+  run.interrupt();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.deepEqual(replay(run), beforeRestart);
   assert.match(
     held(run, 4)!,
     /usage 92% is at or above the 90% drain threshold$/,
   );
   run.usage["claude-code"] = 89;
-  const relaunched = launchesOf(await run.tick());
+  const relaunched = launchesOf(await restarted.tick());
   assert.deepEqual(
     relaunched.map(({ repository, issue, attempt, relaunch }) => ({
       repository,
@@ -3474,6 +3513,14 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
   );
   assert.deepEqual(widgets.labels, ["ready-for-agent", "factory:running"]);
   assert.equal(widgets.comments.length, 1);
+  assert.equal(run.status().providers[0].paused, 0);
+  assert.equal(run.status().providers[0].running, 2);
+  assert.equal(run.status().providers[0].claimsHeld, false);
+  assert.equal(
+    replay(run).filter(({ type }) => type === "paused_at_threshold").length,
+    1,
+  );
+  assert.equal(replay(run).at(-1)?.type, "resumed");
 });
 
 function launchesOf(decisions: Decision[]) {

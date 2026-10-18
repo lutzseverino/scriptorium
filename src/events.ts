@@ -265,6 +265,15 @@ export function createEvents(stateDirectory: string) {
           state,
         });
       };
+      // Work can finish and usage recover between observations. Report its
+      // completion before recovery, without keeping claims held for a pass.
+      if (
+        previous?.claimsHeld &&
+        previous.running > 0 &&
+        state.running === 0 &&
+        !state.claimsHeld
+      )
+        add("drained", "no-running-work");
       for (const [field, reason] of [
         ["usageHold", "usage-hold"],
         ["ownerHold", "owner-hold"],
