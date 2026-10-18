@@ -66,10 +66,13 @@ export async function buildSandboxImage(options: {
   // One bake builds both images in the factory's builder and loads them into
   // the daemon. The agent layer starts from the toolchain build's result, not
   // from a daemon image, which the builder can't see. The builds' context is
-  // an empty directory.
+  // an empty directory. The Dockerfiles are files, since bake would read
+  // `${...}` in an inline Dockerfile as its own variables.
   const work = await mkdtemp(join(tmpdir(), "factory-sandbox-build-"));
   try {
     await mkdir(join(work, "context"));
+    await writeFile(join(work, "toolchain.Dockerfile"), dockerfile);
+    await writeFile(join(work, "agent.Dockerfile"), layer);
     const target = { context: "context" };
     await writeFile(
       join(work, "bake.json"),
@@ -77,12 +80,12 @@ export async function buildSandboxImage(options: {
         target: {
           toolchain: {
             ...target,
-            "dockerfile-inline": dockerfile,
+            dockerfile: join(work, "toolchain.Dockerfile"),
             tags: [toolchain],
           },
           agent: {
             ...target,
-            "dockerfile-inline": layer,
+            dockerfile: join(work, "agent.Dockerfile"),
             contexts: { "factory-toolchain": "target:toolchain" },
             args: {
               TOOLCHAIN_IMAGE: "factory-toolchain",
