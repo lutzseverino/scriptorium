@@ -148,11 +148,6 @@ function fakeGitHub(
     assert.ok(issue, `${repository}#${number} exists`);
     return issue;
   };
-  // Existing convention checks isolate the configured invocation; the contract
-  // itself is verified through whole launches below.
-  const invocation = (text: string | undefined) =>
-    text?.split("\n\nUnattended execution:\n")[0];
-
   const value = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
   const field = (args: string[], name: string) =>
     args
