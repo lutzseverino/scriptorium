@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { directory } from "./fakes.ts";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { readFactoryConfiguration } from "../src/factory-configuration.ts";
+import {
+  factoryConfigurationPath,
+  readFactoryConfiguration,
+} from "../src/factory-configuration.ts";
 
 function fixture(name: string): string {
   return fileURLToPath(
@@ -25,6 +28,13 @@ test("a repository's factory configuration is read without convention defaults",
     modelLabelPrefix: "agent:",
     prompt: "Handle #{issue} using {skillPrefix}ship",
   });
+});
+
+test("the configuration this repository adopted from Repo Canon is accepted", () => {
+  const adopted = fileURLToPath(
+    new URL(`../${factoryConfigurationPath}`, import.meta.url),
+  );
+  assert.equal(readFactoryConfiguration(adopted).version, 1);
 });
 
 test("missing fields are refused instead of supplied from defaults", () => {
