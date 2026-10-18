@@ -26,21 +26,23 @@ host that updates on its own lists the releases of `lutzseverino/scriptorium`
 for newer versions, since later releases are published only there.
 
 The process needs stable Node.js 24 or 26 (24 is the default), Git, the GitHub
-CLI and Docker with its Buildx plugin on its `PATH`, and runs until it is
-stopped; [restarts](#restarts) describes stopping it. It builds sandbox images
-with its own user's UID and GID, in its own Buildx builder, which it creates on
-its first build; [sandbox image retention](#sandbox-image-retention) describes
-the builder and what the factory removes. An unreadable, malformed or invalid
-host configuration stops it at start with every problem named. The host keeps
-its own service setup: the service definition and its `PATH`, the provider
-credential files, and the host configuration itself.
+CLI and Docker on its `PATH`, and runs until it is stopped;
+[restarts](#restarts) describes stopping it. It builds sandbox images with its
+own user's UID and GID, with the Docker daemon's own builder unless
+`imageBuilder` opts into the [factory builder](#the-factory-builder), which
+also needs Docker's Buildx plugin;
+[sandbox image retention](#sandbox-image-retention) describes what the
+factory removes. An unreadable, malformed or invalid host configuration stops
+it at start with every problem named. The host keeps its own service setup:
+the service definition and its `PATH`, the provider credential files, and the
+host configuration itself.
 
 ## Host configuration
 
 The host configuration is one JSON file. Every field is required except
-`providers.claude-code.usageCredential`, `imageRetention` and the fields whose
-default the table below gives. Unknown fields are refused, and nothing comes
-from environment variables.
+`providers.claude-code.usageCredential`, `imageBuilder`, `imageRetention` and
+the fields whose default the table below gives. Unknown fields are refused,
+and nothing comes from environment variables.
 
 ```json
 {
@@ -69,6 +71,7 @@ from environment variables.
   "stateDirectory": "/var/lib/factory",
   "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
   "github": { "tokenCommand": ["/usr/local/bin/factory-token"] },
+  "imageBuilder": "daemon",
   "imageRetention": { "obsoletePairs": 3, "cacheMinimumAgeHours": 24 }
 }
 ```
@@ -92,8 +95,9 @@ from environment variables.
 | `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                    |
 | `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
 | `github.tokenCommand`                   | The executable and leading arguments that print a GitHub token for a repository.                                                                                                                                        |
+| `imageBuilder`                          | Where sandbox images build: `daemon`, the Docker daemon's own builder, or `factory`, the [factory builder](#the-factory-builder), whose old cache the factory then prunes. Optional; the default is `daemon`.           |
 | `imageRetention.obsoletePairs`          | The whole number of obsolete sandbox image pairs kept across every repository, newest first; pairs in use stay beyond it. Optional; the default is 3. See [image retention](#sandbox-image-retention).                  |
-| `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned. Optional; the default is 24.                                                                                   |
+| `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned, when `imageBuilder` is `factory`. Optional; the default is 24.                                                 |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -662,8 +666,9 @@ Each repository's sandbox image is a pair: the agent image
 [image tag](sandbox-image.md#image-tags-and-compatibility). A changed
 `.factory/Dockerfile` or agent layer builds a new pair and leaves the old one
 obsolete. After each pass the factory removes its own obsolete pairs beyond
-`imageRetention.obsoletePairs`, keeping the newest, and prunes its builder's
-cache that is at least `imageRetention.cacheMinimumAgeHours` old.
+`imageRetention.obsoletePairs`, keeping the newest. A host that opts into the
+[factory builder](#the-factory-builder) also has that builder's cache pruned
+once it is at least `imageRetention.cacheMinimumAgeHours` old.
 
 The factory keeps, whatever the allowance:
 
@@ -701,29 +706,49 @@ another tag on the same image keeps that image, and Docker refuses to remove an
 image a container started meanwhile uses. It never runs Docker's image, system
 or builder prune commands, which act on the whole host.
 
-The factory builds every sandbox image in its own Buildx builder,
-`factory-sandbox`, which runs BuildKit in a container from the pinned
-`moby/buildkit` image. That builder's cache holds only the factory's builds,
-so the factory prunes it, and never the Docker daemon's own build cache or
-another builder's. Base images in a `.factory/Dockerfile` are pulled by that
-builder, with the host user's Docker login but without the daemon's registry
-mirrors. While its cache lasts, the builder holds a second copy of the layers
-it built besides the images it loads into Docker.
+The factory never prunes the Docker daemon's own build cache or another
+builder's: their records carry no owner, so nothing proves which cache is the
+factory's.
 
 Each removal, pruned cache, failed removal and failed inventory goes to the
 process log. A failure never pauses a repository or fails a run: a removal
 that fails leaves its pair in place, and an inventory that fails removes
 nothing that pass.
 
+### The factory builder
+
+By default the Docker daemon's own builder builds sandbox images, as
+`docker build` does: it reads base images the daemon already has, pulls the
+others through the daemon's registry mirrors, and its build cache is the
+operator's to manage, since the factory cannot tell its own cache from other
+builds on the host.
+
+With `"imageBuilder": "factory"`, the factory builds every sandbox image in its
+own Buildx builder, `factory-sandbox`, which its first build creates with the
+`docker-container` driver from the pinned `moby/buildkit` image. That needs
+Docker's Buildx plugin. The builder's cache holds only the factory's builds,
+so the factory prunes it by age after each pass. Base images in a
+`.factory/Dockerfile` are pulled by that builder, with the host user's Docker
+login but without the daemon's registry mirrors, so a base image that exists
+only in the local daemon does not build there. While its cache lasts, the
+builder holds a second copy of the layers it built besides the images it loads
+into Docker.
+
+Either builder gives the same pair the same tag, so switching reuses the pairs
+already built. Switching back to `daemon` stops the cache pruning; a factory
+builder left from earlier stays, with its cache, until the operator removes it
+with `docker buildx rm factory-sandbox`.
+
 ### Upgrading to retention
 
-An existing host configuration needs no change: without `imageRetention` the
-host keeps three obsolete pairs and prunes cache a day old. The first pass
-that prepares every repository's image after the upgrade removes the
-obsolete pairs and served repositories' legacy images beyond the allowance.
-Build cache from earlier factory releases is in the Docker daemon's own
-builder, mixed with other builds on the host, so the factory leaves it alone;
-whether to prune it is the operator's choice.
+An existing host configuration needs no change, and its sandbox images still
+build with the daemon's own builder: without `imageBuilder` and
+`imageRetention`, the host keeps three obsolete pairs and prunes no build
+cache. The first pass that prepares every repository's image after the
+upgrade removes the obsolete pairs and served repositories' legacy images
+beyond the allowance. Build cache stays in the Docker daemon's own builder,
+mixed with other builds on the host, so the factory leaves it alone; whether
+to prune it is the operator's choice.
 
 ## Repository pauses
 

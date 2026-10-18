@@ -27,15 +27,23 @@ whose toolchain needs no Node.js can keep a base without it.
 
 The package's `src/sandbox-image.ts` exports `buildSandboxImage({ dockerfile,
 uid, gid })`. The host supplies the repository Dockerfile's contents and its
-positive numeric UID and GID. Docker and its Buildx plugin must be available on
-the host. One Buildx bake builds the toolchain image, then the factory's
-`src/agent-layer.Dockerfile` from that toolchain build, and loads both images
-into Docker. Neither build has a context. Both run in the factory's own Buildx
-builder, `factory-sandbox`, which the first build creates with the
-`docker-container` driver and BuildKit v0.34.0, pinned by its image index
-digest in `src/sandbox-image.ts`. The builder pulls the toolchain's base image
-itself. The host runner builds each repository's image from its
-`.factory/Dockerfile` on every pass.
+positive numeric UID and GID, and its `imageBuilder`. Docker must be
+available on the host. By default the Docker daemon's own builder builds the
+toolchain image, then the factory's `src/agent-layer.Dockerfile` from that
+toolchain image, each from a Dockerfile on stdin. The toolchain's base image
+may be one only the local daemon has, and the daemon's registry mirrors apply.
+
+A host that opts into the
+[factory builder](host.md#the-factory-builder) builds both images in one
+Buildx bake instead, in the factory's own Buildx builder, `factory-sandbox`,
+and loads them into Docker. That needs Docker's Buildx plugin. The first such
+build creates the builder with the `docker-container` driver and BuildKit
+v0.34.0, pinned by its image index digest in `src/sandbox-image.ts`. That
+builder pulls the toolchain's base image itself, without the daemon's images
+or registry mirrors.
+
+Neither builder gives either build a context. The host runner builds each
+repository's image from its `.factory/Dockerfile` on every pass.
 
 As root, the layer installs the tools below from pinned release binaries,
 plus their distribution-provided runtime dependencies. It requires no Node.js
@@ -104,10 +112,13 @@ Every change to the agent layer, including a tool pin, increments
 the layer therefore rebuilds every repository's image, while other factory
 changes reuse it. UID and GID do not affect the tag: the builder checks the
 image's `factory.agent.identity` label and rebuilds that tag if the host's
-identity changes. Images belong to that host's Docker daemon.
+identity changes. Either builder gives the same tag, so a host that changes
+its `imageBuilder` reuses the images it built. Images belong to that host's
+Docker daemon.
 
 The `factory-sandbox` repository holds only the factory's images: the host
-removes obsolete pairs there, and the factory builder's old cache, under
+removes obsolete pairs there, and on a host that opted into it the factory
+builder's old cache, under
 [sandbox image retention](host.md#sandbox-image-retention).
 
 A breaking change to this contract requires a new factory major under the

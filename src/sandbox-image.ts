@@ -14,8 +14,14 @@ const identityLabel = "factory.agent.identity";
 // builds, and nothing else.
 export const sandboxImageRepository = "factory-sandbox";
 
-// The factory's own BuildKit builder. Every sandbox image build runs in it, so
-// its build cache holds the factory's builds and nobody else's.
+// Where sandbox images build: `daemon`, the Docker daemon's own builder, or
+// `factory`, the factory builder.
+export const imageBuilders = ["daemon", "factory"] as const;
+export type ImageBuilder = (typeof imageBuilders)[number];
+
+// The factory builder: the factory's own BuildKit builder, which a host opts
+// into. Such a host builds every sandbox image in it, so its build cache holds
+// the factory's builds and nobody else's.
 export const sandboxBuilder = "factory-sandbox";
 
 // The BuildKit release the builder runs, pinned to its multi-platform index.
@@ -32,12 +38,24 @@ export function sandboxImageTag(
   return `${sandboxImageRepository}:${hash}`;
 }
 
-export async function buildSandboxImage(options: {
-  dockerfile: string;
-  uid: number;
-  gid: number;
-}): Promise<string> {
-  const { dockerfile, uid, gid } = options;
+// Runs the Docker CLI in `cwd` with `input` on its standard input, and
+// resolves its standard output.
+export type DockerRun = (
+  args: string[],
+  options?: { cwd?: string; input?: string },
+) => Promise<string>;
+
+export async function buildSandboxImage(
+  options: {
+    dockerfile: string;
+    uid: number;
+    gid: number;
+    // The daemon's own builder unless the host opts into the factory builder.
+    builder?: ImageBuilder;
+  },
+  run: DockerRun = docker,
+): Promise<string> {
+  const { dockerfile, uid, gid, builder = "daemon" } = options;
   for (const id of [uid, gid]) {
     if (!Number.isSafeInteger(id) || id <= 0) {
       throw new Error(
@@ -48,7 +66,7 @@ export async function buildSandboxImage(options: {
   const image = sandboxImageTag(dockerfile, AGENT_LAYER_VERSION);
   const identity = `${uid}:${gid}`;
   // A host identity change rebuilds the same tag; identity is not a tag input.
-  const existing = await docker([
+  const existing = await run([
     "image",
     "inspect",
     "--format",
@@ -62,7 +80,53 @@ export async function buildSandboxImage(options: {
     new URL("./agent-layer.Dockerfile", import.meta.url),
     "utf8",
   );
-  await ensureBuilder();
+  if (builder === "factory")
+    await bake({ dockerfile, layer, uid, gid, toolchain, image }, run);
+  else {
+    // The daemon's own builder reads the toolchain's base image and the
+    // toolchain image from the daemon, with its registry mirrors. Each
+    // Dockerfile goes on stdin, so neither build has a context.
+    await run(["build", "--tag", toolchain, "-"], { input: dockerfile });
+    await run(
+      [
+        "build",
+        "--tag",
+        image,
+        "--build-arg",
+        `TOOLCHAIN_IMAGE=${toolchain}`,
+        "--build-arg",
+        `AGENT_UID=${uid}`,
+        "--build-arg",
+        `AGENT_GID=${gid}`,
+        "-",
+      ],
+      { input: layer },
+    );
+  }
+  return image;
+}
+
+// Builds both images of a pair in the factory builder, creating it unless it
+// exists, and loads them into the daemon.
+async function bake(
+  {
+    dockerfile,
+    layer,
+    uid,
+    gid,
+    toolchain,
+    image,
+  }: {
+    dockerfile: string;
+    layer: string;
+    uid: number;
+    gid: number;
+    toolchain: string;
+    image: string;
+  },
+  run: DockerRun,
+): Promise<void> {
+  await ensureBuilder(run);
   // One bake builds both images in the factory's builder and loads them into
   // the daemon. The agent layer starts from the toolchain build's result, not
   // from a daemon image, which the builder can't see. The builds' context is
@@ -97,7 +161,7 @@ export async function buildSandboxImage(options: {
         },
       }),
     );
-    await docker(
+    await run(
       [
         "buildx",
         "bake",
@@ -114,19 +178,18 @@ export async function buildSandboxImage(options: {
   } finally {
     await rm(work, { recursive: true, force: true });
   }
-  return image;
 }
 
 // Creates the factory's builder unless it exists.
-async function ensureBuilder(): Promise<void> {
+async function ensureBuilder(run: DockerRun): Promise<void> {
   const exists = () =>
-    docker(["buildx", "inspect", sandboxBuilder]).then(
+    run(["buildx", "inspect", sandboxBuilder]).then(
       () => true,
       () => false,
     );
   if (await exists()) return;
   try {
-    await docker([
+    await run([
       "buildx",
       "create",
       "--name",
@@ -168,7 +231,7 @@ export function stopSandboxes(): void {
 // Runs the Docker CLI and resolves its standard output.
 export function docker(
   args: string[],
-  { cwd }: { cwd?: string } = {},
+  { cwd, input }: { cwd?: string; input?: string } = {},
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -193,6 +256,6 @@ export function docker(
     child.stdin!.on("error", () => {
       // An early Docker exit can close stdin; the process callback reports it.
     });
-    child.stdin!.end();
+    child.stdin!.end(input);
   });
 }

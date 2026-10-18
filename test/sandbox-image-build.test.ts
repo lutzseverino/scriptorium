@@ -8,9 +8,11 @@ import {
   retainSandboxImages,
 } from "../src/image-retention.ts";
 import {
+  AGENT_LAYER_VERSION,
   buildSandboxImage,
   docker,
   sandboxBuilder,
+  sandboxImageTag,
   stopSandboxes,
 } from "../src/sandbox-image.ts";
 
@@ -267,21 +269,95 @@ test(
       }),
       image,
     );
+  },
+);
+
+test(
+  "a default build starts from a base image only the local daemon has",
+  { skip: !dockerAvailable, timeout: 900_000 },
+  async (t) => {
+    const base = `factory-local-base:${randomUUID()}`;
+    execFileSync("docker", ["pull", "--quiet", "debian:bookworm-slim"]);
+    execFileSync("docker", ["tag", "debian:bookworm-slim", base]);
+    const dockerfile = `FROM ${base}\n`;
+    const image = sandboxImageTag(dockerfile, AGENT_LAYER_VERSION);
+    t.after(() =>
+      spawnSync("docker", ["image", "rm", image, `${image}-toolchain`, base]),
+    );
+    // The factory builder pulls base images itself, so it can't find one.
+    await assert.rejects(
+      buildSandboxImage({
+        dockerfile,
+        uid: 2345,
+        gid: 3456,
+        builder: "factory",
+      }),
+      /factory-local-base/,
+    );
+    assert.equal(
+      await buildSandboxImage({ dockerfile, uid: 2345, gid: 3456 }),
+      image,
+    );
+    assert.equal(
+      execFileSync(
+        "docker",
+        ["run", "--rm", "--entrypoint", "id", image, "-u"],
+        { encoding: "utf8", timeout: 60_000 },
+      ).trim(),
+      "2345",
+    );
+  },
+);
+
+test(
+  "an opted-in host builds both images in the factory builder and prunes only its cache",
+  { skip: !dockerAvailable, timeout: 900_000 },
+  async (t) => {
+    const dockerfile =
+      'FROM debian:bookworm-slim\nLABEL factory.test.builder="factory"\n';
+    const image = await buildSandboxImage({
+      dockerfile,
+      uid: 2345,
+      gid: 3456,
+      builder: "factory",
+    });
+    t.after(() =>
+      execFileSync("docker", ["image", "rm", image, `${image}-toolchain`]),
+    );
+    assert.equal(
+      execFileSync(
+        "docker",
+        ["run", "--rm", "--entrypoint", "sh", image, "-ec", "id -u; id -g"],
+        { encoding: "utf8", timeout: 60_000 },
+      ),
+      "2345\n3456\n",
+    );
+    // The image the factory builder loaded is reused by either builder.
+    for (const builder of ["factory", "daemon"] as const)
+      assert.equal(
+        await buildSandboxImage({ dockerfile, uid: 2345, gid: 3456, builder }),
+        image,
+      );
     // The build ran in the factory's own builder, whose cache is the only one
-    // retention prunes; none of it is a day old yet.
+    // retention prunes; none of it is a day old yet, and a host back on the
+    // daemon's builder prunes none of it.
     assert.match(
       execFileSync("docker", ["buildx", "inspect", sandboxBuilder], {
         encoding: "utf8",
       }),
       /Driver:\s+docker-container/,
     );
-    assert.match(
+    const usage = () =>
       execFileSync("docker", ["buildx", "du", "--builder", sandboxBuilder], {
         encoding: "utf8",
-      }),
-      /^Total:\s+(?!0B\s*$)/m,
-    );
-    assert.equal(await pruneSandboxCache((args) => docker(args), 24), null);
+      });
+    assert.match(usage(), /^Total:\s+(?!0B\s*$)/m);
+    const prune = (builder: "daemon" | "factory", hours: number) =>
+      pruneSandboxCache((args) => docker(args), { builder, hours });
+    assert.equal(await prune("factory", 24), null);
+    const before = /^Total:.*$/m.exec(usage())?.[0];
+    assert.equal(await prune("daemon", 1), null);
+    assert.equal(/^Total:.*$/m.exec(usage())?.[0], before);
   },
 );
 

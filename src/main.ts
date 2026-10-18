@@ -85,6 +85,7 @@ const host = createHost(configuration, registry, {
       dockerfile,
       uid: process.getuid?.() ?? 1000,
       gid: process.getgid?.() ?? 1000,
+      builder: configuration.imageBuilder,
     }),
   retainImages: (current, running) =>
     retainSandboxImages((args) => docker(args), {
@@ -94,10 +95,10 @@ const host = createHost(configuration, registry, {
       obsoletePairs: configuration.imageRetention.obsoletePairs,
     }),
   pruneBuildCache: () =>
-    pruneSandboxCache(
-      (args) => docker(args),
-      configuration.imageRetention.cacheMinimumAgeHours,
-    ),
+    pruneSandboxCache((args) => docker(args), {
+      builder: configuration.imageBuilder,
+      hours: configuration.imageRetention.cacheMinimumAgeHours,
+    }),
   readUsage: (provider) => registry.providers.get(provider)!.readUsage(),
   launch: (provider, request) =>
     registry.providers.get(provider)!.launch(request),

@@ -1,9 +1,14 @@
 // Sandbox image retention: once a pass has prepared every served repository's
 // sandbox image, the factory removes its own obsolete images beyond the host's
-// allowance, and prunes its own builder's cache past a minimum age. It removes
-// only what it can prove is its own and nothing anything still uses.
+// allowance, and on a host that opted into the factory builder prunes that
+// builder's cache past a minimum age. It removes only what it can prove is its
+// own and nothing anything still uses.
 import { createHash } from "node:crypto";
-import { sandboxBuilder, sandboxImageRepository } from "./sandbox-image.ts";
+import {
+  sandboxBuilder,
+  sandboxImageRepository,
+  type ImageBuilder,
+} from "./sandbox-image.ts";
 
 // Runs the Docker CLI with the arguments and resolves its standard output.
 export type Docker = (args: string[]) => Promise<string>;
@@ -98,14 +103,17 @@ export async function retainSandboxImages(
   return { removed, problems };
 }
 
-// Prunes the factory builder's cache last used at least `hours` ago. A host
-// without the builder has no factory cache, and the cache of other builders
-// and of the daemon's own builder is never touched. Resolves the space freed,
-// as Docker reports it, or null when nothing was.
+// Prunes the factory builder's cache last used at least `hours` ago, when the
+// host builds there. A host building with the daemon's own builder prunes
+// nothing, even if a factory builder remains from an earlier configuration,
+// and a host without the builder has no factory cache. The cache of other
+// builders and of the daemon's own builder is never touched. Resolves the
+// space freed, as Docker reports it, or null when nothing was.
 export async function pruneSandboxCache(
   docker: Docker,
-  hours: number,
+  { builder, hours }: { builder: ImageBuilder; hours: number },
 ): Promise<string | null> {
+  if (builder !== "factory") return null;
   try {
     await docker(["buildx", "inspect", sandboxBuilder]);
   } catch {

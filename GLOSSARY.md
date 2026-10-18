@@ -84,9 +84,10 @@ it, and obsolete otherwise.
 _Avoid_: Sandbox image version, image set
 
 **Factory builder**:
-The factory's own Buildx builder, `factory-sandbox`, in which it builds every
-sandbox image pair, so that builder's cache is the only build cache the
-factory prunes.
+The factory's own Buildx builder, `factory-sandbox`, in which a host that
+opts into it builds every sandbox image pair, so that builder's cache is the
+only build cache the factory prunes. Other hosts build with the Docker
+daemon's own builder and have no build cache pruned.
 _Avoid_: Build cache, default builder
 
 **Run outcome**:
