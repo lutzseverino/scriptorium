@@ -10,7 +10,8 @@ repository conventions, installs both when a repository adopts it with its
 
 - [Host installation and configuration](host.md): starting the process, the
   host configuration schema, the agent CLIs and models it runs, the token command's
-  contract, redaction, the state directory, and the status file.
+  contract, redaction, the state directory, sandbox image retention, and the
+  status file.
 - [Repository factory configuration](factory-configuration.md): repository
   labels, model label prefix, prompt template, pauses, and protection.
 - [Sandbox image contract](sandbox-image.md): repository toolchain requirements,

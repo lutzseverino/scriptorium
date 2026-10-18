@@ -71,6 +71,19 @@ An agent CLI and the subscription behind it, on which the factory runs a
 model, such as Claude Code or Codex.
 _Avoid_: Vendor, worker
 
+**Sandbox image pair**:
+The agent image a repository's runs start from and the toolchain image it is
+built on, sharing one hash of the repository's `.factory/Dockerfile` and the
+agent layer version. A pair is current while a served repository's hash names
+it, and obsolete otherwise.
+_Avoid_: Sandbox image version, image set
+
+**Factory builder**:
+The factory's own Buildx builder, `factory-sandbox`, in which it builds every
+sandbox image pair, so that builder's cache is the only build cache the
+factory prunes.
+_Avoid_: Build cache, default builder
+
 **Run outcome**:
 How a factory run ended, read from GitHub and the run's branch: done, awaiting
 merge, needs input, or failed.

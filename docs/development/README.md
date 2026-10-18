@@ -42,6 +42,12 @@ with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`
 for every edit to `src/agent-layer.Dockerfile`, including tool pins.
+The image suite builds in the factory's own Buildx builder, checks that only
+that builder's cache is pruned, and runs image retention against a real
+daemon over test-only tags. `test/image-retention.test.ts` first drives
+retention against a fake Docker daemon that fails on a forced removal or any
+host-wide prune, covering ownership, shared and current pairs, container
+references, inventory failures and removal races.
 
 The fast `test/agent-layer.test.ts` guard executes the install commands with
 spies, without Docker or network access, for both architectures. It rejects
@@ -72,6 +78,17 @@ happen during the bump; the image build downloads only the pinned tool assets.
 Update both architectures' digests and increment `AGENT_LAYER_VERSION` in
 `src/sandbox-image.ts`. Run the fast guard, upstream comparison, both image
 builds, package typecheck and tests, and the shared checks above.
+
+### Bump the factory builder's BuildKit
+
+`buildkitImage` in `src/sandbox-image.ts` pins a `moby/buildkit` release tag
+with its multi-platform image index digest, as
+`docker buildx imagetools inspect moby/buildkit:<tag>` reports it, matching
+the release on [BuildKit's releases](https://github.com/moby/buildkit/releases).
+Run the image builds and the shared checks. A host keeps the builder its first
+build created, with that builder's BuildKit, until the operator removes it
+with `docker buildx rm factory-sandbox`, which also drops its cache; the next
+build creates it again from the new pin.
 
 ### Host and adapter tests
 

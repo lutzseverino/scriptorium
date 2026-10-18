@@ -17,6 +17,7 @@ import { sandboxEnvironment } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
+import type { Retention } from "../src/image-retention.ts";
 import { createRegistry } from "../src/providers.ts";
 import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
@@ -414,6 +415,8 @@ function host(
     caps = { "claude-code": 2, codex: 1 },
     imageFailures = [],
     usage = {},
+    retention = [],
+    pruning = [],
   }: {
     repositories: Record<string, IssueSpec[]>;
     remotes: Record<string, string>;
@@ -421,10 +424,17 @@ function host(
     roles?: Record<string, string | Error>;
     configuration?: Partial<HostConfiguration>;
     caps?: { "claude-code": number; codex: number };
-    imageFailures?: Error[];
+    // Each build in turn fails with its error, or succeeds on null.
+    imageFailures?: (Error | null)[];
     // Each provider's usage as the next read finds it: absent or null has no
     // usage window, a number has no reset, and an error is thrown.
     usage?: Record<string, number | UsageWindow | null | Error>;
+    // What each image retention resolves or rejects with, in turn; once these
+    // run out it removes nothing.
+    retention?: (Retention | Error)[];
+    // What each cache prune resolves or rejects with, in turn; once these run
+    // out it frees nothing.
+    pruning?: (string | Error)[];
   },
 ) {
   const instances: ReturnType<typeof createHost>[] = [];
@@ -468,6 +478,7 @@ function host(
     stateDirectory: join(root, "state"),
     gitIdentity: { name: "Factory", email: "factory@example.test" },
     github: { tokenCommand: ["unused"] },
+    imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
     ...configuration,
   };
   const registry = createRegistry(resolved.providers, {
@@ -485,6 +496,9 @@ function host(
   const events: string[] = [];
   const starts: (() => void)[] = [];
   const usageReads: string[] = [];
+  // Each image retention's current and running images, and each cache prune.
+  const retentions: { current: string[]; running: string[] }[] = [];
+  let prunes = 0;
   const ports: HostPorts = {
     async gh(token, args) {
       if (args[0] === "issue" && args[1] === "edit")
@@ -503,8 +517,21 @@ function host(
     remoteUrl: (repository) => remotes[repository],
     async buildImage(dockerfile) {
       builds.push(dockerfile);
-      if (imageFailures.length > 0) throw imageFailures.shift();
+      const failure = imageFailures.shift();
+      if (failure) throw failure;
       return `factory-sandbox:${builds.length}`;
+    },
+    async retainImages(current, running) {
+      retentions.push({ current, running });
+      const answer = retention.shift() ?? { removed: [], problems: [] };
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+    async pruneBuildCache() {
+      prunes++;
+      const answer = pruning.shift() ?? null;
+      if (answer instanceof Error) throw answer;
+      return answer;
     },
     async readUsage(provider) {
       usageReads.push(provider);
@@ -557,6 +584,8 @@ function host(
     github,
     launched,
     builds,
+    retentions,
+    prunes: () => prunes,
     reports,
     tokens: tokenOf,
     tokenCommands,
@@ -1062,6 +1091,87 @@ test("an image that does not build pauses only its repository until it builds", 
   assert.deepEqual(
     run.launched.map(({ options }) => options.name),
     ["acme/gadgets#3", "acme/widgets#4"],
+  );
+  assert.equal(run.status().repositories[0].state, "running");
+});
+
+test("image retention waits for every repository's current image and keeps the running runs' images", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    imageFailures: [
+      new Error("apt-get exited with 100"),
+      null,
+      new Error("apt-get exited with 100"),
+    ],
+  });
+  const wait =
+    "sandbox image retention waits for the current images of acme/widgets";
+  // Another repository's successful build never makes this one's images
+  // obsolete, however many passes it takes.
+  await run.tick();
+  await run.tick();
+  assert.deepEqual(run.retentions, []);
+  assert.equal(run.reports.filter((line) => line === wait).length, 1);
+  // The factory's own cache is pruned by age on every pass regardless.
+  assert.equal(run.prunes(), 2);
+  await run.tick();
+  assert.deepEqual(run.retentions, [
+    {
+      current: ["factory-sandbox:5", "factory-sandbox:6"],
+      // gadgets#3 launched on the first pass's image and widgets#4 on this
+      // pass's, before retention ran.
+      running: ["factory-sandbox:2", "factory-sandbox:5"],
+    },
+  ]);
+  // An exited run's image is no longer running; its retry's is.
+  run.launched[0].finish();
+  await run.tick();
+  assert.equal(run.launched[2].options.name, "acme/gadgets#3");
+  assert.deepEqual(run.retentions.at(-1), {
+    current: ["factory-sandbox:7", "factory-sandbox:8"],
+    running: ["factory-sandbox:5", "factory-sandbox:8"],
+  });
+  assert.equal(run.prunes(), 4);
+});
+
+test("image retention and cache pruning failures are reported without changing the pass", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    retention: [
+      new Error("docker image ls failed: daemon unavailable"),
+      {
+        removed: ["factory-sandbox:old", "factory-sandbox:old-toolchain"],
+        problems: [
+          "factory-sandbox:used was not removed: Error: docker image rm failed: conflict",
+        ],
+      },
+    ],
+    pruning: [new Error("docker buildx prune failed: boom"), "1.2GB"],
+  });
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#4", "acme/widgets#5"],
+  );
+  assert.equal(run.status().repositories[0].state, "running");
+  await run.tick();
+  assert.deepEqual(
+    run.reports.filter((line) => /sandbox (image|build)/.test(line)),
+    [
+      "sandbox image retention removed nothing: Error: docker image ls failed: daemon unavailable",
+      "the sandbox build cache was not pruned: Error: docker buildx prune failed: boom",
+      "removed obsolete sandbox images: factory-sandbox:old, factory-sandbox:old-toolchain",
+      "sandbox image retention: factory-sandbox:used was not removed: Error: docker image rm failed: conflict",
+      "pruned the sandbox build cache, freeing 1.2GB",
+    ],
   );
   assert.equal(run.status().repositories[0].state, "running");
 });

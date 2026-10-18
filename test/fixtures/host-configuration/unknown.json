@@ -17,5 +17,6 @@
   "stateDirectory": "/var/lib/factory",
   "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
   "github": { "tokenCommand": ["/usr/local/bin/factory-token"] },
-  "labels": { "ready": "ready-for-agent" }
+  "labels": { "ready": "ready-for-agent" },
+  "imageRetention": { "obsoleteImages": 3 }
 }

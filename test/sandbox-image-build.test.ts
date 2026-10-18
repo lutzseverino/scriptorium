@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildSandboxImage, stopSandboxes } from "../src/sandbox-image.ts";
+import {
+  pruneSandboxCache,
+  retainSandboxImages,
+} from "../src/image-retention.ts";
+import {
+  buildSandboxImage,
+  docker,
+  sandboxBuilder,
+  stopSandboxes,
+} from "../src/sandbox-image.ts";
 
 let dockerAvailable = false;
 try {
@@ -258,6 +267,21 @@ test(
       }),
       image,
     );
+    // The build ran in the factory's own builder, whose cache is the only one
+    // retention prunes; none of it is a day old yet.
+    assert.match(
+      execFileSync("docker", ["buildx", "inspect", sandboxBuilder], {
+        encoding: "utf8",
+      }),
+      /Driver:\s+docker-container/,
+    );
+    assert.match(
+      execFileSync("docker", ["buildx", "du", "--builder", sandboxBuilder], {
+        encoding: "utf8",
+      }),
+      /^Total:\s+(?!0B\s*$)/m,
+    );
+    assert.equal(await pruneSandboxCache((args) => docker(args), 24), null);
   },
 );
 
@@ -346,5 +370,79 @@ test(
     } finally {
       execFileSync("docker", ["rm", "--force", other]);
     }
+  },
+);
+
+test(
+  "retention removes an obsolete pair by its tags, keeping aliases and pairs containers use",
+  { skip: !dockerAvailable, timeout: 300_000 },
+  async (t) => {
+    const run = (args: string[], input?: string) =>
+      execFileSync("docker", args, { encoding: "utf8", input }).trim();
+    const unique = randomUUID();
+    const hash = (name: string) =>
+      createHash("sha256").update(`${unique}${name}`).digest("hex");
+    const pairs = {
+      current: hash("current"),
+      used: hash("used"),
+      old: hash("old"),
+    };
+    const tags = Object.values(pairs).flatMap((pair) => [
+      `factory-sandbox:${pair}`,
+      `factory-sandbox:${pair}-toolchain`,
+    ]);
+    const alias = `factory-retention-alias:${unique}`;
+    let container = "";
+    t.after(() => {
+      if (container) spawnSync("docker", ["rm", "--force", container]);
+      spawnSync("docker", ["image", "rm", ...tags, alias]);
+    });
+    for (const tag of tags)
+      run(
+        ["build", "--quiet", "--tag", tag, "-"],
+        `FROM debian:bookworm-slim\nLABEL factory.retention.test="${unique} ${tag}"\n`,
+      );
+    run(["tag", `factory-sandbox:${pairs.old}`, alias]);
+    container = run(["create", `factory-sandbox:${pairs.used}`]);
+    // Pairs other tests left keep their place as current ones.
+    const others = run(["image", "ls", "--format", "{{.Repository}}:{{.Tag}}"])
+      .split("\n")
+      .filter(
+        (tag) => tag.startsWith("factory-sandbox:") && !tags.includes(tag),
+      );
+    const before = run(["image", "inspect", "--format", "{{.Id}}", alias]);
+    const result = await retainSandboxImages((args) => docker(args), {
+      repositories: [],
+      current: [`factory-sandbox:${pairs.current}`, ...others],
+      running: [],
+      obsoletePairs: 0,
+    });
+    assert.deepEqual(result, {
+      removed: [
+        `factory-sandbox:${pairs.old}`,
+        `factory-sandbox:${pairs.old}-toolchain`,
+      ],
+      problems: [],
+    });
+    assert.equal(
+      run(["image", "inspect", "--format", "{{.Id}}", alias]),
+      before,
+    );
+    for (const pair of [pairs.current, pairs.used])
+      run([
+        "image",
+        "inspect",
+        `factory-sandbox:${pair}`,
+        `factory-sandbox:${pair}-toolchain`,
+      ]);
+    // Without --force the daemon itself refuses an image a stopped container
+    // uses, which guards a container created after retention's inventory.
+    const refused = spawnSync(
+      "docker",
+      ["image", "rm", `factory-sandbox:${pairs.used}`],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /must force|is using its referenced image/);
   },
 );
