@@ -14,5 +14,6 @@
   "stateDirectory": "state",
   "gitIdentity": { "name": "", "email": "factory@example.com" },
   "github": { "tokenCommand": [] },
+  "imageBuilder": "buildkit",
   "imageRetention": { "obsoletePairs": 1.5, "cacheMinimumAgeHours": 0 }
 }

@@ -402,12 +402,13 @@ test("with no factory image nothing is inspected or removed", async () => {
 });
 
 test("the build cache is pruned only in the factory's own builder, by age", async () => {
+  const factory = { builder: "factory", hours: 24 } as const;
   const absent = fakeDocker({ images: [] });
-  assert.equal(await pruneSandboxCache(absent.docker, 24), null);
+  assert.equal(await pruneSandboxCache(absent.docker, factory), null);
   assert.deepEqual(absent.calls, [["buildx", "inspect", "factory-sandbox"]]);
 
   const present = fakeDocker({ images: [], builder: true });
-  assert.equal(await pruneSandboxCache(present.docker, 24), "2.5GB");
+  assert.equal(await pruneSandboxCache(present.docker, factory), "2.5GB");
   assert.deepEqual(present.calls, [
     ["buildx", "inspect", "factory-sandbox"],
     ["buildx", "inspect", "--bootstrap", "factory-sandbox"],
@@ -424,12 +425,23 @@ test("the build cache is pruned only in the factory's own builder, by age", asyn
   ]);
 
   const empty = fakeDocker({ images: [], builder: true, freed: "0B" });
-  assert.equal(await pruneSandboxCache(empty.docker, 24), null);
+  assert.equal(await pruneSandboxCache(empty.docker, factory), null);
 
   const failing = fakeDocker({ images: [], builder: true });
   failing.before((args) => {
     if (args[1] === "prune")
       throw new Error("docker buildx prune failed: boom");
   });
-  await assert.rejects(pruneSandboxCache(failing.docker, 24), /boom/);
+  await assert.rejects(pruneSandboxCache(failing.docker, factory), /boom/);
+});
+
+test("a host building with the daemon's own builder prunes no build cache, even with a factory builder left", async () => {
+  for (const builder of [false, true]) {
+    const daemon = fakeDocker({ images: [], builder });
+    assert.equal(
+      await pruneSandboxCache(daemon.docker, { builder: "daemon", hours: 24 }),
+      null,
+    );
+    assert.deepEqual(daemon.calls, []);
+  }
 });

@@ -59,8 +59,39 @@ test("a complete host configuration is read as written", () => {
     stateDirectory: "/var/lib/factory",
     gitIdentity: { name: "factory[bot]", email: "factory@example.com" },
     github: { tokenCommand: ["/usr/local/bin/factory-token", "--app", "7"] },
+    imageBuilder: "daemon",
     imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
   });
+});
+
+test("images build with the daemon's own builder unless the host opts into the factory builder", (t) => {
+  const path = join(directory(t), "host.json");
+  const valid = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  assert.equal(Object.hasOwn(valid, "imageBuilder"), false);
+  for (const builder of ["daemon", "factory"]) {
+    writeFileSync(path, JSON.stringify({ ...valid, imageBuilder: builder }));
+    assert.deepEqual(read(path), {
+      configuration: {
+        ...read(fixture("valid")).configuration,
+        imageBuilder: builder,
+      },
+      warnings: [],
+    });
+  }
+  for (const builder of ["buildx", "Factory", "default"]) {
+    writeFileSync(path, JSON.stringify({ ...valid, imageBuilder: builder }));
+    assert.deepEqual(refused(path), [
+      `The host configuration ${path} is invalid:`,
+      `- imageBuilder: ${JSON.stringify(builder)} is not one of daemon, factory`,
+    ]);
+  }
+  for (const builder of [null, "", true, 1]) {
+    writeFileSync(path, JSON.stringify({ ...valid, imageBuilder: builder }));
+    assert.deepEqual(refused(path), [
+      `The host configuration ${path} is invalid:`,
+      "- imageBuilder: is not a non-empty string",
+    ]);
+  }
 });
 
 test("image retention has defaults, and each setting may be given alone", (t) => {
@@ -100,7 +131,10 @@ test("Claude Code accepts an optional absolute usage credential without changing
     "/etc/factory/claude-usage.json";
   const path = join(directory(t), "host.json");
   writeFileSync(path, JSON.stringify(configuration));
-  assert.deepEqual(read(path).configuration, configuration);
+  assert.deepEqual(read(path).configuration, {
+    ...configuration,
+    imageBuilder: "daemon",
+  });
 
   for (const value of [null, "", 42, "relative/login.json"]) {
     configuration.providers["claude-code"].usageCredential = value;
@@ -163,6 +197,7 @@ test("malformed values are refused with every correction", () => {
     '- stateDirectory: "state" is not an absolute path',
     "- gitIdentity.name: is not a non-empty string",
     "- github.tokenCommand: is empty",
+    '- imageBuilder: "buildkit" is not one of daemon, factory',
     "- imageRetention.obsoletePairs: 1.5 is not a whole number of image pairs",
     "- imageRetention.cacheMinimumAgeHours: 0 is not a positive whole number of hours",
   ]);

@@ -498,6 +498,7 @@ function host(
     stateDirectory: join(root, "state"),
     gitIdentity: { name: "Factory", email: "factory@example.test" },
     github: { tokenCommand: ["unused"] },
+    imageBuilder: "daemon",
     imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
     ...configuration,
   };

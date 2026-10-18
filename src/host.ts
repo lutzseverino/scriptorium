@@ -75,15 +75,15 @@ export type HostPorts = {
   token(repository: string): Promise<string>;
   // The URL the repository is cloned from.
   remoteUrl(repository: string): string;
-  // Builds the sandbox image over the repository's toolchain Dockerfile and
-  // resolves its tag.
+  // Builds the sandbox image over the repository's toolchain Dockerfile, with
+  // the host's image builder, and resolves its tag.
   buildImage(dockerfile: string): Promise<string>;
   // Removes the factory's obsolete sandbox images beyond the host's
   // allowance, keeping every `current` and `running` image and every image a
   // container uses. Rejects, removing nothing, when its inventory fails.
   retainImages(current: string[], running: string[]): Promise<Retention>;
-  // Prunes the factory builder's cache past the host's minimum age, and
-  // resolves the space freed, or null when nothing was.
+  // Prunes the factory builder's cache past the host's minimum age when the
+  // host builds there, and resolves the space freed, or null when nothing was.
   pruneBuildCache(): Promise<string | null>;
   // The provider's usage as its adapter reads it, rejecting with a
   // `UsageReadError` when the provider refuses the read.
@@ -894,9 +894,9 @@ export function createHost(
 
   // Once a pass has prepared every repository's image, the factory's obsolete
   // images beyond the host's allowance go. A repository without one this pass
-  // could still need any of them, so until then none goes. The factory
-  // builder's old cache is pruned either way. A failure here is reported and
-  // leaves the pass and its images as they are.
+  // could still need any of them, so until then none goes. On a host that
+  // builds in the factory builder, its old cache is pruned either way. A
+  // failure here is reported and leaves the pass and its images as they are.
   async function retain(passes: Pass[]) {
     const waiting = passes.filter((pass) => pass.image === null);
     const wait = waiting.length

@@ -8,6 +8,7 @@ import {
   createRegistry,
   type ProviderSettings,
 } from "./providers.ts";
+import { imageBuilders, type ImageBuilder } from "./sandbox-image.ts";
 
 export type HostConfiguration = {
   // Each repository the factory serves, as `<owner>/<name>`.
@@ -26,12 +27,16 @@ export type HostConfiguration = {
   // The executable and arguments that print a token for the repository named
   // by the `<owner>/<name>` argument appended to them.
   github: { tokenCommand: string[] };
+  // Where sandbox images build: the daemon's own builder unless the host opts
+  // into the factory builder and the pruning of its cache.
+  imageBuilder: ImageBuilder;
   imageRetention: ImageRetention;
 };
 
 // How many obsolete sandbox image pairs the host keeps beyond every
 // repository's current pair and the pairs containers use, and how old the
-// factory builder's cache must be before it is pruned.
+// factory builder's cache must be before it is pruned, on a host that builds
+// there.
 export type ImageRetention = {
   obsoletePairs: number;
   cacheMinimumAgeHours: number;
@@ -139,6 +144,7 @@ function withDefaults(configuration: HostConfiguration): HostConfiguration {
       pauseThreshold: usage.pauseThreshold ?? null,
       afterDrain: usage.afterDrain ?? "auto-resume",
     },
+    imageBuilder: configuration.imageBuilder ?? "daemon",
     imageRetention: {
       obsoletePairs: retention.obsoletePairs ?? 3,
       cacheMinimumAgeHours: retention.cacheMinimumAgeHours ?? 24,
@@ -217,6 +223,10 @@ function hostConfigurationProblems(value: unknown): string[] {
       stateDirectory: text(isAbsolute, "is not an absolute path"),
       gitIdentity: object({ name: text(), email: text() }),
       github: object({ tokenCommand: list(text(), { nonEmpty: true }) }),
+      imageBuilder: text(
+        (builder) => (imageBuilders as readonly string[]).includes(builder),
+        `is not one of ${imageBuilders.join(", ")}`,
+      ),
       imageRetention: object(
         {
           obsoletePairs: number(
@@ -231,7 +241,7 @@ function hostConfigurationProblems(value: unknown): string[] {
         ["obsoletePairs", "cacheMinimumAgeHours"],
       ),
     },
-    ["imageRetention"],
+    ["imageBuilder", "imageRetention"],
   )(value, "", problems);
   const usage = (value as { usage?: Partial<UsagePolicy> } | null)?.usage;
   const { drainThreshold: drain, pauseThreshold: pause } = usage ?? {};

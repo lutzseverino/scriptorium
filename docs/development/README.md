@@ -38,13 +38,16 @@ The sandbox image contract tests build and run the factory layer on
 `node:26-bookworm` with their existing UID and GID 1000, and remove sandbox
 containers by the layer's label. They run in both CI runtime jobs, where Docker
 is required; local runs skip them when Docker is unavailable. Run them alone
-with `node --test test/sandbox-image-build.test.ts`. Run the tag tests with
+with `node --test test/sandbox-image-build.test.ts`. Run the tag tests, which
+also drive both builders' commands against a fake Docker CLI, with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
 release binaries and need network access. Increment `AGENT_LAYER_VERSION`
 for every edit to `src/agent-layer.Dockerfile`, including tool pins.
-The image suite builds in the factory's own Buildx builder, checks that only
-that builder's cache is pruned, and runs image retention against a real
-daemon over test-only tags. `test/image-retention.test.ts` first drives
+The image suite builds with the daemon's own builder by default, including
+from a base image only the local daemon has, which the factory's own Buildx
+builder cannot find. It also builds in that factory builder, checks that only
+its cache is pruned and only when selected, and runs image retention against
+a real daemon over test-only tags. `test/image-retention.test.ts` first drives
 retention against a fake Docker daemon that fails on a forced removal or any
 host-wide prune, covering ownership, shared and current pairs, container
 references, inventory failures and removal races.
@@ -85,10 +88,10 @@ builds, package typecheck and tests, and the shared checks above.
 with its multi-platform image index digest, as
 `docker buildx imagetools inspect moby/buildkit:<tag>` reports it, matching
 the release on [BuildKit's releases](https://github.com/moby/buildkit/releases).
-Run the image builds and the shared checks. A host keeps the builder its first
-build created, with that builder's BuildKit, until the operator removes it
-with `docker buildx rm factory-sandbox`, which also drops its cache; the next
-build creates it again from the new pin.
+Run the image builds and the shared checks. A host that opted into the factory
+builder keeps the builder its first build created, with that builder's
+BuildKit, until the operator removes it with `docker buildx rm factory-sandbox`,
+which also drops its cache; the next build creates it again from the new pin.
 
 ### Host and adapter tests
 
