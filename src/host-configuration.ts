@@ -59,10 +59,11 @@ export const roles = ["admin", "maintain", "write", "triage", "read"] as const;
 export type Role = (typeof roles)[number];
 
 // Reads and validates the host configuration, or throws naming every problem.
-// A valid configuration that still uses a deprecated form tells `warn`.
+// A valid configuration that still uses a deprecated form tells `warn`, or
+// writes to stderr when no callback is supplied.
 export function readHostConfiguration(
   path: string,
-  warn: (warning: string) => void,
+  warn: (warning: string) => void = console.warn,
 ): HostConfiguration {
   let text;
   try {
