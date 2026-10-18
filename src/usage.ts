@@ -49,6 +49,12 @@ export type UsagePorts = {
   report(line: string): void;
   // The file that keeps the readings and read deadlines across restarts.
   path: string;
+  // The host commits the policy write with its operational events.
+  persist?(
+    text: string,
+    usage: Record<string, Usage | null>,
+    holds: Record<string, UsageHold | null>,
+  ): void;
 };
 
 export function createUsage(ports: UsagePorts) {
@@ -84,9 +90,23 @@ export function createUsage(ports: UsagePorts) {
   }
 
   // Replaces the file whole and at once, and only when it changed.
-  function save(current: Record<string, ProviderUsage>) {
+  function save(
+    current: Record<string, ProviderUsage>,
+    usage: Record<string, Usage | null>,
+  ) {
     const text = `${JSON.stringify(current, null, 2)}\n`;
     if (text === saved) return;
+    if (ports.persist) {
+      try {
+        ports.persist(text, usage, holds);
+        saved = text;
+      } catch (error) {
+        state = null;
+        saved = "";
+        throw error;
+      }
+      return;
+    }
     try {
       mkdirSync(dirname(ports.path), { recursive: true });
       writeFileSync(`${ports.path}.partial`, text);
@@ -226,7 +246,7 @@ export function createUsage(ports: UsagePorts) {
       );
     }
     state = current;
-    save(current);
+    save(current, usage);
     return usage;
   }
 

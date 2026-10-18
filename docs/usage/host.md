@@ -346,6 +346,8 @@ The process owns everything under `stateDirectory`:
 | Path                                             | Contents                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status.json`                                    | The status file.                                                                                                                                                                                                                                                                                                                                           |
+| `events.jsonl`                                   | The append-only [operational event stream](#operational-events) for external delivery.                                                                                                                                                                                                                                                                     |
+| `events-state.json`                              | The process-owned event checkpoint and pending append, including its related usage or owner policy write. Keep it with the event stream across restarts.                                                                                                                                                                                                   |
 | `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                                                                       |
 | `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                               |
 | `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                      |
@@ -694,7 +696,28 @@ provider's cap and time limit even while its repository can't be read.
 After every pass the factory replaces `status.json` whole. It lists each
 repository in the host configuration's order with its state, `running` or
 `paused` with the reason, and the issues the pass held with their skip reasons.
-The factory posts no status to GitHub.
+It also lists every configured provider in configuration order, even with no
+frontier issue or running work. The factory posts no status to GitHub.
+
+Each `providers` entry has the following version 1 operational contract,
+also used by the event stream's `state` field. Times are UTC ISO 8601 strings;
+percentages are numbers. The snapshot's `updatedAt` identifies the pass, and
+each provider's `observedAt` identifies that observation.
+
+| Field                    | Meaning                                                                                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`, `observedAt` | Provider name and observation time.                                                                                                                                                                                                                     |
+| `usage`                  | `{ "state": "known", "reading": { "used": 92, "at": "…", "reset": "…" } }` for a fresh reading, or `{ "state": "unknown" }`. The reading's `at` is when it was obtained; `reset` is optional. A fresh cached reading remains known after a failed read. |
+| `usageHold`              | Automatic usage hold: `used`, `at`, optional `reset`, and fixed `since` and `until`; otherwise `null`. Its evidence still applies when `usage` is unknown.                                                                                              |
+| `ownerHold`              | `{ "since": "…", "used": 92 }`, or `null`. `used` is `null` for recovery from an unreadable owner record. Only an owner resume releases it.                                                                                                             |
+| `reserve`                | `{ "drainThreshold": 94, "since": "…", "until": "…" }`, or `null`. `until: null` means no reset has been reported yet.                                                                                                                                  |
+| `thresholds`             | Configured `drainThreshold`, `pauseThreshold`, `afterDrain`, and `effectiveDrainThreshold` for new claims after a reserve raise. Disabled thresholds are `null`.                                                                                        |
+| `running`, `paused`      | Counts across all repositories, including unreadable repositories. Interrupted work awaiting relaunch counts as running. A run stopping at the pause threshold counts as running until exit and as paused from the stop request.                        |
+| `claimsHeld`             | Whether usage or the owner holds new claims, independently of repository readiness and capacity.                                                                                                                                                        |
+| `pauseAtThreshold`       | Whether usage in force reaches the pause threshold, including when there is no sandbox to stop.                                                                                                                                                         |
+| `drained`                | New claims are held and no running work remains. This is an observation, never a latch on recovery.                                                                                                                                                     |
+| `reason`                 | `owner-hold`, `pause-threshold`, `drain-threshold`, or `available`, in that precedence order.                                                                                                                                                           |
+| `nextAction`             | `owner-resume`, `wait-for-usage`, or `claims-allowed`. A resume can still meet a usage threshold; a reserve raise never overrides the pause threshold. Paused runs retain their separate automatic recovery.                                            |
 
 ```json
 {
@@ -722,9 +745,92 @@ The factory posts no status to GitHub.
         }
       ]
     }
+  ],
+  "providers": [
+    {
+      "provider": "claude-code",
+      "observedAt": "2026-10-09T12:00:00.000Z",
+      "usage": { "state": "unknown" },
+      "usageHold": null,
+      "ownerHold": null,
+      "reserve": null,
+      "thresholds": {
+        "drainThreshold": 90,
+        "pauseThreshold": 95,
+        "afterDrain": "auto-resume",
+        "effectiveDrainThreshold": 90
+      },
+      "running": 1,
+      "paused": 0,
+      "claimsHeld": false,
+      "pauseAtThreshold": false,
+      "drained": false,
+      "reason": "available",
+      "nextAction": "claims-allowed"
+    }
   ]
 }
 ```
 
 The process also logs each pass's decisions, skip reasons and pauses to
 standard output, [redacted](#redaction).
+
+## Operational events
+
+`events.jsonl` under `stateDirectory` is the version 1 producer contract for
+external consumers such as homelab. The factory writes data only: it sends no
+notification request and starts no agent or prompt for these events. The
+existing per-run pause comment remains separate.
+
+Every newline-terminated UTF-8 JSON record contains `version: 1`, `id`,
+`sequence`, `type`, `provider`, `observedAt`, `reason` and `state`. `state` is
+the complete provider observation described above, at that transition. No
+credential, provider response body, free-text reset, or raw agent output is
+included. `reason` uses the fixed categories below, rather than provider text.
+
+| `type`                | Transition and `reason`                                                                                                                                                                                                     |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `held`                | An automatic usage hold (`usage-hold`) or owner hold (`owner-hold`) begins. They are separate records.                                                                                                                      |
+| `released`            | That hold ends, with `usage-hold` or `owner-hold` identifying which. A usage release can follow a low reading, reset, fallback deadline or configuration change; it does not release an owner hold.                         |
+| `drain_started`       | New claims become held; `reason` is the provider state's hold reason. Running work continues below the pause threshold.                                                                                                     |
+| `drained`             | A held provider has no running work (`no-running-work`). With zero running work at the start, this follows `drain_started` immediately. It does not delay reopening claims on a low reading.                                |
+| `paused_at_threshold` | Usage in force first reaches the pause threshold (`pause-threshold`), including with zero running work. This records the threshold observation; individual sandbox stops and their comments follow the usual run lifecycle. |
+| `reserve_granted`     | An accepted owner request grants a reserve raise (`owner-request`), including a repeated request for the same threshold.                                                                                                    |
+| `resumed`             | An owner request is accepted (`owner-request`), or new claims automatically reopen (`claims-reopened`). An accepted request can leave usage holding claims; inspect `state.claimsHeld` and `nextAction`.                    |
+
+The first observation reports any existing active holds. Repeated passes and
+restarts emit no new event for an unchanged transition. Each accepted resume
+request is its own transition, even if the provider had no owner hold.
+The journal's durable stream UUID and monotonically increasing `sequence`
+form `id` as `<UUID>:<sequence>`. Sequence numbers order all providers together;
+observation times need not increase if the host clock changes. Within an
+observation providers follow host configuration order; hold changes precede
+drain, pause and drained transitions, followed by reserve grants and resumes.
+An owner hold set and released by a request in one pass remains two distinct
+transitions. Events can precede the final atomic status snapshot.
+
+If running work finishes and usage recovers between observations, `drained`
+precedes release and resume. Its `state` already describes the recovered
+observation, so `state.claimsHeld` and `state.drained` can both be false. The
+completion event does not keep the provider held for an extra pass.
+
+The factory syncs a write-ahead checkpoint containing the allocated IDs and
+exact append bytes, then syncs the append, commits the associated usage or
+owner record, and completes the checkpoint. Recovery finishes this work before
+loading policy or observing another pass. A partial append resumes at the
+exact missing byte without rewriting committed bytes. A persistence failure
+fails the pass and is reported in the process log; the next pass or restart
+retries the same pending work. An unreadable checkpoint or a missing checkpoint
+beside a nonempty stream requires operator repair, rather than generating new
+IDs over old events. Keep the checkpoint, policy records and stream together;
+the single factory process owns all of them. Rotation and pruning are not
+provided.
+
+A reader must process complete newline-terminated records only. Retain an
+incomplete final line without parsing it, and read its remaining bytes after
+the producer recovers. A malformed complete line is an error, not an event to
+skip. Persist the stream position only through complete records, and deduplicate
+delivery by `id` across rereads and restarts. Replaying from byte zero yields
+the same identities. Readers may ignore added fields, but must reject an
+unsupported `version`. Delivery and its retry/checkpoint transaction belong to
+the consumer; this interface makes no exactly-once delivery claim.

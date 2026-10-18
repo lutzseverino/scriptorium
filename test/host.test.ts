@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
@@ -15,6 +17,7 @@ import type { RunOptions } from "@ai-hero/sandcastle";
 import type { DockerOptions } from "@ai-hero/sandcastle/sandboxes/docker";
 import { sandboxEnvironment } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
+import type { FactoryEvent } from "../src/events.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
 import type { Retention } from "../src/image-retention.ts";
@@ -646,7 +649,9 @@ for (const ending of ["running", "finished", "failed", "aborted", "restarted"])
     await run!.drain();
     assert.equal(existsSync(dirname(run!.state)), false);
     assert.ok(
-      run!.reports.every((line) => !line.includes("did not finish its records")),
+      run!.reports.every(
+        (line) => !line.includes("did not finish its records"),
+      ),
       run!.reports.join("\n"),
     );
   });
@@ -1009,7 +1014,8 @@ test("the status file lists each repository's state and its held issues", async 
     },
   });
   await run.tick();
-  assert.deepEqual(run.status(), {
+  const { providers: _providers, ...repositoryStatus } = run.status();
+  assert.deepEqual(repositoryStatus, {
     updatedAt: "2026-10-09T12:00:00.000Z",
     repositories: [
       {
@@ -1053,6 +1059,411 @@ test("the status file lists each repository's state and its held issues", async 
     run.reports.includes("acme/widgets#5 skipped: blocked by #4"),
     run.reports.join("\n"),
   );
+});
+
+// An external consumer only reads newline-terminated records and deduplicates
+// delivery by id. Its checkpoint must not advance over a partial final line.
+function replay(run: ReturnType<typeof host>): FactoryEvent[] {
+  const path = join(run.state, "events.jsonl");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .slice(0, -1)
+    .map((line) => JSON.parse(line));
+}
+
+test("empty-frontier status and events expose simultaneous providers, including a pause threshold with zero running work", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+    usage: { "claude-code": { used: 92, reset }, codex: { used: 96, reset } },
+  });
+  await run.tick();
+  const at = "2026-10-09T12:00:00.000Z";
+  assert.deepEqual(run.status().providers, [
+    {
+      provider: "claude-code",
+      observedAt: at,
+      usage: { state: "known", reading: { used: 92, at, reset } },
+      usageHold: { used: 92, at, reset, since: at, until: reset },
+      ownerHold: null,
+      reserve: null,
+      thresholds: { ...thresholds, effectiveDrainThreshold: 90 },
+      running: 0,
+      paused: 0,
+      claimsHeld: true,
+      pauseAtThreshold: false,
+      drained: true,
+      reason: "drain-threshold",
+      nextAction: "wait-for-usage",
+    },
+    {
+      provider: "codex",
+      observedAt: at,
+      usage: { state: "known", reading: { used: 96, at, reset } },
+      usageHold: { used: 96, at, reset, since: at, until: reset },
+      ownerHold: null,
+      reserve: null,
+      thresholds: { ...thresholds, effectiveDrainThreshold: 90 },
+      running: 0,
+      paused: 0,
+      claimsHeld: true,
+      pauseAtThreshold: true,
+      drained: true,
+      reason: "pause-threshold",
+      nextAction: "wait-for-usage",
+    },
+  ]);
+  assert.deepEqual(
+    replay(run).map(({ provider, type }) => [provider, type]),
+    [
+      ["claude-code", "held"],
+      ["claude-code", "drain_started"],
+      ["claude-code", "drained"],
+      ["codex", "held"],
+      ["codex", "drain_started"],
+      ["codex", "paused_at_threshold"],
+      ["codex", "drained"],
+    ],
+  );
+  const first = replay(run);
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  run.interrupt();
+  await run.restart().tick();
+  assert.deepEqual(replay(run), first);
+  assert.equal(new Set(first.map(({ id }) => id)).size, 7);
+  assert.deepEqual(
+    first.map(({ sequence }) => sequence),
+    [1, 2, 3, 4, 5, 6, 7],
+  );
+  const delivered = new Set<string>();
+  const deliveries = [...first, ...replay(run)].filter(({ id }) => {
+    if (delivered.has(id)) return false;
+    delivered.add(id);
+    return true;
+  });
+  assert.equal(deliveries.length, 7);
+  assert.equal(run.launched.length, 0);
+  assert.equal(
+    run.github.calls.some(
+      (args) => args[0] === "issue" && args[1] === "comment",
+    ),
+    false,
+  );
+});
+
+test("drained is observed after running work finishes, while low usage can reopen claims before it finishes", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+  });
+  await run.tick();
+  run.usage["claude-code"] = 92;
+  await run.tick();
+  assert.deepEqual(
+    replay(run).map(({ type }) => type),
+    ["held", "drain_started"],
+  );
+  assert.equal(run.status().providers[0].running, 1);
+  run.usage["claude-code"] = 89;
+  await run.tick();
+  assert.deepEqual(
+    replay(run)
+      .slice(-2)
+      .map(({ type }) => type),
+    ["released", "resumed"],
+  );
+  assert.equal(run.status().providers[0].claimsHeld, false);
+  assert.equal(run.status().providers[0].running, 1);
+  run.usage["claude-code"] = 92;
+  await run.tick();
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  await run.tick();
+  assert.deepEqual(
+    replay(run)
+      .slice(-1)
+      .map(({ type, state }) => [type, state.running]),
+    [["drained", 0]],
+  );
+  await run.tick();
+  assert.equal(replay(run).filter(({ type }) => type === "drained").length, 1);
+});
+
+test("usage release, owner release and each accepted reserve request have distinct durable events", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: ownerResume },
+    usage: { "claude-code": { used: 92, reset } },
+  });
+  // A queued request must not hide a hold set earlier in the same pass.
+  resumeCommand(run, "claude-code", "--drain-threshold", "94");
+  await run.tick();
+  assert.deepEqual(
+    replay(run).map(({ type, reason }) => [type, reason]),
+    [
+      ["held", "usage-hold"],
+      ["drain_started", "drain-threshold"],
+      ["drained", "no-running-work"],
+      ["held", "owner-hold"],
+      ["released", "owner-hold"],
+      ["reserve_granted", "owner-request"],
+      ["resumed", "owner-request"],
+    ],
+  );
+  resumeCommand(run, "claude-code", "--drain-threshold", "94");
+  await run.tick();
+  assert.deepEqual(
+    replay(run)
+      .slice(-2)
+      .map(({ type }) => type),
+    ["reserve_granted", "resumed"],
+  );
+  assert.equal(
+    replay(run).filter(({ type }) => type === "reserve_granted").length,
+    2,
+  );
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  run.usage["claude-code"] = 94;
+  await run.tick();
+  run.usage["claude-code"] = 10;
+  await run.tick();
+  assert.equal(replay(run).at(-1)?.type, "released");
+  assert.equal(replay(run).at(-1)?.reason, "usage-hold");
+  assert.equal(run.status().providers[0].nextAction, "owner-resume");
+  run.interrupt();
+  const restarted = run.restart();
+  const before = replay(run);
+  await restarted.tick();
+  assert.deepEqual(replay(run), before);
+  resumeCommand(run, "claude-code");
+  await restarted.tick();
+  assert.deepEqual(
+    replay(run)
+      .slice(-2)
+      .map(({ type, reason }) => [type, reason]),
+    [
+      ["released", "owner-hold"],
+      ["resumed", "owner-request"],
+    ],
+  );
+  assert.equal(
+    new Set(replay(run).map(({ id }) => id)).size,
+    replay(run).length,
+  );
+});
+
+test("work completing between passes is drained even when the next usage reading reopens claims", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+  });
+  await run.tick();
+  run.usage["claude-code"] = 92;
+  await run.tick();
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  run.usage["claude-code"] = 89;
+  await run.tick();
+  assert.deepEqual(
+    replay(run)
+      .slice(-3)
+      .map(({ type }) => type),
+    ["drained", "released", "resumed"],
+  );
+  assert.equal(run.status().providers[0].claimsHeld, false);
+  await run.tick();
+  assert.equal(replay(run).filter(({ type }) => type === "drained").length, 1);
+});
+
+test("unknown usage retains hold evidence until reset and public output excludes provider errors and raw fields", async (t) => {
+  const secret = "provider-secret-raw-output";
+  const run = host(t, {
+    repositories: {},
+    remotes: {},
+    configuration: { usage: thresholds },
+    usage: { "claude-code": { used: 96, reset }, codex: new Error(secret) },
+  });
+  await run.tick();
+  run.usage["claude-code"] = new UsageReadError(secret, { status: 403 });
+  run.clock.now = new Date("2026-10-09T12:25:00Z");
+  await run.tick();
+  assert.deepEqual(run.status().providers[0].usage, { state: "unknown" });
+  assert.equal(run.status().providers[0].usageHold.used, 96);
+  assert.equal(run.status().providers[0].claimsHeld, true);
+  run.interrupt();
+  run.clock.now = new Date(reset);
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.status().providers[0].usageHold, null);
+  assert.equal(run.status().providers[0].claimsHeld, false);
+  assert.deepEqual(
+    replay(run)
+      .slice(-2)
+      .map(({ type }) => type),
+    ["released", "resumed"],
+  );
+  run.clock.now = new Date("2026-10-09T14:10:00Z");
+  run.usage["claude-code"] = { used: 92, reset: secret };
+  await restarted.tick();
+  const output =
+    readFileSync(join(run.state, "status.json"), "utf8") +
+    readFileSync(join(run.state, "events.jsonl"), "utf8");
+  assert.doesNotMatch(output, /provider-secret|ghs_|claude-secret|agent\.log/);
+  assert.equal(run.launched.length, 0);
+});
+
+for (const boundary of [
+  "checkpoint",
+  "partial append",
+  "append sync",
+  "policy write",
+  "final checkpoint",
+] as const) {
+  test(`a failed ${boundary} preserves transition identity and recovers before another pass`, async (t) => {
+    const run = host(t, {
+      repositories: {},
+      remotes: {},
+      configuration: { usage: thresholds },
+      usage: { "claude-code": 10 },
+    });
+    await run.tick();
+    run.usage["claude-code"] = { used: 92, reset };
+    const rename = fs.renameSync;
+    const write = fs.writeSync;
+    const sync = fs.fsyncSync;
+    let checkpoints = 0;
+    let failed = false;
+    const fail = () => {
+      failed = true;
+      throw new Error("fixture persistence failure");
+    };
+    const mocks = [
+      t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+        if (String(to).endsWith("events-state.json")) {
+          checkpoints++;
+          if (
+            (boundary === "checkpoint" && checkpoints === 1) ||
+            (boundary === "final checkpoint" && checkpoints === 2)
+          )
+            fail();
+        }
+        if (boundary === "policy write" && String(to).endsWith("usage.json"))
+          fail();
+        return rename(from, to);
+      }),
+      t.mock.method(
+        fs,
+        "writeSync",
+        (
+          fd: number,
+          data: Uint8Array | string,
+          ...args: (number | string | null | undefined)[]
+        ) => {
+          if (
+            boundary === "partial append" &&
+            Buffer.isBuffer(data) &&
+            data.includes(Buffer.from('"type":"held"'))
+          ) {
+            write(fd, data, 0, 31);
+            fail();
+          }
+          return Reflect.apply(write, fs, [fd, data, ...args]);
+        },
+      ),
+      t.mock.method(fs, "fsyncSync", (fd: number) => {
+        if (
+          boundary === "append sync" &&
+          fs.fstatSync(fd).ino ===
+            fs.statSync(join(run.state, "events.jsonl")).ino
+        )
+          fail();
+        return sync(fd);
+      }),
+    ];
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(run.tick(), /fixture persistence failure/);
+    } finally {
+      for (const mocked of mocks) mocked.mock.restore();
+      syncBuiltinESMExports();
+    }
+    assert.equal(failed, true);
+    const before = replay(run);
+    if (boundary === "partial append") {
+      assert.equal(before.length, 0);
+      assert.ok(readFileSync(join(run.state, "events.jsonl")).length > 0);
+    }
+    run.interrupt();
+    run.clock.now = new Date("2026-10-09T12:05:00Z");
+    run.usage["claude-code"] = null;
+    const restarted = run.restart();
+    if (boundary === "checkpoint")
+      run.usage["claude-code"] = { used: 92, reset };
+    await restarted.tick();
+    const recovered = replay(run);
+    assert.deepEqual(
+      recovered.map(({ type }) => type),
+      ["held", "drain_started", "drained"],
+    );
+    assert.deepEqual(recovered.slice(0, before.length), before);
+    if (boundary !== "checkpoint")
+      assert.equal(recovered[0].observedAt, "2026-10-09T12:00:00.000Z");
+    const persisted = JSON.parse(
+      readFileSync(join(run.state, "usage.json"), "utf8"),
+    );
+    assert.equal(persisted["claude-code"].hold.used, 92);
+    await restarted.tick();
+    assert.deepEqual(replay(run), recovered);
+  });
+}
+
+test("a resume whose policy write fails replays its original events and consumes its request once", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: ownerResume },
+    usage: { "claude-code": { used: 92, reset } },
+  });
+  await run.tick();
+  resumeCommand(run, "claude-code", "--drain-threshold", "94");
+  const rename = fs.renameSync;
+  const mocked = t.mock.method(
+    fs,
+    "renameSync",
+    (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to).endsWith("owner.json"))
+        throw new Error("fixture owner failure");
+      return rename(from, to);
+    },
+  );
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(run.tick(), /fixture owner failure/);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+  const before = replay(run);
+  assert.deepEqual(
+    before.slice(-3).map(({ type }) => type),
+    ["released", "reserve_granted", "resumed"],
+  );
+  assert.equal(readdirSync(join(run.state, "requests")).length, 1);
+  run.interrupt();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.deepEqual(replay(run), before);
+  assert.deepEqual(readdirSync(join(run.state, "requests")), []);
+  assert.equal(run.status().providers[0].reserve.drainThreshold, 94);
+  assert.equal(run.status().providers[0].claimsHeld, false);
 });
 
 test("an image that does not build pauses only its repository until it builds", async (t) => {
@@ -1158,10 +1569,10 @@ test("image retention and cache pruning failures are reported without changing t
   });
   await run.tick();
   // The providers' launches can finish in either order.
-  assert.deepEqual(
-    run.launched.map(({ options }) => options.name).sort(),
-    ["acme/widgets#4", "acme/widgets#5"],
-  );
+  assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
+    "acme/widgets#4",
+    "acme/widgets#5",
+  ]);
   assert.equal(run.status().repositories[0].state, "running");
   await run.tick();
   assert.deepEqual(
@@ -3055,19 +3466,33 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
     assert.deepEqual(issue.comments, [thresholdComment()]);
     assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
   }
+  const provider = run.status().providers[0];
+  assert.equal(provider.running, 0);
+  assert.equal(provider.paused, 2);
+  assert.equal(provider.drained, true);
+  const thresholdEvents = replay(run).filter(
+    ({ type }) => type === "paused_at_threshold",
+  );
+  assert.equal(thresholdEvents.length, 1);
+  assert.equal(thresholdEvents[0].state.running, 2);
+  assert.equal(replay(run).at(-1)?.type, "drained");
   assert.equal(
     held(run, 4),
     `relaunch waits: claude-code reached its pause threshold (resets ${reset}); usage 96% is at or above the 95% pause threshold`,
   );
   // The drain threshold still holds it; a reading below it relaunches both.
   run.usage["claude-code"] = 92;
-  await run.tick();
+  const beforeRestart = replay(run);
+  run.interrupt();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.deepEqual(replay(run), beforeRestart);
   assert.match(
     held(run, 4)!,
     /usage 92% is at or above the 90% drain threshold$/,
   );
   run.usage["claude-code"] = 89;
-  const relaunched = launchesOf(await run.tick());
+  const relaunched = launchesOf(await restarted.tick());
   assert.deepEqual(
     relaunched.map(({ repository, issue, attempt, relaunch }) => ({
       repository,
@@ -3088,6 +3513,14 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
   );
   assert.deepEqual(widgets.labels, ["ready-for-agent", "factory:running"]);
   assert.equal(widgets.comments.length, 1);
+  assert.equal(run.status().providers[0].paused, 0);
+  assert.equal(run.status().providers[0].running, 2);
+  assert.equal(run.status().providers[0].claimsHeld, false);
+  assert.equal(
+    replay(run).filter(({ type }) => type === "paused_at_threshold").length,
+    1,
+  );
+  assert.equal(replay(run).at(-1)?.type, "resumed");
 });
 
 function launchesOf(decisions: Decision[]) {

@@ -105,6 +105,11 @@ repository-specific labels and prompts, configuration edits on the default
 branch, run settling while configuration or the Dockerfile is missing, and
 paused runs: their label writes, single comment, recovery and resume,
 including runs stopped at the pause threshold and their kill and exit races.
+They also replay the public `events.jsonl` stream as an external consumer,
+cover provider status with an empty frontier, and inject filesystem failures
+at the event checkpoint, short append, append sync, policy write and checkpoint
+completion. These fixtures verify stable identities after recovery and keep
+owner releases separate from automatic usage releases and reserve grants.
 Each
 provider adapter's tests read raw logs shaped like Sandcastle's file display
 for its usage-limit errors. `test/usage.test.ts` drives the host's usage
