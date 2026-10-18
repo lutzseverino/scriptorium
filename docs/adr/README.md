@@ -14,3 +14,6 @@ This directory records consequential decisions local to the factory.
 - [Retain sandbox images the factory can prove it owns](0004-retain-sandbox-images-the-factory-can-prove-it-owns.md):
   automatic bounded retention of sandbox image pairs, and build cache isolated
   in the factory's own builder so only that cache is pruned.
+- [Default the factory's own comment wording](0005-default-the-factorys-own-comment-wording.md):
+  optional deterministic comment templates default the factory's own reports
+  while other products' conventions remain explicit configuration.

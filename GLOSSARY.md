@@ -16,6 +16,11 @@ A version of the factory, published from this repository under its own version
 numbers, that a host installs.
 _Avoid_: Repo Canon release, source publication
 
+**Comment template**:
+A factory configuration string the factory fills in to word one of its issue
+comments; the factory's own wording when absent.
+_Avoid_: Comment prompt, agent-written comment
+
 **Interrupted run**:
 A run whose sandbox a factory restart stopped, which launches again as the same
 attempt on its branch instead of ending with a run outcome.
