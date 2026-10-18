@@ -240,7 +240,7 @@ test("a pause threshold below the drain threshold is refused", (t) => {
   });
 });
 
-test("for one release the legacy usageThreshold is read as the drain threshold, with a warning", () => {
+test("for one release the legacy usageThreshold is read as the drain threshold, with a callback warning", () => {
   const { configuration, warnings } = read(fixture("legacy"));
   assert.deepEqual(configuration, {
     ...read(fixture("valid")).configuration,
@@ -254,6 +254,25 @@ test("for one release the legacy usageThreshold is read as the drain threshold, 
   assert.deepEqual(warnings, [
     `The host configuration ${fixture("legacy")}: usageThreshold is deprecated and read as usage.drainThreshold for this factory release; replace it with "usage": { "drainThreshold": 80 }`,
   ]);
+});
+
+test("one-argument callers migrate usageThreshold and warn on stderr", () => {
+  const validator = new URL("../src/host-configuration.ts", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { readHostConfiguration } from ${JSON.stringify(validator)};
+       console.log(JSON.stringify(readHostConfiguration(process.argv[1])));`,
+      fixture("legacy"),
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const { configuration, warnings } = read(fixture("legacy"));
+  assert.deepEqual(JSON.parse(result.stdout), configuration);
+  assert.equal(result.stderr, `${warnings[0]}\n`);
 });
 
 test("the legacy usageThreshold is refused alongside usage, and named when invalid", (t) => {

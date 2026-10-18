@@ -26,7 +26,7 @@ export function hostStatus(
   updatedAt: string,
   repositories: { name: string; paused: string | null }[],
   decisions: Decision[],
-  providers: ProviderStatus[],
+  providers: ProviderStatus[] = [],
 ): Status {
   return {
     updatedAt,
