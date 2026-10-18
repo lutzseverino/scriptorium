@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import { test } from "node:test";
 import { createRegistry } from "../src/providers.ts";
 import { UsageReadError } from "../src/providers/usage.ts";
@@ -110,6 +111,105 @@ test("Claude Code usage is read from its endpoint with the token file, not the e
   ]);
 });
 
+test("a renewed Claude usage login is reread independently of the launch token", async (t) => {
+  const root = directory(t);
+  const credential = join(root, "setup-token");
+  const usageCredential = join(root, "usage.json");
+  const tokens: string[] = [];
+  const ports = fakePorts({
+    fetch: async (_url, init) => {
+      tokens.push(new Headers(init?.headers).get("authorization")!);
+      return new Response(
+        '{"five_hour":{"utilization":12},"seven_day":{"utilization":73}}',
+      );
+    },
+  });
+  const adapter = createRegistry(
+    { "claude-code": { credential, usageCredential } },
+    ports.ports,
+  ).providers.get("claude-code")!;
+  const login = (accessToken: string) =>
+    JSON.stringify({
+      claudeAiOauth: { accessToken, expiresAt: Date.now() + 3_600_000 },
+    });
+  writeFileSync(usageCredential, login("synthetic-usage-first"));
+  // A usage read needs no launch credential and no refresh token.
+  assert.equal(await adapter.readUsage(), 73);
+  writeFileSync(`${usageCredential}.next`, login("synthetic-usage-renewed"));
+  renameSync(`${usageCredential}.next`, usageCredential);
+  assert.equal(await adapter.readUsage(), 73);
+  assert.deepEqual(tokens, [
+    "Bearer synthetic-usage-first",
+    "Bearer synthetic-usage-renewed",
+  ]);
+
+  writeFileSync(credential, "synthetic-launch-token");
+  writeFileSync(usageCredential, "malformed synthetic-usage-secret");
+  const delivered: string[] = [];
+  await adapter.launch({
+    ...request,
+    delivered: (secret) => delivered.push(secret),
+  });
+  assert.deepEqual(delivered, ["synthetic-launch-token"]);
+  assert.deepEqual(ports.runs[0].run.agent.env, {
+    CLAUDE_CODE_OAUTH_TOKEN: "synthetic-launch-token",
+  });
+  assert.deepEqual(ports.runs[0].docker.mounts, []);
+});
+
+test("unusable Claude usage logins fail safely without a request or launch-token fallback", async (t) => {
+  const root = directory(t);
+  const credential = join(root, "setup-token");
+  const usageCredential = join(root, "usage.json");
+  writeFileSync(credential, "synthetic-launch-secret");
+  let requests = 0;
+  const ports = fakePorts({
+    fetch: async () => {
+      requests++;
+      return new Response("{}");
+    },
+  });
+  const adapter = createRegistry(
+    { "claude-code": { credential, usageCredential } },
+    ports.ports,
+  ).providers.get("claude-code")!;
+  for (const content of [
+    undefined,
+    "synthetic-login-secret not JSON",
+    "null",
+    "[]",
+    "{}",
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "synthetic-login-secret" },
+    }),
+    ...[null, "", 42, "token with spaces"].map((accessToken) =>
+      JSON.stringify({
+        claudeAiOauth: { accessToken, expiresAt: Date.now() + 3_600_000 },
+      }),
+    ),
+    ...[null, "tomorrow", "9999999999999", 0, Date.now() - 1].map((expiresAt) =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "synthetic-login-secret",
+          expiresAt,
+          refreshToken: "synthetic-refresh-secret",
+        },
+      }),
+    ),
+  ]) {
+    if (content === undefined) rmSync(usageCredential, { force: true });
+    else writeFileSync(usageCredential, content);
+    await assert.rejects(adapter.readUsage(), (error) => {
+      assert.ok(error instanceof UsageReadError);
+      assert.doesNotMatch(inspect(error), /synthetic-.*secret/);
+      return true;
+    });
+  }
+  assert.equal(requests, 0);
+  await adapter.launch(request);
+  assert.equal(ports.runs.length, 1);
+});
+
 test("Claude Code usage is unknown when the endpoint's answer omits the windows", async (t) => {
   for (const [response, expected] of [
     [new Response('{"five_hour":null,"seven_day":null}'), null],
@@ -170,14 +270,22 @@ test("a Claude Code usage answer that is not JSON fails without quoting it", asy
   });
 });
 
-test("a Claude Code usage read that cannot reach the endpoint fails as it failed", async (t) => {
+test("a Claude Code transport failure hides credentials and response details", async (t) => {
   const ports = fakePorts({
     fetch: async () => {
-      throw new TypeError("fetch failed");
+      throw new TypeError(
+        "fetch failed: synthetic-token-secret response-body",
+        {
+          cause: new Error("synthetic-refresh-secret"),
+        },
+      );
     },
   });
-  await assert.rejects(claudeCode(t, ports).adapter.readUsage(), {
-    message: "fetch failed",
+  await assert.rejects(claudeCode(t, ports).adapter.readUsage(), (error) => {
+    assert.ok(error instanceof UsageReadError);
+    assert.equal(error.message, "the Claude Code usage request failed");
+    assert.doesNotMatch(inspect(error), /synthetic-|response-body/);
+    return true;
   });
 });
 

@@ -37,7 +37,7 @@ export type LaunchRequest = {
 
 export type ProviderAdapter = {
   readonly name: string;
-  // The host file holding the provider's one credential.
+  // The host file holding the provider's launch credential.
   readonly credential: string;
   // The reasoning efforts the agent CLI accepts, and the one a model without
   // `@<effort>` runs at.
@@ -78,7 +78,11 @@ export const defaultPorts: ProviderPorts = {
 
 const adapters: Record<
   string,
-  (credential: string, ports: ProviderPorts) => ProviderAdapter
+  (
+    credential: string,
+    ports: ProviderPorts,
+    usageCredential?: string,
+  ) => ProviderAdapter
 > = {
   "claude-code": claudeCodeAdapter,
   codex: codexAdapter,
@@ -88,7 +92,7 @@ const adapters: Record<
 export const adapterNames = Object.keys(adapters);
 
 // The host configuration's `providers.<name>`, as far as the registry reads it.
-export type ProviderSettings = { credential: string };
+export type ProviderSettings = { credential: string; usageCredential?: string };
 
 export type Model = { provider: string; model: string; effort: string };
 
@@ -118,10 +122,12 @@ export function createRegistry(
         .join("\n"),
     );
   const providers = new Map(
-    Object.entries(configured).map(([name, { credential }]) => [
-      name,
-      adapters[name](credential, ports),
-    ]),
+    Object.entries(configured).map(
+      ([name, { credential, usageCredential }]) => [
+        name,
+        adapters[name](credential, ports, usageCredential),
+      ],
+    ),
   );
   const configuredNames = [...providers.keys()];
 

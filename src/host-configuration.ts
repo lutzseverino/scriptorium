@@ -1,14 +1,18 @@
-// The host configuration: the operator's one JSON file for this host. Every
-// field is required, an unknown field is refused, and nothing comes from the
-// environment.
+// The host configuration: the operator's one JSON file for this host. Only the
+// Claude usage credential is optional; unknown fields are refused, and nothing
+// comes from the environment.
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { adapterNames, createRegistry } from "./providers.ts";
+import {
+  adapterNames,
+  createRegistry,
+  type ProviderSettings,
+} from "./providers.ts";
 
 export type HostConfiguration = {
   // Each repository the factory serves, as `<owner>/<name>`.
   repositories: string[];
-  providers: Record<string, { cap: number; credential: string }>;
+  providers: Record<string, ProviderSettings & { cap: number }>;
   models: { default: string; retry: string };
   timeLimitMinutes: number;
   usageThreshold: number;
@@ -66,13 +70,20 @@ function hostConfigurationProblems(value: unknown): string[] {
       { unique: (name) => name.toLowerCase(), nonEmpty: true },
     ),
     providers: record(
-      object({
-        cap: number(
-          (cap) => Number.isSafeInteger(cap) && cap >= 0,
-          "is not a whole number of agents",
-        ),
-        credential: text(isAbsolute, "is not an absolute path"),
-      }),
+      (entry, path, problems, name) =>
+        object(
+          {
+            cap: number(
+              (cap) => Number.isSafeInteger(cap) && cap >= 0,
+              "is not a whole number of agents",
+            ),
+            credential: text(isAbsolute, "is not an absolute path"),
+            ...(name === "claude-code" && {
+              usageCredential: text(isAbsolute, "is not an absolute path"),
+            }),
+          },
+          ["usageCredential"],
+        )(entry, path, problems),
       (name) =>
         adapterNames.includes(name)
           ? null
@@ -132,7 +143,7 @@ function field(path: string, name: string): string {
   return path === "" ? name : `${path}.${name}`;
 }
 
-function object(fields: Record<string, Check>): Check {
+function object(fields: Record<string, Check>, optional: string[] = []): Check {
   return (value, path, problems) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       problems.push(`${path || "the configuration"}: is not an object`);
@@ -144,9 +155,10 @@ function object(fields: Record<string, Check>): Check {
           `${field(path, name)}: is not a host configuration field`,
         );
     for (const [name, check] of Object.entries(fields))
-      if (!Object.hasOwn(value, name))
-        problems.push(`${field(path, name)}: is missing`);
-      else
+      if (!Object.hasOwn(value, name)) {
+        if (!optional.includes(name))
+          problems.push(`${field(path, name)}: is missing`);
+      } else
         check(
           (value as Record<string, unknown>)[name],
           field(path, name),
@@ -155,7 +167,15 @@ function object(fields: Record<string, Check>): Check {
   };
 }
 
-function record(check: Check, key: (name: string) => string | null): Check {
+function record(
+  check: (
+    value: unknown,
+    path: string,
+    problems: string[],
+    name: string,
+  ) => void,
+  key: (name: string) => string | null,
+): Check {
   return (value, path, problems) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       problems.push(`${path}: is not an object`);
@@ -164,7 +184,7 @@ function record(check: Check, key: (name: string) => string | null): Check {
     for (const [name, entry] of Object.entries(value)) {
       const problem = key(name);
       if (problem) problems.push(`${field(path, name)}: ${problem}`);
-      else check(entry, field(path, name), problems);
+      else check(entry, field(path, name), problems, name);
     }
   };
 }
