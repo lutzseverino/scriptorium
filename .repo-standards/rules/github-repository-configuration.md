@@ -1,8 +1,11 @@
 # GitHub repository configuration rules
 
 These rules cover the repository's GitHub settings, the workflows Repo Canon
-installs, and the optional pull request reviewer file. They apply to the whole
-repository.
+installs, the optional pull request reviewer file, and the GitHub side of
+issue and pull request work. They apply to all work in the repository,
+including tracker work that changes no file. The contribution guide holds the
+general issue, implementation contract, readiness, check, review thread,
+findings, delivery, credential and comment requirements.
 
 ## Labels
 
@@ -114,7 +117,7 @@ fields are invalid, at every level.
 - `bounds.responseMinutes` and `bounds.reviewMinutes`: positive finite numbers
   measured from the latest request.
 - `bounds.reviewRequests`: optional positive integer; the total request bound
-  defined in the contribution guide's Merging section.
+  defined under [review requests](#review-requests).
 
 A review of the pull request's head is complete when either holds:
 
@@ -155,3 +158,144 @@ For example, with placeholder values:
   }
 }
 ```
+
+## Review requests
+
+With a reviewer file, a review request is the pull request's opening when
+`request.onOpen` is true, or a later comment whose whole trimmed body equals
+`request.comment`; a push is never one.
+
+When `request.onOpen` is false and the pull request has had no review request,
+an agent must post the review request comment for its head before it first
+waits on the pull request. The request bound cannot stop this first request,
+since none has been counted yet.
+
+After that first request, an agent must post the review request comment for a
+new head when its push fixes, fully or partly, a review finding the
+contribution guide does not let it decline, and the request bound has not been
+reached. No other push gets a request: a push that only follows declines,
+changes only tests, documentation or wording, or only fixes a failing check
+gets none.
+
+The optional `bounds.reviewRequests` limits the total review requests a pull
+request gets. Count the opening when `request.onOpen` is true and every comment
+whose whole trimmed body equals `request.comment`, whoever posted it. Once that
+count reaches the bound, no agent requests another review. Without the field
+there is no count bound.
+
+The bound creates no reason to decline a real finding and no grouped follow-up
+issue. After the bound is reached, fix every finding the contribution guide
+does not let the agent decline and push without another request, and answer
+any review that arrives anyway.
+
+## Review request comments
+
+Write the configured reviewer's request phrase only in a comment that requests
+a review. That comment holds exactly `request.comment`, with no AI disclaimer:
+it is exempt from the contribution guide's disclaimer rule. The phrase never
+appears in prose, quotations, or code spans in any other comment, issue or pull
+request title, or body. To mention the request, describe it as "the review
+request comment".
+
+## Merging with a configured reviewer
+
+With a reviewer file, a pull request also waits for the configured reviewer's
+review of its latest head before it merges. When the configured reviewer does
+not review the latest head, because it is unavailable, no review was requested
+after the head's push, it did not respond within `bounds.responseMinutes` of
+the latest review request, or no review arrived within `bounds.reviewMinutes`
+of it, the pull request merges once the contribution guide's other merge
+conditions hold. The merging agent then comments on it that the configured
+reviewer did not review that head and why, under the contribution guide's
+comment rules. For a head with no request after its push, the comment says
+whether the request rule required none or the bound was reached. Without the
+file, no reviewer wait or comment about an absent review is required.
+
+## Pull request head with no check
+
+A pull request head that has no check counts as having its checks passed once
+5 minutes have passed since the later of the pull request's opening and a push
+of that head that GitHub recorded, and only while no workflow run for the head
+is unfinished or counted as failed. A
+workflow whose latest run failed with no check from that run or attempt counts
+as a failed check. A head with no recorded push and no check or workflow run
+never settles its checks: they neither pass nor fail. The `babysit` skill's
+wait applies this rule.
+
+## Readiness roles
+
+Applying `ready-for-agent` or `ready-for-human` needs the repository `admin`,
+`maintain`, or `triage` role. The `triage` role is the
+explicit authorization for a triaging agent. A `write` role, an author
+association, a bot identity, or a passing structure check supplies no
+authority, and the issue-contract workflow removes readiness that an actor
+without one of these roles applied.
+
+## Native blockers
+
+GitHub's native issue dependencies are the canonical blocking relationship.
+When adding a native blocker, pass the blocking issue's numeric database ID as
+`issue_id`, not its issue number or `node_id`.
+
+## Agent Brief
+
+The issue-contract workflow enforces this shape for a triaged request's Agent
+Brief comment; the `triage` skill is a method for writing one.
+
+The comment starts with the triage disclaimer, then a blank line, then the
+`## Agent Brief` heading:
+
+<!-- prettier-ignore -->
+```markdown
+> *This was generated by AI during triage.*
+
+## Agent Brief
+```
+
+Nothing else comes between the disclaimer and the heading; other triage notes
+follow the brief. Under the heading, each of these fields starts a line with
+its name and a colon in bold, such as `**Category:**`, and holds content that
+is not a placeholder:
+
+- Category
+- Summary
+- Current behavior
+- Desired behavior
+- Key interfaces
+- Acceptance criteria
+- Out of scope
+
+Category is `bug` or `enhancement`, and the issue's one category label is the
+same. Empty content, template comments, empty task list items, GitHub's
+`_No response_`, `TBD`, `TODO` and bracketed prompts such as
+`[describe the bug]` are placeholders. Heading level, heading style and the
+casing of the heading and field names do not matter, and the workflow also
+accepts the disclaimer emphasized with `_` or without the blank line before
+the heading. Contract syntax inside code or HTML comments is example content,
+not part of the brief.
+
+## Wayfinder maps and children
+
+The issue-contract workflow enforces these labels, sections and parents for
+Wayfinder planning issues; the `wayfinder` skill is a method for charting and
+working a map.
+
+A map carries `wayfinder:map` and no Wayfinder child label. Its body has the
+sections Destination, Notes, Decisions so far, Not yet specified, and Out of
+scope. Each needs content that is not a placeholder, except Decisions so far,
+which may be empty. The map lists no open children: they are found by querying
+its open sub-issues. Decisions so far indexes closed children, one line each,
+by title and link. The workflow does not check these two index conventions.
+
+A child carries exactly one of `wayfinder:research`, `wayfinder:prototype`,
+`wayfinder:grilling`, and `wayfinder:task`, and never `wayfinder:map` with it.
+Its body has a Question section that is not a placeholder, and its parent is an
+issue labeled `wayfinder:map`. Make the child a native sub-issue of its map:
+on GitHub the native parent relationship is canonical. For compatibility, the
+workflow also accepts the first issue reference in the child's `Parent`
+section when the native relationship is absent or GitHub's relationship
+endpoint is unavailable; a `Part of` line alone does not link a child.
+
+Maps and children carry no readiness and no workflow state label. Their
+eligibility uses open state, assignment and native blockers, and the workflow
+rejects readiness labels on them and never gives them a workflow state.

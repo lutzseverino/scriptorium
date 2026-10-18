@@ -19,6 +19,9 @@ version that matters, ask the maintainer, and assess the declaration as
 Assess `factory-sandbox-image` as `satisfied` once the file meets its rules,
 citing the development guide's lines for each toolchain tool and the installed
 `.agents/skills/babysit/SKILL.md` for Node.js. No check reads the file; whether
-it installs the right toolchain is an agent judgment. The installed workflow's
-build behavior is described in the
-[sandbox image workflow development guide](../docs/development/sandbox-image-workflow.md).
+it installs the right toolchain is an agent judgment.
+
+The installed `sandbox-image` workflow builds `.factory/Dockerfile` on standard
+input without a build context on pull requests that change the Dockerfile or
+the workflow. A failing toolchain command fails the job. The workflow builds
+only the toolchain image and runs nothing inside it.

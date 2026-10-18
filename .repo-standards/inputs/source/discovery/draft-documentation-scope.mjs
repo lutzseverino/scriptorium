@@ -41,12 +41,6 @@ const reservedPaths = [
   ]),
 ];
 
-// The system skills of Repository Standards 6.x, which an update from it still
-// holds while this draft runs and removes in the same run.
-const retiredPaths = ["adopt-standards", "standards-updates"].flatMap(
-  (name) => [`.agents/skills/${name}`, `.claude/skills/${name}`],
-);
-
 // The other declarations' targets come from the source manifest beside this
 // script, which the declaration retains with it, so it lies beside the script
 // in the acquired source and in the retained one alike.
@@ -66,11 +60,9 @@ function isWithin(path, directory) {
   return path === directory || isInside(path, directory);
 }
 
-// Whether the draft leaves a path out as reserved or retired.
+// Whether the draft leaves a path out as reserved.
 function isReserved(path) {
-  return [...reservedPaths, ...retiredPaths].some((reserved) =>
-    isWithin(path, reserved),
-  );
+  return reservedPaths.some((reserved) => isWithin(path, reserved));
 }
 
 function baseName(path) {
@@ -338,7 +330,7 @@ function ownership(declarations) {
   };
 }
 
-// The regular files of the copy, outside the reserved and retired paths,
+// The regular files of the copy, outside the reserved paths,
 // reached through real directories only, and the directories that hold them.
 // The copy holds the files Git keeps, tracked or not ignored, so these are the
 // paths the CLI's discovery observation offers as evidence.
@@ -401,18 +393,11 @@ const questions = {
     `${code(directory)} must be a directory to hold its documentation index, but it is not. Should it be removed or renamed?`,
   notIndex: (path) =>
     `${code(path)} must be a file, the documentation index of its directory, but it is a directory. Should it be removed or renamed?`,
-  unsupported: (index, directory) =>
-    `Repository Standards accepts the new ${code(index)} only with evidence inside ${code(directory)}, where Git keeps no file yet. Should that directory's first content be committed in a separate reviewed change before adopting again?`,
 };
 
-// What the draft covers, and the retired skills it leaves out because the run
-// that drafts it removes them.
-function coverage(retired) {
-  const left =
-    retired.length > 0
-      ? ` The retired Repository Standards ${retired.length === 1 ? "skill" : "skills"} ${series(retired.map(code))} ${retired.length === 1 ? "is" : "are"} left out too, because the run that drafts this scope removes ${retired.length === 1 ? "it" : "them"}.`
-      : "";
-  return `Drafted from the repository tree by ${code("discovery/draft-documentation-scope.mjs")}: every file Git keeps under the documentation root ${documentationRoot}, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each ${directoryIndex} outside the documentation roots. Link-repair files and move destinations enter when the work needs them.${left}`;
+// What the draft covers.
+function coverage() {
+  return `Drafted from the repository tree by ${code("discovery/draft-documentation-scope.mjs")}: every file Git keeps under the documentation root ${documentationRoot}, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each ${directoryIndex} outside the documentation roots. Link-repair files and move destinations enter when the work needs them.`;
 }
 
 // A draft in progress: its candidates by path, the new indexes among them by
@@ -451,26 +436,17 @@ class Draft {
       .map((candidate) => candidate.path);
   }
 
-  // A new index that cites nothing lacks the evidence Repository Standards
-  // requires; a question says what it needs.
-  evidenceQuestions() {
-    return [...this.createdIndexes]
-      .filter(([path]) => this.candidates.get(path)?.evidence.length === 0)
-      .map(([path, directory]) => questions.unsupported(path, directory));
-  }
-
-  proposal(retired) {
+  proposal() {
     return {
       format: proposalFormat,
       declarations: [
         {
           id: declarationId,
-          coverage: coverage(retired),
+          coverage: coverage(),
           candidates: [...this.candidates.values()].sort(byPath),
           unresolved: [
             ...this.unresolved.values(),
             ...this.otherQuestions,
-            ...this.evidenceQuestions(),
           ].sort(),
         },
       ],
@@ -478,10 +454,9 @@ class Draft {
   }
 }
 
-// A new index for a directory. It cites its directory, which Repository
-// Standards requires to hold a file for a missing README; without one, the
-// index is still drafted, citing nothing. A directory path that is not a
-// directory cannot hold an index, which is a question.
+// A new index cites its directory when the copy holds a regular file there,
+// otherwise nothing: included missing files need no evidence. A directory path
+// that is not a directory cannot hold an index, which is a question.
 function createIndex(draft, context, directory) {
   const path = `${directory}/${directoryIndex}`;
   if (context.owner(path) || draft.candidates.has(path)) return;
@@ -697,9 +672,7 @@ function draftDocumentationScope({ projectRoot, profile }) {
   askStrayEntries(draft, model);
   askCandidateRoots(draft, context);
   draftOutsideRoot(draft, context);
-  return draft.proposal(
-    retiredPaths.filter((path) => entryAt(projectRoot, path)).sort(),
-  );
+  return draft.proposal();
 }
 
 try {

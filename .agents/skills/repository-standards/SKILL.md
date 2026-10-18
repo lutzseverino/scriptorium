@@ -1,12 +1,37 @@
 ---
 name: repository-standards
-description: Look up installed rules before changing a file in a project with .repo-standards/. Report available CLI and standards updates at the start of work, or when asked about its pins.
+description: In a project with .repo-standards/, read the repository-wide installed rules and report available CLI and standards updates at the start of any work, including work that changes no file. Look up installed rules before changing a file.
 disable-model-invocation: false
 ---
 
 This skill looks up the standards source's installed rules and reports available
 updates. Requirements come from those rules; this skill adds none of its own.
 An update starts only on the maintainer's instruction.
+
+## At the start of any work
+
+At the start of any work in the project, including work that changes no file,
+such as applying labels on a hosting platform or asking the owner a
+question, run the pinned CLI's `rules` with no path once, from the
+Git root, alongside the update notice under **Read the pins**:
+
+```sh
+.repo-standards/runtime/node_modules/.bin/repo-standards rules
+```
+
+It prints only the rules of repository-wide declarations, which govern any
+work in the project, and needs no network. Follow the printed rules throughout
+the work. If it fails:
+
+- A missing runtime or `CLI_PIN_MISMATCH`: restore the runtime as described
+  under **Read the pins**, then retry.
+- `ACTIVE_RUN`: read `.repo-standards/rules/README.md` and the installed rules
+  it lists as covering the whole repository, as for contextual work below.
+- `NO_SELECTION`: no rules are installed; continue.
+- Any other failure: report the diagnostic and resolve it before continuing.
+
+A failure of this lookup never suppresses the update notice, and a failure of
+the update notice never suppresses this lookup.
 
 ## Before changing a file
 
