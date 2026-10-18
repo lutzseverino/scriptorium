@@ -114,8 +114,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   else reply({ id: 1, result: {
     rateLimits: {
       limitId: "codex",
-      primary: { usedPercent: 31, windowDurationMins: 300, resetsAt: 1 },
-      secondary: { usedPercent: 64, windowDurationMins: 10080, resetsAt: 2 },
+      primary: { usedPercent: 31, windowDurationMins: 300, resetsAt: 1791990000 },
+      secondary: { usedPercent: 64, windowDurationMins: 10080, resetsAt: 1792000800 },
     },
   } });
 });
@@ -140,8 +140,9 @@ test("each Codex usage read signs in from a private copy of the current login th
     else process.env.CODEX_HOME = environment;
   });
 
-  // The fuller window is the weekly one.
-  assert.equal(await adapter.readUsage(), 64);
+  // The fuller window is the weekly one, resetting at its Unix seconds.
+  const weekly = { used: 64, reset: "2026-10-14T18:00:00.000Z" };
+  assert.deepEqual(await adapter.readUsage(), weekly);
   const first = fake.seen();
   assert.deepEqual(first.args, ["app-server"]);
   assert.notEqual(first.home, process.env.CODEX_HOME);
@@ -153,7 +154,7 @@ test("each Codex usage read signs in from a private copy of the current login th
 
   chmodSync(credential, 0o644);
   writeFileSync(credential, '{"tokens":{"access_token":"renewed"}}');
-  assert.equal(await adapter.readUsage(), 64);
+  assert.deepEqual(await adapter.readUsage(), weekly);
   assert.notEqual(fake.seen().home, first.home);
   assert.equal(fake.seen().auth, '{"tokens":{"access_token":"renewed"}}');
   assert.equal(existsSync(fake.seen().home), false);

@@ -1,7 +1,8 @@
-// The host's view of provider usage: each provider's last good reading and
-// when the provider may be read again and its unavailable episode, kept across
-// passes and restarts. Each pass reads every provider whose read is due and
-// hands the decision core only readings recent enough to trust.
+// The host's view of provider usage: each provider's last good reading, when
+// the provider may be read again, its unavailable episode and its usage hold,
+// kept across passes and restarts. Each pass reads every provider whose read
+// is due and hands the decision core only readings recent enough to trust,
+// and the usage holds they started.
 import {
   existsSync,
   mkdirSync,
@@ -10,8 +11,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import type { Usage } from "./factory.ts";
-import { UsageReadError } from "./providers/usage.ts";
+import {
+  reached,
+  type Settings,
+  type Usage,
+  type UsageHold,
+} from "./factory.ts";
+import { pauseDeadline } from "./pause.ts";
+import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 
 // How long a good reading stays usable, counted from when it was read; failed
 // and skipped reads don't renew it.
@@ -29,11 +36,14 @@ type ProviderUsage = {
   reading: Usage | null;
   nextRead: string | null;
   failure: UsageFailure | null;
+  hold: UsageHold | null;
 };
 
 export type UsagePorts = {
   providers: readonly string[];
-  read(provider: string): Promise<number | null>;
+  // The thresholds at or above which a reading starts or keeps a usage hold.
+  thresholds: Pick<Settings, "drainThreshold" | "pauseThreshold">;
+  read(provider: string): Promise<UsageWindow | null>;
   now(): Date;
   // Writes a line to the process log.
   report(line: string): void;
@@ -45,6 +55,7 @@ export function createUsage(ports: UsagePorts) {
   // Loaded on the first pass, which follows the host's own startup.
   let state: Record<string, ProviderUsage> | null = null;
   let saved = "";
+  let holds: Record<string, UsageHold | null> = {};
 
   function load(): Record<string, ProviderUsage> {
     if (!existsSync(ports.path)) return {};
@@ -66,6 +77,7 @@ export function createUsage(ports: UsagePorts) {
         reading: validReading(entry?.reading),
         nextRead: validTime(entry?.nextRead),
         failure: validFailure(entry?.failure),
+        hold: validHold(entry?.hold),
       };
     }
     return loaded;
@@ -98,15 +110,15 @@ export function createUsage(ports: UsagePorts) {
         ? "; the documented long-lived setup token may lack usage-read permission"
         : "";
     ports.report(
-      `usage for ${provider} is unreadable: ${reason}; ${current.nextRead ? `it is next read at ${current.nextRead}` : "it is read again next pass"}${permission}; a recent cached reading can still apply, but once it expires fresh launches proceed without the percentage gate`,
+      `usage for ${provider} is unreadable: ${reason}; ${current.nextRead ? `it is next read at ${current.nextRead}` : "it is read again next pass"}${permission}; a recent cached reading can still apply, and so does a usage hold until it ends, but once the reading expires without a hold fresh launches proceed without the usage thresholds`,
     );
   }
 
   async function attempt(provider: string, current: ProviderUsage) {
     try {
-      const used = await ports.read(provider);
+      const window = await ports.read(provider);
       current.nextRead = null;
-      if (used === null || !Number.isFinite(used))
+      if (window === null || !Number.isFinite(window.used))
         unavailable(
           provider,
           current,
@@ -114,10 +126,14 @@ export function createUsage(ports: UsagePorts) {
           "its answer holds no usage window",
         );
       else {
-        current.reading = { used, at: ports.now().toISOString() };
+        current.reading = {
+          used: window.used,
+          at: ports.now().toISOString(),
+          ...(window.reset !== null && { reset: window.reset }),
+        };
         if (current.failure !== null)
           ports.report(
-            `usage for ${provider} is readable again: ${used}% used`,
+            `usage for ${provider} is readable again: ${window.used}% used`,
           );
         current.failure = null;
       }
@@ -153,17 +169,49 @@ export function createUsage(ports: UsagePorts) {
     }
   }
 
+  // A provider's usage hold after this pass. A fresh reading at or above a
+  // threshold starts one, or keeps the one in force with that reading, and a
+  // fresh reading below every threshold ends it. Without a fresh reading, the
+  // hold lasts until its deadline, or until the thresholds no longer hold its
+  // reading. The hold's start and deadline never move while it lasts.
+  function nextHold(
+    previous: UsageHold | null,
+    reading: Usage | null,
+    now: Date,
+  ): UsageHold | null {
+    const current =
+      previous !== null &&
+      now.getTime() < Date.parse(previous.until) &&
+      reached(previous.used, ports.thresholds) !== null
+        ? previous
+        : null;
+    if (reading === null) return current;
+    if (reached(reading.used, ports.thresholds) === null) return null;
+    return {
+      ...reading,
+      since: current?.since ?? reading.at,
+      until:
+        current?.until ??
+        pauseDeadline(
+          reading.reset ?? null,
+          new Date(reading.at),
+        ).toISOString(),
+    };
+  }
+
   // Each provider's usage for this pass's snapshot: its reading while fresh,
   // otherwise null.
   async function read(): Promise<Record<string, Usage | null>> {
     state ??= load();
     const usage: Record<string, Usage | null> = {};
     const current: Record<string, ProviderUsage> = {};
+    holds = {};
     for (const provider of ports.providers) {
       const entry = (current[provider] = state[provider] ?? {
         reading: null,
         nextRead: null,
         failure: null,
+        hold: null,
       });
       if (
         entry.nextRead === null ||
@@ -171,13 +219,19 @@ export function createUsage(ports: UsagePorts) {
       )
         await attempt(provider, entry);
       usage[provider] = fresh(entry.reading, ports.now());
+      holds[provider] = entry.hold = nextHold(
+        entry.hold,
+        usage[provider],
+        ports.now(),
+      );
     }
     state = current;
     save(current);
     return usage;
   }
 
-  return { read };
+  // Each provider's usage hold as the latest pass left it, or null.
+  return { read, holds: () => holds };
 }
 
 // A reading the decision core may use: one read at most `usageFreshMinutes`
@@ -278,13 +332,25 @@ function httpDate(value: string, receivedAt: Date): number | null {
   return null;
 }
 
+// A record from before readings kept their reset has none.
 function validReading(value: unknown): Usage | null {
   const reading = value as Partial<Usage> | null;
-  return typeof reading?.used === "number" &&
-    Number.isFinite(reading.used) &&
-    validTime(reading.at) !== null
-    ? { used: reading.used, at: reading.at! }
-    : null;
+  if (
+    typeof reading?.used !== "number" ||
+    !Number.isFinite(reading.used) ||
+    validTime(reading.at) === null
+  )
+    return null;
+  const reset = validTime(reading.reset);
+  return { used: reading.used, at: reading.at!, ...(reset && { reset }) };
+}
+
+function validHold(value: unknown): UsageHold | null {
+  const reading = validReading(value);
+  const hold = value as Partial<UsageHold> | null;
+  const since = validTime(hold?.since);
+  const until = validTime(hold?.until);
+  return reading && since && until ? { ...reading, since, until } : null;
 }
 
 function validTime(value: unknown): string | null {

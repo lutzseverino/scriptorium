@@ -42,6 +42,7 @@ import {
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
 import type { LaunchRequest, Registry } from "./providers.ts";
+import type { UsageWindow } from "./providers/usage.ts";
 import type { PullRequestState } from "./run-outcome.ts";
 import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
@@ -64,7 +65,7 @@ export type HostPorts = {
   buildImage(dockerfile: string): Promise<string>;
   // The provider's usage as its adapter reads it, rejecting with a
   // `UsageReadError` when the provider refuses the read.
-  readUsage(provider: string): Promise<number | null>;
+  readUsage(provider: string): Promise<UsageWindow | null>;
   // Resolves or rejects when the run's agent exits.
   launch(provider: string, request: LaunchRequest): Promise<void>;
   // Removes every sandbox container on the host before it returns.
@@ -94,6 +95,9 @@ type HostRun = Run & {
   exited: boolean;
   exitedAt: Date | null;
   stopped: boolean;
+  // The pause its stop at the pause threshold fixed, which becomes how it
+  // ended once its agent exits, however it exits.
+  pausing: Pause | null;
   // A factory restart stopped its sandbox, so it launches again. A paused
   // run, which also launches again, records its pause as how it ended.
   interrupted: boolean;
@@ -137,12 +141,14 @@ export function createHost(
         cap,
       ]),
     ),
-    usageThreshold: configuration.usageThreshold,
+    drainThreshold: configuration.usage.drainThreshold,
+    pauseThreshold: configuration.usage.pauseThreshold,
     timeLimitMinutes: configuration.timeLimitMinutes,
     authorizedRoles: configuration.readiness.authorizedRoles,
   };
   const usage = createUsage({
     providers: Object.keys(configuration.providers),
+    thresholds: settings,
     read: ports.readUsage,
     now: ports.now,
     report,
@@ -375,7 +381,8 @@ export function createHost(
 
   // Before anything else, the first pass removes the sandboxes an earlier
   // process left and recovers unsettled runs: interrupted and paused ones
-  // relaunch, while orphans settle through the outcome table.
+  // relaunch, and so does one the earlier process was stopping at the pause
+  // threshold, as paused, while orphans settle through the outcome table.
   function start() {
     ports.stopSandboxes();
     const recovered: HostRun[] = [];
@@ -405,7 +412,9 @@ export function createHost(
             ? { interrupted: true }
             : pausedEnding(recorded)
               ? recoveredPause(recorded)
-              : { timedOut: false, pullRequest: "none", orphaned: true },
+              : recorded.pausing
+                ? { paused: recorded.pausing, commented: false }
+                : { timedOut: false, pullRequest: "none", orphaned: true },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
@@ -416,14 +425,18 @@ export function createHost(
   }
 
   // On a stop signal: stop claiming and launching, record every running run
-  // as interrupted, and remove the sandboxes without waiting for the runs.
+  // as interrupted, or as paused when the pause threshold was stopping it, and
+  // remove the sandboxes without waiting for the runs.
   function interrupt() {
     interrupting = true;
     for (const run of runs.filter((run) => !run.exited)) {
       run.exited = true;
       run.exitedAt = ports.now();
-      run.interrupted = true;
-      run.ended = { interrupted: true };
+      if (run.pausing) run.ended = { paused: run.pausing, commented: false };
+      else {
+        run.interrupted = true;
+        run.ended = { interrupted: true };
+      }
       // Its published log keeps what was copied; the raw log and the token go
       // with the sandbox.
       rmSync(run.sandbox, { recursive: true, force: true });
@@ -517,6 +530,7 @@ export function createHost(
       exited: false,
       exitedAt: null,
       stopped: false,
+      pausing: null,
       interrupted: false,
       settled: false,
     };
@@ -553,8 +567,8 @@ export function createHost(
         report(`run for ${repository}#${issue} ended with an error: ${error}`),
       )
       .then(async () => {
-        // An interrupted run's record and directory are already settled.
-        if (run.interrupted) {
+        // A run the stop signal recorded has its record and directory settled.
+        if (run.exited) {
           await follower.close().catch(() => {});
           return;
         }
@@ -565,28 +579,32 @@ export function createHost(
         } catch (error) {
           report(`run for ${repository}#${issue} lost its log's end: ${error}`);
         }
-        // The raw log goes with the sandbox, so its end is read first.
-        try {
-          const limit = registry.providers
-            .get(run.provider)!
-            .usageLimit(await readLogEnd(raw));
-          if (limit) {
-            const reset = limit.reset && redactor.redact(limit.reset);
-            run.ended = {
-              paused: {
-                cause: "usage limit",
-                reset,
-                at: run.exitedAt.toISOString(),
-                until: pauseDeadline(reset, run.exitedAt).toISOString(),
-              },
-              commented: false,
-            };
+        // The raw log goes with the sandbox, so its end is read first. A stop
+        // at the pause threshold decides how the run ended, whatever the log
+        // says.
+        if (run.pausing) run.ended = { paused: run.pausing, commented: false };
+        else
+          try {
+            const limit = registry.providers
+              .get(run.provider)!
+              .usageLimit(await readLogEnd(raw));
+            if (limit) {
+              const reset = limit.reset && redactor.redact(limit.reset);
+              run.ended = {
+                paused: {
+                  cause: "usage limit",
+                  reset,
+                  at: run.exitedAt.toISOString(),
+                  until: pauseDeadline(reset, run.exitedAt).toISOString(),
+                },
+                commented: false,
+              };
+            }
+          } catch (error) {
+            report(
+              `run for ${repository}#${issue} could not read its raw log's end: ${error}`,
+            );
           }
-        } catch (error) {
-          report(
-            `run for ${repository}#${issue} could not read its raw log's end: ${error}`,
-          );
-        }
         try {
           // A token outlives no run.
           await rm(sandbox, { recursive: true, force: true });
@@ -621,7 +639,13 @@ export function createHost(
       case "stop": {
         const run = find(decision);
         if (!run) return;
-        run.stopped = true;
+        if (!decision.pause) run.stopped = true;
+        // The first stop at the pause threshold fixes the run's pause, kept
+        // across a restart; a run that already exited ends as it exited.
+        else if (!run.exited && !run.pausing) {
+          run.pausing = decision.pause;
+          record(run);
+        }
         run.controller.abort(new Error(decision.reason));
         return;
       }
@@ -704,6 +728,7 @@ export function createHost(
           ended: run.exited ? run.ended : null,
         })),
       usage: await usage.read(),
+      holds: usage.holds(),
       settings,
     };
     for (const pass of passes)

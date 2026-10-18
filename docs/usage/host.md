@@ -4,7 +4,7 @@ One factory process serves every repository its host configuration lists. It
 reads each repository from GitHub, keeps a clone of it, launches agents in
 sandboxes built from the repository's toolchain image, and records what it is
 doing in a status file. Every repository shares one oldest-first queue, and
-provider caps and usage gates apply across all of them.
+provider caps and usage thresholds apply across all of them.
 
 ## Install and start
 
@@ -36,8 +36,9 @@ configuration itself.
 ## Host configuration
 
 The host configuration is one JSON file. Every field is required except
-`providers.claude-code.usageCredential`. Unknown fields are refused, and nothing
-comes from environment variables.
+`providers.claude-code.usageCredential` and the fields whose default the table
+below gives. Unknown fields are refused, and nothing comes from environment
+variables.
 
 ```json
 {
@@ -55,7 +56,11 @@ comes from environment variables.
     "retry": "claude-opus-5-5@xhigh"
   },
   "timeLimitMinutes": 240,
-  "usageThreshold": 80,
+  "usage": {
+    "drainThreshold": 90,
+    "pauseThreshold": 95,
+    "afterDrain": "auto-resume"
+  },
   "pollSeconds": 300,
   "readiness": { "authorizedRoles": ["admin", "maintain"] },
   "unpushablePaths": [".github/workflows/"],
@@ -75,7 +80,9 @@ comes from environment variables.
 | `models.default`                        | The model an issue without a model label runs on.                                                                                                                                                                       |
 | `models.retry`                          | The model a failed first attempt retries on.                                                                                                                                                                            |
 | `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                             |
-| `usageThreshold`                        | The provider usage percentage, from 0 to 100, at or above which that provider launches nothing.                                                                                                                         |
+| `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                       |
+| `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                        |
+| `usage.afterDrain`                      | What reopens a drained provider's claims: `auto-resume`, a reading below the drain threshold. Optional; the default is `auto-resume`. This factory release refuses `owner-resume`.                                      |
 | `pollSeconds`                           | The wait between passes.                                                                                                                                                                                                |
 | `readiness.authorizedRoles`             | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                               |
 | `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
@@ -86,6 +93,49 @@ comes from environment variables.
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
 [providers](#providers) section describes the grammar.
+
+### Usage thresholds
+
+Each threshold applies to one provider at a time, across every repository,
+and the other providers carry on. A provider's usage is the fullest window's
+percentage its last good reading found; [usage reads](#usage-reads) describes
+when that reading counts.
+
+- **Drain threshold.** At or above `usage.drainThreshold`, the provider claims
+  no new issue. A failed run's retry is a new claim and waits too. Running
+  runs carry on, and so does an [interrupted run's](#restarts) relaunch, which
+  is running work. With `auto-resume`, claims start again on the first reading
+  below the threshold, even while runs from before the drain are still
+  running.
+- **Pause threshold.** At or above `usage.pauseThreshold`, the factory also
+  stops each of the provider's running runs by killing its sandbox, and holds
+  interrupted relaunches. The worktree and the `factory/issue-<n>` branch
+  survive, and each stopped run becomes a [paused run](#paused-runs), which
+  relaunches as the same attempt. The run time limit still stops a run that
+  exceeded it first. Nothing overrides the pause threshold.
+- **Usage hold.** A reading at or above either threshold starts a usage hold
+  on its provider, which keeps that reading in force once the provider's usage
+  is unknown: the reading expired, the provider refused or failed the read, or
+  the process restarted. The hold ends on a usable reading below every
+  threshold, at the reset the provider reported for its fullest window, or 24
+  hours after the hold began, whichever comes first. That deadline is fixed
+  when the hold begins and never moves on a later pass or restart, and a usage
+  read's backoff is never that deadline. Without a usage hold, unknown usage
+  holds no claim, as before.
+
+A pause threshold below the drain threshold is refused; equal thresholds
+drain and pause together. Either threshold may be `null`. With both `null`,
+usage holds nothing, and a paused run waits only for its deadline.
+
+The `owner-resume` policy, an owner hold that only the owner lifts, is not in
+this factory release, so the configuration refuses it rather than reading it
+as `auto-resume`.
+
+For this factory release only, a configuration that still sets the legacy
+`usageThreshold` is read as `usage.drainThreshold` with no pause threshold,
+and the process log warns at start to replace it, for example
+`"usageThreshold": 90` with `"usage": { "drainThreshold": 90 }`. Setting
+`usageThreshold` together with `usage` is refused rather than choosing either.
 
 ### Token command
 
@@ -129,13 +179,14 @@ permission refusal; a 429 means throttling. Neither waiting nor a successful
 launch establishes usage permission. The factory backs off refused reads and
 reports an unavailable episode once, with updates for changed failures and
 numeric recovery. A good cached reading still applies for 20 minutes from its
-observation; after it expires, fresh launches proceed without the percentage
-gate. Provider caps, run time limits and the provider's actual limit still
-apply. A confirmed limit pauses its run until a usable low reading or its
-fixed unknown-usage deadline: the first reliably parsed UTC reset relative to
-the pause, capped at 24 hours, or a 24-hour fallback. A usable high reading
-continues to hold it; capacity and repository holds can also delay launch.
-That deadline is no spending quota or cap on repeated pauses.
+observation, and a [usage hold](#usage-thresholds) keeps a high one in force
+after that; otherwise, once it expires, new claims proceed without the usage
+thresholds. Provider caps, run time limits and the provider's actual limit
+still apply. A confirmed limit pauses its run until a usable low reading or
+its fixed unknown-usage deadline: the first reliably parsed UTC reset relative
+to the pause, capped at 24 hours, or a 24-hour fallback. A usable high reading
+or a usage hold continues to hold it; capacity and repository holds can also
+delay launch. That deadline is no spending quota or cap on repeated pauses.
 [Usage reads](#usage-reads) describes backoff, recovery and the separate
 `lutzseverino/homelab` responsibility for credential provisioning and renewal.
 
@@ -220,15 +271,15 @@ process redacted its own logs as it wrote them.
 
 The process owns everything under `stateDirectory`:
 
-| Path                                             | Contents                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status.json`                                    | The status file.                                                                                                                                                                                                                                                                                            |
-| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                        |
-| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                |
-| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                       |
-| `usage.json`                                     | Each provider's last good usage reading with when it was read, and the earliest time the provider may be read again. It holds no credential or provider answer.                                                                                                                                             |
-| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, its pause's cause, reset, time and deadline and whether its issue was told when it paused, and whether the host settled it. |
-| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                                                                                                                 |
+| Path                                             | Contents                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status.json`                                    | The status file.                                                                                                                                                                                                                                                                                                                                           |
+| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                                                                       |
+| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                               |
+| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                      |
+| `usage.json`                                     | Each provider's last good usage reading with when it was read and its reset, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                  |
+| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline and whether its issue was told when it paused, and whether the host settled it. |
+| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                                                                                                                                                                |
 
 Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
@@ -262,46 +313,59 @@ kept awaiting merge or retried carries the running label.
 
 ## Paused runs
 
-A paused run is one whose agent exited on its provider's usage limit. When the
-agent exits, the run's provider adapter reads the end of the run's raw log
-before its private directory is removed, and recognizes the provider's own
-limit error there: Claude Code's session, weekly or usage limit message, or
-Codex's usage-limit error. The model's prose and a high usage read after the
-exit don't count. When the error states a reset, such as
-`resets 12:50pm (UTC)`, the factory keeps it as written.
+A paused run is one whose agent exited on its provider's usage limit, or one
+the factory stopped at its provider's
+[pause threshold](#usage-thresholds). When the agent exits, the run's provider
+adapter reads the end of the run's raw log before its private directory is
+removed, and recognizes the provider's own limit error there: Claude Code's
+session, weekly or usage limit message, or Codex's usage-limit error. The
+model's prose and a high usage read after the exit don't count. When the error
+states a reset, such as `resets 12:50pm (UTC)`, the factory keeps it as
+written.
 
-The run pauses when its agent exits, and the factory fixes the pause's
-deadline then, once: a reset stated as a UTC time of day, such as
-`5:50pm (UTC)` or `17:50 (UTC)`, is its first occurrence at or after the pause,
-so a run that paused at 15:03 UTC on October 14 has a deadline of 17:50 UTC
-that day, however late a pass or restart looks at it. Any other reset, or none,
-gives the longest hold, 24 hours after the pause, which also caps a dated
-reset.
+A run that exits on its limit pauses when its agent exits. A run stopped at
+the pause threshold pauses when the pass that stops it begins, keeping the
+reset the reading reported, and it pauses for that cause however its agent
+then exits, even on its usage limit. A run that exited before the stop settles
+as it ended. A later pass that repeats the stop changes nothing.
+
+The factory fixes the pause's deadline as the run pauses, once. A reset stated
+as a UTC time of day, such as `5:50pm (UTC)` or `17:50 (UTC)`, is its first
+occurrence at or after the pause, so a run that paused at 15:03 UTC on October
+14 has a deadline of 17:50 UTC that day, however late a pass or restart looks
+at it. A reset a usage reading reported is that time. Any other reset, or
+none, gives the longest hold, 24 hours after the pause, which also caps a
+dated reset.
 
 A paused run bypasses the run outcome table, whether its pull request is open,
 it has none, or the factory stopped it at the time limit. It is not a failure:
 it spends no attempt or retry and takes no provider cap slot. The factory
 replaces the issue's running label with the configured paused label and posts
-one comment giving the cause, the reset when known, and the run's model and
-attempt, and saying that the factory resumes the run by itself and nobody
-needs to act. It contains no log output. Later passes and restarts don't
-repeat it.
+one comment giving the cause, `usage limit` or `pause threshold`, the reset
+when known, and the run's model and attempt, and saying that the factory
+resumes the run by itself and nobody needs to act. It contains no log output.
+Later passes and restarts don't repeat it.
 
 The run relaunches like an [interrupted run](#restarts): as the same attempt,
 with the same model, effort, prompt, retry context and log, on its
 `factory/issue-<n>` branch, so an agent that was babysitting a pull request
-resumes on it. Unlike an interrupted run, its usage limit holds it:
+resumes on it. Unlike an interrupted run, its pause holds it:
 
-- Usage at or above `usageThreshold` holds it, before and after its deadline.
-- Usage read since the pause and below the threshold relaunches it at once.
+- Usage at or above either threshold, read or kept by a usage hold, holds it,
+  before and after its deadline.
+- Usage read since the pause and below every threshold relaunches it at once.
 - Unknown usage, or a reading from before the pause, holds it until its
-  deadline and no longer. A fresh launch is not held by unknown usage; a paused
-  run is, because its pause shows that the provider ran out, but only until the
-  deadline, so a provider whose usage stays unreadable cannot hold it forever.
+  deadline and no longer. A new claim is not held by unknown usage without a
+  usage hold; a paused run is, because its pause shows that the provider ran
+  out, but only until the deadline, so a provider whose usage stays unreadable
+  cannot hold it forever.
+- With neither threshold set, a reading releases nothing, and it relaunches at
+  its deadline.
 
 The deadline bounds only the hold caused by unknown usage. A usable high
-reading still holds it after the deadline; the deadline promises no launch
-despite capacity or repository holds and sets no spending quota.
+reading or a usage hold still holds it after the deadline; the deadline
+promises no launch despite capacity or repository holds and sets no spending
+quota.
 
 It also waits for its provider's cap and for its repository to resume, however
 long those take. Before it launches, the factory swaps the paused label back for the
@@ -326,7 +390,7 @@ which does not establish permission either. Backoff does not grant permission.
 
 The first unavailable read is written to the process log with the provider,
 the numeric HTTP status or safe failure category, when it is next read, and
-the effect on the percentage gate. Repeated unchanged failures and cooldown
+the effect on the usage thresholds. Repeated unchanged failures and cooldown
 skips stay quiet, including after restart. A different status or failure
 category produces an updated diagnostic. The next successful numeric reading
 reports recovery once and rearms failure reporting; an answer without a usage
@@ -341,20 +405,24 @@ For HTTP 403, a missing, malformed or past header instead gives a one-hour
 fallback; for HTTP 429 it gives a separate 20-minute fallback, each measured
 from response receipt. Other failures retain normal next-pass polling without
 a usable header. These deadlines apply per provider across every repository
-and survive restarts. This waiting holds back only usage reads, never launches.
+and survive restarts. This waiting holds back only usage reads, never launches,
+and never sets a usage hold's deadline.
 
-The factory keeps each provider's last good reading with the time it was read,
-and uses it for 20 minutes from then: a failed or skipped read neither discards
-it nor makes it younger. After that the usage is unknown, whether the reading
-was low or high. Unknown usage permits fresh launches without the
-`usageThreshold` percentage gate. Provider concurrency caps, run time limits,
-and the provider's actual limit still apply. A confirmed limit exit pauses its
+The factory keeps each provider's last good reading with the time it was read
+and its fullest window's reset, when the provider reports one, and uses it for
+20 minutes from then: a failed or skipped read neither discards it nor makes
+it younger. After that the usage is unknown, whether the reading was low or
+high. A high reading has started a [usage hold](#usage-thresholds) by then,
+which keeps it in force until the hold ends; without one, unknown usage
+permits new claims without the usage thresholds. Provider concurrency caps,
+run time limits, and the provider's actual limit still apply. A confirmed limit exit pauses its
 run for the finite unknown-usage hold described in [Paused runs](#paused-runs):
 the first reliably parsed UTC reset relative to the pause, capped at 24 hours,
 or the 24-hour fallback. This does not cap repeated genuine pauses.
-The readings, read deadlines and safe episode categories are kept in
-`usage.json`, so a restart neither reads too early nor loses them or repeats
-the same warning. Older records without episode metadata still load normally.
+The readings, read deadlines, safe episode categories and usage holds are kept
+in `usage.json`, so a restart neither reads too early nor loses them or repeats
+the same warning. Older records without episode metadata, resets or holds
+still load normally.
 
 Replacing a credential takes effect at the next eligible usage probe without
 restarting or deleting `usage.json`; it does not bypass an active refusal
@@ -434,11 +502,13 @@ logs, status and usage records.
 A restart, such as for a factory upgrade or a changed host configuration, never
 spends a run's retry. On `SIGTERM` or `SIGINT` the process stops claiming and
 launching, records each running run as interrupted, removes the sandbox
-containers and the runs' private directories, and exits without waiting for the runs to finish. On startup, before
-it claims or launches anything, it removes every sandbox container an earlier
-process left, then takes up the runs recorded as interrupted or paused. A
-paused run stays paused, keeping its pause time and deadline, and its issue is
-not told again. A paused run recorded by a factory release that kept no pause
+containers and the runs' private directories, and exits without waiting for the runs to finish. A run the
+factory was stopping at the pause threshold is recorded as paused instead. On
+startup, before it claims or launches anything, it removes every sandbox
+container an earlier process left, then takes up the runs recorded as
+interrupted or paused, and pauses a run an earlier process that ended without
+the signal was stopping at the pause threshold. A paused run stays paused,
+keeping its pause time and deadline, and its issue is told once in all. A paused run recorded by a factory release that kept no pause
 time pauses at its recorded exit, or at its start when it has no exit, so its
 deadline never counts from the restart and an overdue run relaunches without
 changes to its record or labels.
@@ -446,8 +516,8 @@ changes to its record or labels.
 An interrupted run launches again as the same attempt, with the same model,
 prompt and log, continuing its `factory/issue-<n>` branch and Sandcastle's
 worktree for it, and keeps its claim meanwhile. It takes its issue's turn in
-the queue and waits for its provider's cap and usage gate and for its
-repository to resume. It continues as it would have without the restart, so a
+the queue and waits for its provider's cap, its provider's pause threshold and
+for its repository to resume; the drain threshold does not hold it. It continues as it would have without the restart, so a
 readiness change or a new blocker does not hold it; it releases its claim
 instead once its issue is closed or carries its configured needs-input label. Its time
 limit starts again at the relaunch.
@@ -491,7 +561,7 @@ The factory posts no status to GitHub.
         { "issue": 5, "reason": "blocked by #4" },
         {
           "issue": 7,
-          "reason": "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold"
+          "reason": "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 95% pause threshold"
         }
       ]
     },

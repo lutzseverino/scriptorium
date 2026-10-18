@@ -10,7 +10,7 @@
   },
   "models": { "default": "claude-sonnet-5-5", "retry": "claude-opus-5-5" },
   "timeLimitMinutes": 240,
-  "usageThreshold": 80,
+  "usage": { "drainThreshold": 90, "reserve": 5 },
   "pollSeconds": 300,
   "readiness": { "authorizedRoles": ["admin"] },
   "unpushablePaths": [".github/workflows/"],

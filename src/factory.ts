@@ -1,6 +1,7 @@
 // The factory's decision core: a pure function from a snapshot of the host's
 // repositories and runs to the decisions the host carries out.
 import type { FactoryConfiguration } from "./factory-configuration.ts";
+import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
 import {
   closes,
@@ -37,11 +38,12 @@ export type Issue = {
 };
 
 // Why the factory paused a run, which it resumes by itself, and the reset the
-// cause stated, if any. A provider's usage limit is the only cause so far.
-// `at` is when the run paused, and `until` when it stops waiting for its
-// provider's usage to read, both fixed once as it pauses.
+// cause stated, if any: the agent exited on its provider's usage limit, or the
+// factory stopped its sandbox once its provider's usage reached the pause
+// threshold. `at` is when the run paused, and `until` when it stops waiting
+// for its provider's usage to read, both fixed once as it pauses.
 export type Pause = {
-  cause: "usage limit";
+  cause: "usage limit" | "pause threshold";
   reset: string | null;
   at: string;
   until: string;
@@ -97,24 +99,35 @@ export type Settings = {
   defaultModel: string;
   retryModel: string;
   caps: Record<string, number>;
-  usageThreshold: number;
+  // The usage percentages at or above which a provider claims no new issue,
+  // and at or above which its running runs stop too, or null when off.
+  drainThreshold: number | null;
+  pauseThreshold: number | null;
   timeLimitMinutes: number;
   // The repository roles whose readiness the factory accepts.
   authorizedRoles: string[];
 };
 
 // A provider's usage reading recent enough to trust: its fullest window's
-// percentage, and when it was read.
-export type Usage = { used: number; at: string };
+// percentage, when it was read, and that window's reset when the provider
+// reported one.
+export type Usage = { used: number; at: string; reset?: string };
+
+// A provider's usage hold: its latest reading at or above a threshold, which
+// still holds it once its usage is unknown, until `until`. Both `since`, when
+// the hold began, and `until` are fixed once as it begins.
+export type UsageHold = Usage & { since: string; until: string };
 
 // Runs of a repository this pass could not read are present only while their
 // sandboxes run, so caps and the time limit still apply to them. A provider's
-// usage is null or absent while unknown.
+// usage is null or absent while unknown, and so is its usage hold while it has
+// none.
 export type Snapshot = {
   now: string;
   repositories: Repository[];
   runs: Run[];
   usage: Record<string, Usage | null>;
+  holds: Record<string, UsageHold | null>;
   settings: Settings;
 };
 
@@ -139,7 +152,9 @@ export type Decision = { repository: string; issue: number } & (
   | { kind: "close"; tickets: IssueId[] }
   | Launch
   | { kind: "skip"; reason: string }
-  | { kind: "stop"; reason: string }
+  // Stops a running run's sandbox: at the time limit, or at the pause
+  // threshold with the pause it ends with once its agent exits.
+  | { kind: "stop"; reason: string; pause?: Pause }
   | {
       kind: "fail";
       failure: string;
@@ -265,7 +280,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       decisions.push({ kind: "skip", ...at, reason: model.error });
       continue;
     }
-    const gated = gate(model.provider, running, snapshot);
+    const gated = gate(model.provider, running, snapshot, "drain");
     if (gated) {
       decisions.push({ kind: "skip", ...at, reason: gated });
       continue;
@@ -314,7 +329,8 @@ type SettlingRun = Pick<Run, "repository" | "issue" | "attempt"> & {
 };
 type Retry = { run: SettlingRun; failure: string; model: Model };
 
-// A running run over the time limit is stopped. An ended run releases its
+// A running run over the time limit is stopped, and so is one whose provider's
+// usage reached the pause threshold, which pauses it. An ended run releases its
 // claim once its issue closes and keeps it while the pull request is open. A
 // run needing the owner's input releases its claim without retry or failure.
 // A failed first run may retry once on the retry model; any other failure
@@ -330,9 +346,24 @@ function settle(
   const overtime = `the time limit of ${limit} minutes`;
   if (run.ended === null) {
     const elapsed = Date.parse(snapshot.now) - Date.parse(run.startedAt);
-    return elapsed > limit * 60_000
-      ? [{ kind: "stop", ...at, reason: `exceeded ${overtime}` }]
-      : [];
+    if (elapsed > limit * 60_000)
+      return [{ kind: "stop", ...at, reason: `exceeded ${overtime}` }];
+    const high = highUsage(run.provider, snapshot);
+    if (high?.threshold !== "pause") return [];
+    const reset = high.usage.reset ?? null;
+    return [
+      {
+        kind: "stop",
+        ...at,
+        reason: `${run.provider} ${described(high, snapshot.settings)}`,
+        pause: {
+          cause: "pause threshold",
+          reset,
+          at: snapshot.now,
+          until: pauseDeadline(reset, new Date(snapshot.now)).toISOString(),
+        },
+      },
+    ];
   }
   if ("interrupted" in run.ended || "paused" in run.ended) return { held: run };
   const repository = snapshot.repositories.find(
@@ -398,7 +429,8 @@ function settleOutcome(
 
 // A retry takes its issue's turn in oldest-first order. It launches only
 // while the issue would still be picked up, apart from its own claim, and
-// waits for its provider's gate and for its repository to resume.
+// waits for its provider's gate, as a new claim does, and for its repository
+// to resume.
 function relaunch(
   repository: Repository,
   issue: Issue,
@@ -422,7 +454,8 @@ function relaunch(
     return [unretried(retry, reason)];
   }
   const { provider } = retry.model;
-  const gated = paused(repository) ?? gate(provider, running, snapshot);
+  const gated =
+    paused(repository) ?? gate(provider, running, snapshot, "drain");
   if (gated) return [{ kind: "skip", ...at, reason: `retry waits: ${gated}` }];
   running.set(provider, (running.get(provider) ?? 0) + 1);
   return [
@@ -442,10 +475,11 @@ function relaunch(
 
 // An interrupted run continues as it would have without the restart: it
 // launches again as the same attempt on its branch, in its issue's turn, and
-// pickup's exclusions don't hold it. It waits for its provider's gate and for
-// its repository to resume, and releases its claim once its issue needs input.
-// A paused run first tells its issue, once, then resumes the same way, under
-// the running label again, once its usage limit no longer holds it.
+// pickup's exclusions don't hold it. As running work, it waits for its
+// provider's gate only at the pause threshold, and for its repository to
+// resume, and releases its claim once its issue needs input. A paused run
+// first tells its issue, once, then resumes the same way, under the running
+// label again, once its pause no longer holds it.
 function resume(
   repository: Repository,
   issue: Issue,
@@ -462,7 +496,7 @@ function resume(
   const gated =
     paused(repository) ??
     (pause && limited(run.provider, pause.paused, snapshot)) ??
-    gate(run.provider, running, snapshot);
+    gate(run.provider, running, snapshot, "pause");
   if (gated)
     return [{ kind: "skip", ...at, reason: `relaunch waits: ${gated}` }];
   running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
@@ -491,39 +525,80 @@ function unretried({ run, failure }: Retry, reason: string): Decision {
   };
 }
 
-// A paused run's usage limit holds it while its provider's usage is at or
-// above the threshold, and releases it once a reading taken since the pause
-// is below it. Unlike a fresh launch, which unknown usage doesn't hold, the
-// pause is evidence of exhaustion: unknown usage, or a reading from before
-// the pause, holds it until the pause's deadline, and no longer, so a provider
-// whose usage stays unreadable cannot hold it forever.
+// A paused run is held while its provider's usage is at or above a
+// threshold, read or held, and released once a reading taken since the pause
+// is below every threshold. Unlike a fresh launch, which unknown usage holds
+// only during a usage hold, the pause is evidence of exhaustion: unknown
+// usage, a reading from before the pause, or a host that sets no threshold
+// holds it until the pause's deadline, and no longer, so a provider whose
+// usage stays unreadable cannot hold it forever.
 function limited(
   provider: string,
   pause: Pause,
   snapshot: Snapshot,
 ): string | null {
   const { settings } = snapshot;
-  const limit = `${provider} hit its usage limit${pause.reset === null ? "" : ` (resets ${pause.reset})`}`;
+  const cause =
+    pause.cause === "pause threshold"
+      ? `${provider} reached its pause threshold`
+      : `${provider} hit its usage limit`;
+  const limit = `${cause}${pause.reset === null ? "" : ` (resets ${pause.reset})`}`;
+  const high = highUsage(provider, snapshot);
+  if (high) return `${limit}; ${described(high, settings)}`;
   const reading = snapshot.usage[provider];
-  const over = overThreshold(reading, settings);
-  if (over) return `${limit}; ${over}`;
-  if (reading && Date.parse(reading.at) >= Date.parse(pause.at)) return null;
+  const thresholds =
+    settings.drainThreshold !== null || settings.pauseThreshold !== null;
+  if (thresholds && reading && Date.parse(reading.at) >= Date.parse(pause.at))
+    return null;
   if (Date.parse(snapshot.now) >= Date.parse(pause.until)) return null;
-  const unknown = reading
-    ? "its usage was last read before the pause"
-    : "its usage is unreadable";
+  const unknown = !thresholds
+    ? "the host sets no usage threshold"
+    : reading
+      ? "its usage was last read before the pause"
+      : "its usage is unreadable";
   return `${limit}; ${unknown}, so it waits until ${pause.until} at most`;
 }
 
-// Why a reading the snapshot trusts is at or above the threshold, or null
-// when it is below it or the usage is unknown.
-function overThreshold(
-  reading: Usage | null | undefined,
-  settings: Settings,
-): string | null {
-  return reading && reading.used >= settings.usageThreshold
-    ? `usage ${reading.used}% is at or above the ${settings.usageThreshold}% threshold`
-    : null;
+export type Threshold = "drain" | "pause";
+
+// The highest threshold a usage percentage is at or above, or null when it is
+// below every threshold the host sets.
+export function reached(
+  used: number,
+  settings: Pick<Settings, "drainThreshold" | "pauseThreshold">,
+): Threshold | null {
+  if (settings.pauseThreshold !== null && used >= settings.pauseThreshold)
+    return "pause";
+  if (settings.drainThreshold !== null && used >= settings.drainThreshold)
+    return "drain";
+  return null;
+}
+
+// A provider's usage at or above a threshold: its reading while the snapshot
+// trusts one, or else its usage hold until the hold ends.
+type HighUsage = { threshold: Threshold; usage: Usage; hold: UsageHold | null };
+
+function highUsage(provider: string, snapshot: Snapshot): HighUsage | null {
+  const reading = snapshot.usage[provider] ?? null;
+  const hold = snapshot.holds[provider] ?? null;
+  const active =
+    reading === null &&
+    hold !== null &&
+    Date.parse(snapshot.now) < Date.parse(hold.until)
+      ? hold
+      : null;
+  const usage = reading ?? active;
+  const threshold = usage && reached(usage.used, snapshot.settings);
+  return usage && threshold ? { threshold, usage, hold: active } : null;
+}
+
+function described({ threshold, usage, hold }: HighUsage, settings: Settings) {
+  const percent =
+    threshold === "pause" ? settings.pauseThreshold : settings.drainThreshold;
+  const over = `at or above the ${percent}% ${threshold} threshold`;
+  return hold
+    ? `usage is unknown, and its usage hold from ${usage.used}% at ${usage.at}, ${over}, lasts until ${hold.until} at most`
+    : `usage ${usage.used}% is ${over}`;
 }
 
 function carriesPaused(repository: Repository, number: number): boolean {
@@ -540,19 +615,24 @@ function paused(repository: Repository): string | null {
     : `${repository.name} is paused: ${repository.paused}`;
 }
 
-// A launch needs fewer running sandboxes than the provider's cap and, when
-// its usage is known, usage below the threshold.
+// A launch needs fewer running sandboxes than the provider's cap, and its
+// provider's usage, read or held, below the threshold that stops it: the drain
+// threshold for a new claim, and the pause threshold for running work.
 function gate(
   provider: string,
   running: Map<string, number>,
-  { settings, usage }: Snapshot,
+  snapshot: Snapshot,
+  stops: Threshold,
 ): string | null {
+  const { settings } = snapshot;
   const cap = settings.caps[provider];
   if (cap === undefined) return `the host sets no cap for ${provider}`;
   if ((running.get(provider) ?? 0) >= cap)
     return `${provider} already runs its cap of ${cap} agent${cap === 1 ? "" : "s"}`;
-  const over = overThreshold(usage[provider], settings);
-  return over && `${provider} ${over}`;
+  const high = highUsage(provider, snapshot);
+  return high && (stops === "drain" || high.threshold === "pause")
+    ? `${provider} ${described(high, settings)}`
+    : null;
 }
 
 function issueModel(

@@ -98,8 +98,11 @@ test("Claude Code usage is read from its endpoint with the token file, not the e
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = environment;
   });
 
-  // The fixture's fuller window is the five-hour one.
-  assert.equal(await adapter.readUsage(), 42);
+  // The fixture's fuller window is the five-hour one, with its reset.
+  assert.deepEqual(await adapter.readUsage(), {
+    used: 42,
+    reset: "2026-10-13T15:00:00.000Z",
+  });
   assert.deepEqual(calls, [
     {
       url: "https://api.anthropic.com/api/oauth/usage",
@@ -134,10 +137,10 @@ test("a renewed Claude usage login is reread independently of the launch token",
     });
   writeFileSync(usageCredential, login("synthetic-usage-first"));
   // A usage read needs no launch credential and no refresh token.
-  assert.equal(await adapter.readUsage(), 73);
+  assert.deepEqual(await adapter.readUsage(), { used: 73, reset: null });
   writeFileSync(`${usageCredential}.next`, login("synthetic-usage-renewed"));
   renameSync(`${usageCredential}.next`, usageCredential);
-  assert.equal(await adapter.readUsage(), 73);
+  assert.deepEqual(await adapter.readUsage(), { used: 73, reset: null });
   assert.deepEqual(tokens, [
     "Bearer synthetic-usage-first",
     "Bearer synthetic-usage-renewed",
@@ -214,10 +217,19 @@ test("Claude Code usage is unknown when the endpoint's answer omits the windows"
   for (const [response, expected] of [
     [new Response('{"five_hour":null,"seven_day":null}'), null],
     [new Response('"unexpected"'), null],
-    [new Response('{"seven_day":{"utilization":64}}'), 64],
+    [
+      new Response('{"seven_day":{"utilization":64}}'),
+      { used: 64, reset: null },
+    ],
+    [
+      new Response(
+        '{"five_hour":{"utilization":64,"resets_at":"soon"},"seven_day":{"utilization":12,"resets_at":"2026-10-17T09:00:00Z"}}',
+      ),
+      { used: 64, reset: null },
+    ],
   ] as const) {
     const ports = fakePorts({ fetch: async () => response });
-    assert.equal(await claudeCode(t, ports).adapter.readUsage(), expected);
+    assert.deepEqual(await claudeCode(t, ports).adapter.readUsage(), expected);
   }
 });
 

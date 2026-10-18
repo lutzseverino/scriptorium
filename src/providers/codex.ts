@@ -14,7 +14,7 @@ import type {
 } from "../providers.ts";
 import { launchAgent } from "./launch.ts";
 import { limitError } from "./limit.ts";
-import { fullest } from "./usage.ts";
+import { fullest, type UsageWindow } from "./usage.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh";
 const efforts: Effort[] = ["low", "medium", "high", "xhigh"];
@@ -84,7 +84,7 @@ export async function readCodexUsage(
   login: string,
   executable: string,
   timeoutMs = 30_000,
-): Promise<number | null> {
+): Promise<UsageWindow | null> {
   const home = await mkdtemp(join(tmpdir(), "factory-codex-"));
   try {
     await writeFile(join(home, "auth.json"), await readFile(login), {
@@ -104,7 +104,7 @@ async function readRateLimits(
   executable: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
-): Promise<number | null> {
+): Promise<UsageWindow | null> {
   const server = spawn(executable, ["app-server"], {
     stdio: ["pipe", "pipe", "ignore"],
     env,
@@ -178,11 +178,14 @@ function timeout(): never {
   throw new Error("timed out");
 }
 
-// The result of the Codex app-server's `account/rateLimits/read`.
-export function codexUsage(result: any): number | null {
+// The result of the Codex app-server's `account/rateLimits/read`, whose
+// windows reset at Unix seconds.
+export function codexUsage(result: any): UsageWindow | null {
   const limits = result?.rateLimits;
-  return fullest([
-    limits?.primary?.usedPercent,
-    limits?.secondary?.usedPercent,
-  ]);
+  return fullest(
+    [limits?.primary, limits?.secondary].map((window) => ({
+      used: window?.usedPercent,
+      reset: window?.resetsAt,
+    })),
+  );
 }

@@ -3,7 +3,7 @@
   "providers": { "claude-code": { "credential": "/etc/factory/claude-token" } },
   "models": { "default": "claude-sonnet-5-5" },
   "timeLimitMinutes": 240,
-  "usageThreshold": 80,
+  "usage": { "pauseThreshold": 95 },
   "readiness": {},
   "unpushablePaths": [],
   "stateDirectory": "/var/lib/factory",

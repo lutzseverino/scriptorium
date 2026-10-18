@@ -14,10 +14,11 @@ import { test, type TestContext } from "node:test";
 import type { RunOptions } from "@ai-hero/sandcastle";
 import type { DockerOptions } from "@ai-hero/sandcastle/sandboxes/docker";
 import { sandboxEnvironment } from "../src/github-token.ts";
+import type { Decision } from "../src/factory.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
 import { createRegistry } from "../src/providers.ts";
-import { UsageReadError } from "../src/providers/usage.ts";
+import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
 
 // The host runner, run against a stateful GitHub CLI fake, real Git clones
@@ -339,6 +340,8 @@ function fakeGitHub(
 // until the test finishes it or its sandbox is removed.
 function fakeSandcastle() {
   let closing = false;
+  // While set, an aborted agent keeps running until it finishes.
+  const control = { ignoreAborts: false };
   const launched: {
     options: RunOptions;
     docker: DockerOptions;
@@ -349,6 +352,7 @@ function fakeSandcastle() {
   let docker: DockerOptions;
   return {
     launched,
+    control,
     finish() {
       closing = true;
       for (const launch of launched) launch.finish();
@@ -372,9 +376,9 @@ function fakeSandcastle() {
             finish: (error) => (error ? reject(error) : resolve(undefined)),
             removed: false,
           });
-          options.signal?.addEventListener("abort", () =>
-            reject(options.signal!.reason),
-          );
+          options.signal?.addEventListener("abort", () => {
+            if (!control.ignoreAborts) reject(options.signal!.reason);
+          });
           if (closing) resolve(undefined);
         });
       },
@@ -419,8 +423,8 @@ function host(
     caps?: { "claude-code": number; codex: number };
     imageFailures?: Error[];
     // Each provider's usage as the next read finds it: absent or null has no
-    // usage window, and an error is thrown.
-    usage?: Record<string, number | null | Error>;
+    // usage window, a number has no reset, and an error is thrown.
+    usage?: Record<string, number | UsageWindow | null | Error>;
   },
 ) {
   const instances: ReturnType<typeof createHost>[] = [];
@@ -453,7 +457,11 @@ function host(
     },
     models: { default: "claude-sonnet-5-5", retry: "gpt-5.5" },
     timeLimitMinutes: 240,
-    usageThreshold: 80,
+    usage: {
+      drainThreshold: 80,
+      pauseThreshold: null,
+      afterDrain: "auto-resume",
+    },
     pollSeconds: 300,
     readiness: { authorizedRoles: ["admin"] },
     unpushablePaths: [".github/workflows/"],
@@ -502,7 +510,9 @@ function host(
       usageReads.push(provider);
       const answer = usage[provider];
       if (answer instanceof Error) throw answer;
-      return answer ?? null;
+      return typeof answer === "number"
+        ? { used: answer, reset: null }
+        : (answer ?? null);
     },
     async launch(provider, request) {
       // No provider starts until the real pass has returned.
@@ -542,6 +552,7 @@ function host(
     ...instance,
     // A new process on the same host, state directory and GitHub.
     restart: process,
+    sandcastle: fake.control,
     events,
     github,
     launched,
@@ -2220,11 +2231,11 @@ for (const ended of [
     await run.tick();
     assert.equal(
       held(run, 4),
-      "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold",
+      "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% drain threshold",
     );
     assert.ok(
       run.reports.includes(
-        "acme/widgets#4 skipped: relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold",
+        "acme/widgets#4 skipped: relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% drain threshold",
       ),
     );
     assert.equal(issue.comments.length, 1);
@@ -2297,22 +2308,28 @@ test("a paused run stays paused across a restart, untold again, and resumes unde
       repository: "acme/widgets",
       issue: 4,
       reason:
-        "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% threshold",
+        "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 80% drain threshold",
     },
   ]);
   assert.deepEqual(issue.comments, [pauseComment]);
   assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
-  // The high reading holds it until it expires, then unknown usage holds it
-  // until the reset.
+  // The high reading holds it until it expires, then the usage hold it
+  // started before the restart holds it while usage is unknown, past the
+  // pause's own deadline.
   run.usage["claude-code"] = null;
-  await restarted.tick();
-  assert.match(held(run, 4)!, /usage 100% is at or above the 80% threshold$/);
-  run.clock.now = new Date("2026-10-09T12:21:00Z");
   await restarted.tick();
   assert.match(
     held(run, 4)!,
-    /its usage is unreadable, so it waits until 2026-10-09T12:50:00.000Z at most$/,
+    /usage 100% is at or above the 80% drain threshold$/,
   );
+  for (const time of ["2026-10-09T12:21:00Z", "2026-10-09T13:00:00Z"]) {
+    run.clock.now = new Date(time);
+    await restarted.tick();
+    assert.match(
+      held(run, 4)!,
+      /usage is unknown, and its usage hold from 100% at 2026-10-09T12:00:00.000Z, at or above the 80% drain threshold, lasts until 2026-10-10T12:00:00.000Z at most$/,
+    );
+  }
   run.usage["claude-code"] = 0;
   const launch = (await restarted.tick()).find(
     (decision) => decision.kind === "launch",
@@ -2675,3 +2692,240 @@ for (const keepExit of [true, false])
         /so it waits until 2026-10-10T12:50:00.000Z at most$/,
       );
   });
+
+// The owner's host: new claims stop at 90% and running runs at 95%.
+const thresholds = {
+  drainThreshold: 90,
+  pauseThreshold: 95,
+  afterDrain: "auto-resume",
+} as const;
+const reset = "2026-10-09T15:00:00.000Z";
+
+function thresholdComment(model = "claude-code/claude-sonnet-5-5@high") {
+  return [
+    `The factory paused this run: claude-code pause threshold, resets ${reset}.`,
+    "",
+    `- Model: \`${model}\`, attempt 1`,
+    "",
+    "The factory resumes the run by itself and removes `factory:paused` when it does; nobody needs to act.",
+  ].join("\n");
+}
+
+const nonSkips = (decisions: Decision[]) =>
+  decisions.filter(({ kind }) => kind !== "skip");
+
+test("at the pause threshold a provider's running sandboxes stop in every repository, and each run pauses once and resumes as the same attempt", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [
+        { number: 6 },
+        { number: 7, labels: ["ready-for-agent", "model:gpt-5.5"] },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    configuration: { usage: thresholds },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 3);
+  const [widgets4, gadgets6, gadgets7] = [4, 6, 7].map((number) =>
+    run.launched.find((launch) =>
+      launch.options.prompt?.endsWith(`#${number}`),
+    )!,
+  );
+
+  // At the drain threshold the runs carry on.
+  run.usage["claude-code"] = { used: 92, reset };
+  run.usage.codex = 10;
+  assert.deepEqual(nonSkips(await run.tick()), []);
+  assert.equal(widgets4.options.signal!.aborted, false);
+
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  run.usage["claude-code"] = { used: 96, reset };
+  const pause = {
+    cause: "pause threshold",
+    reset,
+    at: "2026-10-09T12:10:00.000Z",
+    until: reset,
+  };
+  const reason = "claude-code usage 96% is at or above the 95% pause threshold";
+  assert.deepEqual(nonSkips(await run.tick()), [
+    { kind: "stop", repository: "acme/widgets", issue: 4, reason, pause },
+    { kind: "stop", repository: "acme/gadgets", issue: 6, reason, pause },
+  ]);
+  assert.equal(widgets4.options.signal!.aborted, true);
+  assert.equal(gadgets6.options.signal!.aborted, true);
+  assert.equal(gadgets7.options.signal!.aborted, false);
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  assert.deepEqual(recordOf(run.state, 4, 1).ended, {
+    paused: pause,
+    commented: false,
+  });
+
+  const widgets = run.github.find("acme/widgets", 4);
+  const gadgets = run.github.find("acme/gadgets", 6);
+  await run.tick();
+  await run.tick();
+  for (const issue of [widgets, gadgets]) {
+    assert.deepEqual(issue.comments, [thresholdComment()]);
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+  }
+  assert.equal(
+    held(run, 4),
+    `relaunch waits: claude-code reached its pause threshold (resets ${reset}); usage 96% is at or above the 95% pause threshold`,
+  );
+  // The drain threshold still holds it; a reading below it relaunches both.
+  run.usage["claude-code"] = 92;
+  await run.tick();
+  assert.match(
+    held(run, 4)!,
+    /usage 92% is at or above the 90% drain threshold$/,
+  );
+  run.usage["claude-code"] = 89;
+  const relaunched = launchesOf(await run.tick());
+  assert.deepEqual(
+    relaunched.map(({ repository, issue, attempt, relaunch }) => ({
+      repository,
+      issue,
+      attempt,
+      relaunch,
+    })),
+    [
+      { repository: "acme/widgets", issue: 4, attempt: 1, relaunch: true },
+      { repository: "acme/gadgets", issue: 6, attempt: 1, relaunch: true },
+    ],
+  );
+  const resumed = run.launched.at(-2)!;
+  assert.equal(resumed.options.prompt, widgets4.options.prompt);
+  assert.deepEqual(
+    resumed.options.branchStrategy,
+    widgets4.options.branchStrategy,
+  );
+  assert.deepEqual(widgets.labels, ["ready-for-agent", "factory:running"]);
+  assert.equal(widgets.comments.length, 1);
+});
+
+function launchesOf(decisions: Decision[]) {
+  return decisions.filter(
+    (decision): decision is Decision & { kind: "launch" } =>
+      decision.kind === "launch",
+  );
+}
+
+for (const ending of [
+  "exits after the stop",
+  "exits on its usage limit after the stop",
+  "is interrupted by a stop signal",
+  "outlives a crashed process",
+])
+  test(`a run stopping at the pause threshold that ${ending} pauses once for that cause`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      configuration: { usage: thresholds },
+    });
+    await run.tick();
+    const [launch] = run.launched;
+    run.sandcastle.ignoreAborts = true;
+    run.usage["claude-code"] = { used: 97, reset };
+    const stop = (await run.tick()).find(({ kind }) => kind === "stop");
+    assert.equal(
+      stop?.kind === "stop" && stop.pause?.at,
+      "2026-10-09T12:00:00.000Z",
+    );
+    // A later pass repeats the stop, which keeps the first pause.
+    run.clock.now = new Date("2026-10-09T12:05:00Z");
+    assert.equal((await run.tick())[0].kind, "stop");
+    const pausing = recordOf(run.state, 4, 1).pausing;
+    assert.deepEqual(pausing, {
+      cause: "pause threshold",
+      reset,
+      at: "2026-10-09T12:00:00.000Z",
+      until: reset,
+    });
+    let tick = run.tick;
+    if (ending.startsWith("exits")) {
+      if (ending.includes("usage limit")) endOnLimit(launch);
+      launch.finish(
+        ending.includes("usage limit")
+          ? new Error("claude-code exited with code 1")
+          : undefined,
+      );
+      await settled();
+      await until(() => recordOf(run.state, 4, 1).exited);
+    } else if (ending.includes("stop signal")) {
+      run.interrupt();
+      assert.equal(recordOf(run.state, 4, 1).interrupted, false);
+      tick = run.restart().tick;
+    } else tick = run.restart().tick;
+    assert.deepEqual(nonSkips(await tick()), [
+      {
+        kind: "pause",
+        repository: "acme/widgets",
+        issue: 4,
+        pause: pausing,
+      },
+    ]);
+    await tick();
+    const issue = run.github.find("acme/widgets", 4);
+    assert.deepEqual(issue.comments, [thresholdComment()]);
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+    // Once told, a restart tells it no more.
+    await run.restart().tick();
+    assert.deepEqual(issue.comments, [thresholdComment()]);
+    assert.equal(run.launched.length, 1);
+  });
+
+test("a run that exits before the pause threshold's stop settles as it ended", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+  });
+  await run.tick();
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish();
+  await settled();
+  await until(() => recordOf(run.state, 4, 1).exited);
+  run.usage["claude-code"] = 99;
+  assert.deepEqual(nonSkips(await run.tick()), [
+    { kind: "keep", repository: "acme/widgets", issue: 4 },
+  ]);
+  assert.equal(recordOf(run.state, 4, 1).pausing, null);
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+});
+
+test("a usage hold stops new claims through unknown usage and a restart until its deadline", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+    usage: { "claude-code": { used: 92, reset: "2026-10-09T13:00:00.000Z" } },
+  });
+  assert.equal(
+    (await run.tick())[0].kind === "skip" && held(run, 4),
+    "claude-code usage 92% is at or above the 90% drain threshold",
+  );
+  run.usage["claude-code"] = new UsageReadError("refused", { status: 403 });
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.tick();
+  const holding =
+    "claude-code usage is unknown, and its usage hold from 92% at 2026-10-09T12:00:00.000Z, at or above the 90% drain threshold, lasts until 2026-10-09T13:00:00.000Z at most";
+  assert.equal(held(run, 4), holding);
+  const restarted = run.restart();
+  run.clock.now = new Date("2026-10-09T12:59:59.999Z");
+  await restarted.tick();
+  assert.equal(held(run, 4), holding);
+  assert.equal(run.launched.length, 0);
+  // The read backoff runs to 13:30, but the hold ends at its own deadline.
+  run.clock.now = new Date("2026-10-09T13:00:00Z");
+  assert.equal(launchesOf(await restarted.tick()).length, 1);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "ready-for-agent",
+    "factory:running",
+  ]);
+});

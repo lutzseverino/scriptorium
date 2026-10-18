@@ -54,3 +54,15 @@ test("a reset at the pause's own minute is the pause, and one just past it the n
     "2026-10-15T17:50:00.000Z",
   );
 });
+
+test("a reset a usage reading reported is its time, the start once it passed, and at most the whole hold", () => {
+  for (const [reset, expected] of [
+    ["2026-10-14T19:00:00.000Z", "2026-10-14T19:00:00.000Z"],
+    ["2026-10-14T21:00:00+02:00", "2026-10-14T19:00:00.000Z"],
+    ["2026-10-14T15:00:00.000Z", "2026-10-14T15:03:29.000Z"],
+    ["2026-10-15T15:03:29.000Z", "2026-10-15T15:03:29.000Z"],
+    ["2026-10-20T00:00:00.000Z", "2026-10-15T15:03:29.000Z"],
+    ["2026-10-14T19:00:00", "2026-10-15T15:03:29.000Z"],
+  ] as const)
+    assert.equal(deadline(reset, "2026-10-14T15:03:29.000Z"), expected, reset);
+});
