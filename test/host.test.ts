@@ -2118,8 +2118,11 @@ for (const fault of [
       caps: { "claude-code": 1, codex: 1 },
     });
     await run.tick();
+    // The two launches can reach Sandcastle in either order.
+    const launchOf = (name: string) =>
+      run.launched.find(({ options }) => options.name === name)!;
     run.github.find("acme/widgets", 2).state = "CLOSED";
-    run.launched[0].finish();
+    launchOf("acme/widgets#2").finish();
     await settled();
     const work = join(dirname(bare), "work");
     if (fault === "invalid configuration")
@@ -2156,10 +2159,10 @@ for (const fault of [
     assert.deepEqual(run.github.find("acme/widgets", 3).labels, [
       "ready-for-agent",
     ]);
-    assert.deepEqual(
-      run.launched.map(({ options }) => options.name),
-      ["acme/widgets#2", "acme/gadgets#4"],
-    );
+    assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
+      "acme/gadgets#4",
+      "acme/widgets#2",
+    ]);
     const status = run.status().repositories[0];
     assert.equal(status.state, "paused");
     assert.match(
@@ -2180,7 +2183,7 @@ for (const fault of [
     git(work, ["revert", "--no-edit", "HEAD"]);
     git(work, ["push", "--quiet", bare, "main"]);
     run.github.find("acme/gadgets", 4).state = "CLOSED";
-    run.launched[1].finish();
+    launchOf("acme/gadgets#4").finish();
     await settled();
     await run.tick();
     assert.equal(run.status().repositories[0].state, "running");
@@ -3669,6 +3672,7 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
     /usage 92% is at or above the 90% drain threshold$/,
   );
   run.usage["claude-code"] = 89;
+  const launchedBefore = run.launched.length;
   const relaunched = launchesOf(await restarted.tick());
   assert.deepEqual(
     relaunched.map(({ repository, issue, attempt, relaunch }) => ({
@@ -3682,7 +3686,12 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
       { repository: "acme/gadgets", issue: 6, attempt: 1, relaunch: true },
     ],
   );
-  const resumed = run.launched.at(-2)!;
+  // Concurrent relaunches reach Sandcastle in either order.
+  const resumedLaunches = run.launched.slice(launchedBefore);
+  assert.equal(resumedLaunches.length, 2);
+  const resumed = resumedLaunches.find(
+    ({ options }) => options.name === "acme/widgets#4",
+  )!;
   assert.equal(resumed.options.prompt, widgets4.options.prompt);
   assert.deepEqual(
     resumed.options.branchStrategy,
