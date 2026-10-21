@@ -1,7 +1,8 @@
 # Host installation and configuration
 
 One factory process serves every repository its host configuration lists. It
-reads each repository from GitHub, keeps a clone of it, launches agents in
+reads each repository's issues and pull requests from its
+[hosting platform](#hosting-platform), keeps a clone of it, launches agents in
 sandboxes built from the repository's toolchain image, and records what it is
 doing in a status file. Every repository shares one oldest-first queue, and
 provider caps and usage thresholds apply across all of them.
@@ -25,8 +26,8 @@ checkout of one of those tags installs and starts from `factory/` instead. A
 host that updates on its own lists the releases of `lutzseverino/scriptorium`
 for newer versions, since later releases are published only there.
 
-The process needs stable Node.js 24 or 26 (24 is the default), Git, the GitHub
-CLI and Docker on its `PATH`, and runs until it is stopped;
+The process needs stable Node.js 24 or 26 (24 is the default), Git and Docker
+on its `PATH`, and runs until it is stopped;
 [restarts](#restarts) describes stopping it. It builds sandbox images with its
 own user's UID and GID, with the Docker daemon's own builder unless
 `imageBuilder` opts into the [factory builder](#the-factory-builder), which
@@ -66,11 +67,16 @@ and nothing comes from environment variables.
     "afterDrain": "auto-resume"
   },
   "pollSeconds": 300,
-  "readiness": { "authorizedRoles": ["admin", "maintain"] },
+  "platforms": {
+    "github": {
+      "tokenCommand": ["/usr/local/bin/factory-token"],
+      "authorizedRoles": ["admin", "maintain"],
+      "neverAuthorize": ["dependabot[bot]"]
+    }
+  },
   "unpushablePaths": [".github/workflows/"],
   "stateDirectory": "/var/lib/factory",
   "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
-  "github": { "tokenCommand": ["/usr/local/bin/factory-token"] },
   "imageBuilder": "daemon",
   "imageRetention": { "obsoletePairs": 3, "cacheMinimumAgeHours": 24 }
 }
@@ -90,11 +96,13 @@ and nothing comes from environment variables.
 | `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                        |
 | `usage.afterDrain`                      | What reopens a drained provider's claims: `auto-resume`, a reading below the drain threshold, or `owner-resume`, only the owner's [resume command](#owner-holds-and-resume). Optional; the default is `auto-resume`.    |
 | `pollSeconds`                           | The wait between passes.                                                                                                                                                                                                |
-| `readiness.authorizedRoles`             | The repository roles whose [readiness](#readiness) the factory accepts: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                               |
+| `platforms.<name>`                      | One entry per [hosting platform](#hosting-platform) the served repositories are on; `github` is the only one. A repository on a platform without an entry isn't served.                                                 |
+| `platforms.<name>.tokenCommand`         | The executable and leading arguments that print a token for a repository on that platform. See [token command](#token-command).                                                                                         |
+| `platforms.<name>.authorizedRoles`      | The platform's role names whose holders' [readiness](#readiness) the factory accepts. On `github`: `admin`, `maintain`, `write`, `triage` or `read`.                                                                    |
+| `platforms.<name>.neverAuthorize`       | Accounts, by the login the platform reports, whose readiness never counts, whatever their role. Optional where the platform marks bots, as GitHub does; required where it doesn't.                                      |
 | `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
 | `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                    |
 | `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
-| `github.tokenCommand`                   | The executable and leading arguments that print a GitHub token for a repository.                                                                                                                                        |
 | `imageBuilder`                          | Where sandbox images build: `daemon`, the Docker daemon's own builder, or `factory`, the [factory builder](#the-factory-builder), whose old cache the factory then prunes. Optional; the default is `daemon`.           |
 | `imageRetention.obsoletePairs`          | The whole number of obsolete sandbox image pairs kept across every repository, newest first; pairs in use stay beyond it. Optional; the default is 3. See [image retention](#sandbox-image-retention).                  |
 | `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned, when `imageBuilder` is `factory`. Optional; the default is 24.                                                 |
@@ -102,6 +110,17 @@ and nothing comes from environment variables.
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
 [providers](#providers) section describes the grammar.
+
+Host configurations from before `platforms` set
+`"readiness": { "authorizedRoles": [...] }` and
+`"github": { "tokenCommand": [...] }` instead. The factory still reads them, as
+`platforms.github` without `neverAuthorize`, and refuses either alongside
+`platforms`.
+
+The factory owns its host configuration's settings, including each platform's
+accepted roles and accounts that never authorize. A standards profile that
+provides factory settings, such as Repo Canon's factory profile, supplies
+defaults for them, but the factory reads only this file.
 
 ### Usage thresholds
 
@@ -215,8 +234,8 @@ claims; resume each provider to lift it.
 
 ### Token command
 
-The factory runs `github.tokenCommand` with the repository's `<owner>/<name>`
-appended as its last argument. The command must:
+The factory runs the `tokenCommand` of the repository's platform with the
+repository's `<owner>/<name>` appended as its last argument. The command must:
 
 - exit 0 and print exactly one token, with no whitespace inside it, on
   standard output, within 60 seconds, after which it is stopped;
@@ -226,8 +245,9 @@ appended as its last argument. The command must:
 The factory caches each repository's token and reuses it for 30 minutes after
 the command printed it, then runs the command again. It refreshes a token when
 a pass needs it, and every minute, between and during passes, for each
-repository with a running sandbox. The token serves the factory's own GitHub
-reads and writes, its Git operations in the clone, and the
+repository with a running sandbox. The token serves the factory's own
+[platform](#hosting-platform) reads and writes, its Git operations in the
+clone, and the
 [sandbox's GitHub access](#sandbox-github-access).
 
 A command that fails, or prints no single token, pauses that repository for
@@ -280,25 +300,57 @@ Each repository names its labels, model label prefix and prompt in
 required fields and the repository's ownership of readiness. The factory
 knows no repository convention by default.
 
+## Hosting platform
+
+The factory reaches each repository's hosting platform, GitHub for now,
+through [Postern](https://github.com/lutzseverino/postern), which reports the
+platform's facts: issues, label changes, comments, repository roles, bots and
+pull requests. Readiness, the queue and authorization stay the factory's own
+decisions. Postern detects the platform from the repository's remote, and the
+factory uses that platform's `platforms` entry for its token command, roles
+and accounts. [ADR 0006](../adr/0006-reach-the-hosting-platform-through-postern.md)
+records this boundary.
+
+The factory refuses to serve a repository, as a paused repository with the
+reason in the process log and the [status file](#status-file), while the
+others continue, when:
+
+- no platform adapter serves its remote;
+- the host configuration has no entry for its platform;
+- its platform marks no bots and its entry has no `neverAuthorize` list.
+
+A platform failure, such as GitHub being unavailable or rate limiting the
+token, fails that repository's reads for the pass, or the write it was making,
+and the next pass tries again. The factory adds a state label before it
+removes the one it replaces, so a write that fails part way never leaves a
+claimed issue without one. It creates its state labels when they are missing
+and leaves an existing label's color and description as they are.
+
 ## Readiness
 
-The factory decides pickup itself from an issue's ready-label events, its
-body's last edit, its native GitHub links and its native blockers. It knows no
-issue template and reads no issue body.
+The factory decides pickup itself from an issue's ready-label changes, its
+body's last edit, its links and its blockers, as the platform reports them. It
+knows no issue template and reads no issue body. On GitHub its links and
+blockers are native; on a platform without native links Postern reads them
+from the issue's `Parent` and `Blocked by` sections, which the factory names.
 
 - **Authorization.** The account that last applied the ready label must hold
-  one of `readiness.authorizedRoles` now. The factory reads that account's
-  repository role on every pass, once per account and repository. Readiness a
-  bot or GitHub App applied never counts. A role it can't read holds the issue
-  for that pass.
+  one of its platform's `authorizedRoles` now, by the role name the platform
+  reports. The factory reads that account's repository role on every pass,
+  once per account and repository. Readiness a bot or app applied never
+  counts, nor does readiness from an account in `neverAuthorize`, whatever its
+  role, or from an account without a role. A role it can't read holds the
+  issue for that pass.
 - **Revision binding.** The ready label must be newer than the issue body's
   last edit, to the second. A title change or a comment doesn't count. After
-  reviewing an edit, remove and re-apply the label.
+  reviewing an edit, remove and re-apply the label. On a platform that
+  doesn't report the body's last edit, the factory skips this check.
 - **Parents.** An open issue with native sub-issues in the same repository is
   a parent, and it never launches. Its sub-issue runs only while the parent's
   readiness counts, is newer than the parent's latest sub-issue link, to the
-  second, and the parent has no open native blocker. A native parent that is
-  closed or in another repository holds nothing.
+  second, and the parent has no open native blocker. On a platform that
+  doesn't report link times, the factory skips the link check. A native
+  parent that is closed or in another repository holds nothing.
 - **Closing.** An open issue whose readiness counts, with at least one native
   sub-issue and every sub-issue closed, in any repository, is closed with a
   comment listing them.
@@ -306,6 +358,11 @@ issue template and reads no issue body.
 Refused readiness is a skip with its reason in the process log and the
 [status file](#status-file). The factory never writes the ready label and
 never comments about readiness.
+
+Where the factory skips the edit or link check, as it would on Forgejo, the
+repository's issue-contract trigger removes readiness when a ready issue's body
+is edited or a ticket links to a ready parent. A missed event leaves stale
+readiness in place; that weaker guarantee is accepted.
 
 ## Sandbox GitHub access
 
@@ -759,9 +816,10 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - its `.factory/config.json` is missing or invalid;
 - it has no `.factory/Dockerfile`, or its sandbox image does not build;
 - its configured state labels cannot be created;
-- its GitHub reads fail.
+- its [hosting platform](#hosting-platform) isn't served;
+- its platform reads fail.
 
-Its ended runs keep settling while its GitHub reads succeed, and the other
+Its ended runs keep settling while its platform reads succeed, and the other
 repositories continue. A repository pause is no [paused run](#paused-runs): it
 never adds the paused label or posts on an issue, and its reason appears only
 in the process log and the status file. A run whose sandbox is still running counts against its

@@ -1,7 +1,7 @@
 // The host runner: each pass reads every repository the host configuration
 // lists, asks the decision core what to do across all of them, and carries
-// the decisions out through GitHub, the repositories' clones and the
-// providers' sandboxes.
+// the decisions out through each repository's hosting platform, its clone and
+// the providers' sandboxes.
 import {
   existsSync,
   mkdirSync,
@@ -13,6 +13,11 @@ import {
 } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  PlatformError,
+  type ConnectOptions,
+  type Connection,
+} from "@lutzseverino/postern";
 import {
   updateClone,
   unpushedChanges,
@@ -37,10 +42,11 @@ import {
   type Snapshot,
 } from "./factory.ts";
 import {
-  repositoryGitHub,
+  relationshipSections,
+  repositoryPlatform,
   runBranch,
-  type RepositoryGitHub,
-} from "./github.ts";
+  type RepositoryPlatform,
+} from "./platform.ts";
 import {
   githubTokens,
   sandboxEnvironment,
@@ -66,14 +72,16 @@ import { renderComment } from "./comment-template.ts";
 import { createEvents, providerStatus } from "./events.ts";
 
 export type HostPorts = {
-  // Runs the GitHub CLI as the token's holder.
-  gh(token: string, args: string[]): Promise<string>;
+  // Connects to the hosting platform of the repository at the remote URL,
+  // throwing a `PlatformError` with reason `unsupported` for a remote no
+  // platform adapter serves.
+  connect(remote: string, options: ConnectOptions): Connection;
   // Runs Git in `cwd`, authenticating to GitHub as the token's holder.
   git(token: string, cwd: string, args: string[]): Promise<string>;
   // Runs the host's token command for the repository and resolves the token
   // it printed.
   token(repository: string): Promise<string>;
-  // The URL the repository is cloned from.
+  // The URL the repository is cloned from, which names its platform.
   remoteUrl(repository: string): string;
   // Builds the sandbox image over the repository's toolchain Dockerfile, with
   // the host's image builder, and resolves its tag.
@@ -132,11 +140,11 @@ type HostRun = Run & {
 };
 
 // One repository as this pass found it. An unreadable repository has no
-// GitHub reads this pass, so only its running sandboxes reach the snapshot.
+// platform reads this pass, so only its running sandboxes reach the snapshot.
 type Pass = {
   name: string;
   paused: string | null;
-  github: RepositoryGitHub | null;
+  platform: RepositoryPlatform | null;
   image: string | null;
   read: Repository | null;
   configuration: FactoryConfiguration | null;
@@ -175,7 +183,6 @@ export function createHost(
     drainThreshold: configuration.usage.drainThreshold,
     pauseThreshold: configuration.usage.pauseThreshold,
     timeLimitMinutes: configuration.timeLimitMinutes,
-    authorizedRoles: configuration.readiness.authorizedRoles,
   };
   const usage = createUsage({
     providers: Object.keys(configuration.providers),
@@ -244,7 +251,7 @@ export function createHost(
     const pass: Pass = {
       name,
       paused: null,
-      github: null,
+      platform: null,
       image: null,
       read: null,
       configuration: conventions.get(name) ?? null,
@@ -290,21 +297,25 @@ export function createHost(
       pause(`its clone did not update: ${error}`);
     }
     if (!pass.configuration) return pass;
-    const github = repositoryGitHub(
-      name,
+    const served = connect(name);
+    if ("refused" in served) {
+      pause(served.refused);
+      return pass;
+    }
+    const platform = repositoryPlatform(
+      served.connection,
       pass.configuration.labels,
-      async (args) => ports.gh(await tokens.get(name), args),
       pass.configuration.comments?.close,
     );
-    pass.github = github;
+    pass.platform = platform;
     try {
-      await github.createStateLabels();
+      await platform.createStateLabels();
     } catch (error) {
       if (pass.paused === null)
         pause(`its state labels could not be created: ${error}`);
     }
     try {
-      const issues = await github.readIssues();
+      const issues = await platform.readIssues();
       for (const run of runs.filter(
         (run) => run.repository === name && run.exited && !run.interrupted,
       )) {
@@ -318,7 +329,7 @@ export function createHost(
             run.exitedAt!.getTime() - Date.parse(run.startedAt) >=
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
-          pullRequest: await github.pullRequestState(
+          pullRequest: await platform.pullRequestState(
             run.issue,
             run.pullRequestSince,
           ),
@@ -336,26 +347,73 @@ export function createHost(
       pass.read = {
         name,
         configuration: pass.configuration,
+        authorization: served.authorization,
         paused: pass.paused,
         issues,
         claims: await readClaims(
           name,
-          github,
+          platform,
           issues,
           pass.configuration.labels,
         ),
       };
     } catch (error) {
-      pause(`its GitHub reads failed: ${error}`);
+      pause(`its platform reads failed: ${error}`);
     }
     return pass;
+  }
+
+  // The repository's platform connection and readiness policy, from the
+  // platform its remote names and the host's settings for that platform, or
+  // why the factory doesn't serve it. A platform that marks no bots needs the
+  // accounts that never authorize named.
+  function connect(
+    name: string,
+  ):
+    | { connection: Connection; authorization: Repository["authorization"] }
+    | { refused: string } {
+    let connection;
+    try {
+      connection = ports.connect(ports.remoteUrl(name), {
+        // Each request takes the token as it stands.
+        credential: () => tokens.get(name),
+        relationshipSections,
+      });
+    } catch (error) {
+      return {
+        refused:
+          error instanceof PlatformError && error.reason === "unsupported"
+            ? `its remote is on no platform the factory serves: ${error.message}`
+            : `its platform connection failed: ${error}`,
+      };
+    }
+    const { platform } = connection.repository;
+    const settings = configuration.platforms[platform];
+    if (!settings)
+      return {
+        refused: `the host configuration has no settings for its platform, ${platform}`,
+      };
+    if (
+      !connection.issueTracker.capabilities.botMarking &&
+      settings.neverAuthorize === undefined
+    )
+      return {
+        refused: `${platform} marks no bots, so the host configuration must list the accounts that never authorize in platforms.${platform}.neverAuthorize`,
+      };
+    return {
+      connection,
+      authorization: {
+        authorizedRoles: settings.authorizedRoles,
+        neverAuthorize: settings.neverAuthorize ?? [],
+      },
+    };
   }
 
   // Every running- or paused-labelled issue, open or closed, that no run on
   // the host holds. Pull request state and issue closure remain independent.
   async function readClaims(
     name: string,
-    github: RepositoryGitHub,
+    platform: RepositoryPlatform,
     issues: Issue[],
     labels: FactoryConfiguration["labels"],
   ): Promise<Claim[]> {
@@ -363,7 +421,7 @@ export function createHost(
       runs.some((run) => run.repository === name && run.issue === number);
     const claims: Claim[] = [];
     const numbers = [
-      ...(await github.readClosedClaims()),
+      ...(await platform.readClosedClaims()),
       ...issues
         .filter(
           (issue) =>
@@ -379,7 +437,7 @@ export function createHost(
       if (held(number)) continue;
       const claim: Claim = {
         issue: number,
-        pullRequest: await github.pullRequestState(number),
+        pullRequest: await platform.pullRequestState(number),
       };
       const paths = await readUnpushableChanges(
         git,
@@ -731,10 +789,10 @@ export function createHost(
   }
 
   async function apply(decision: Decision, pass: Pass) {
-    const github = pass.github!;
+    const platform = pass.platform!;
     switch (decision.kind) {
       case "close": {
-        await github.close(decision.issue, decision.tickets);
+        await platform.close(decision.issue, decision.tickets);
         const run = find(decision);
         if (run && !run.exited)
           run.controller.abort(new Error("its parent issue is closed"));
@@ -742,7 +800,7 @@ export function createHost(
         return;
       }
       case "claim":
-        await github.claim(decision.issue);
+        await platform.claim(decision.issue);
         return;
       case "launch":
         await launch(decision, pass);
@@ -761,7 +819,7 @@ export function createHost(
         return;
       }
       case "fail":
-        await github.fail(
+        await platform.fail(
           decision.issue,
           failureComment(
             pass.configuration!,
@@ -781,14 +839,14 @@ export function createHost(
         return;
       }
       case "release":
-        await github.release(decision.issue);
+        await platform.release(decision.issue);
         forget(decision);
         return;
       case "pause": {
         const run = find(decision);
         const ended = run && pausedEnding(run);
         if (!ended) return;
-        await github.pause(
+        await platform.pause(
           decision.issue,
           pauseComment(
             pass.configuration!,
@@ -804,7 +862,7 @@ export function createHost(
         return;
       }
       case "unpause":
-        await github.unpause(decision.issue);
+        await platform.unpause(decision.issue);
         return;
       case "skip":
         report(

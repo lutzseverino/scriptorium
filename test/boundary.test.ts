@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
-import { issuesQuery } from "../src/github.ts";
 
-// The package's boundary with Repo Canon: it imports nothing from outside
-// itself, and decides readiness without reading an issue's body.
+// The package's boundary with Repo Canon and the hosting platform: it imports
+// nothing from outside itself but Node.js, Sandcastle and Postern, and decides
+// readiness without reading an issue's body.
 const source = resolve(import.meta.dirname, "../src");
 
-test("the package's modules import only each other, Node.js and Sandcastle", () => {
+test("the package's modules import only each other, Node.js, Sandcastle and Postern", () => {
   const files = readdirSync(source, { recursive: true, encoding: "utf8" })
     .filter((file) => file.endsWith(".ts"))
     .map((file) => join(source, file));
@@ -23,10 +23,20 @@ test("the package's modules import only each other, Node.js and Sandcastle", () 
           !relative(source, resolve(dirname(file), specifier)).startsWith(".."),
           where,
         );
-      else assert.match(specifier, /^(node:|@ai-hero\/sandcastle\b)/, where);
+      else
+        assert.match(
+          specifier,
+          /^(node:|@ai-hero\/sandcastle\b|@lutzseverino\/postern$)/,
+          where,
+        );
     }
 });
 
-test("the issue query reads no issue body", () => {
-  assert.doesNotMatch(issuesQuery, /\bbody(Text|HTML)?\b/);
+test("no module reads an issue's body; only Postern's adapter reads relationship sections", () => {
+  for (const file of ["platform.ts", "readiness.ts", "factory.ts", "host.ts"])
+    assert.doesNotMatch(
+      readFileSync(join(source, file), "utf8"),
+      /\.body\b|\bbody:|\{[^}]*\bbody\b[^}]*\}\s*=/,
+      file,
+    );
 });

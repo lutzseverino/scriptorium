@@ -13,7 +13,8 @@
     "test": "node --test test/*.test.ts"
   },
   "dependencies": {
-    "@ai-hero/sandcastle": "0.12.0"
+    "@ai-hero/sandcastle": "0.12.0",
+    "@lutzseverino/postern": "1.0.0"
   },
   "devDependencies": {
     "@standard-schema/spec": "1.1.0",

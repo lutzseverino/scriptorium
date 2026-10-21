@@ -5,6 +5,7 @@
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
+import { connect, detectPlatform } from "@lutzseverino/postern";
 import { tokenCommand } from "./github-token.ts";
 import { createHost } from "./host.ts";
 import { readHostConfiguration } from "./host-configuration.ts";
@@ -55,15 +56,11 @@ const credentialHelper =
   '!f() { test "$1" = get && echo username=x-access-token && echo "password=$FACTORY_GITHUB_TOKEN"; }; f';
 
 const registry = createRegistry(configuration.providers);
+const remoteUrl = (repository: string) =>
+  `https://github.com/${repository}.git`;
 
 const host = createHost(configuration, registry, {
-  async gh(token, args) {
-    const { stdout } = await run("gh", args, {
-      env: { ...process.env, GH_TOKEN: token, GH_PROMPT_DISABLED: "1" },
-      maxBuffer,
-    });
-    return stdout;
-  },
+  connect,
   async git(token, cwd, args) {
     const { stdout } = await run(
       "git",
@@ -78,8 +75,17 @@ const host = createHost(configuration, registry, {
     );
     return stdout;
   },
-  token: tokenCommand(configuration.github.tokenCommand),
-  remoteUrl: (repository) => `https://github.com/${repository}.git`,
+  // The token command of the repository's platform.
+  async token(repository) {
+    const { platform } = detectPlatform(remoteUrl(repository));
+    const settings = configuration.platforms[platform];
+    if (!settings)
+      throw new Error(
+        `the host configuration has no settings for ${repository}'s platform, ${platform}`,
+      );
+    return tokenCommand(settings.tokenCommand)(repository);
+  },
+  remoteUrl,
   buildImage: (dockerfile) =>
     buildSandboxImage({
       dockerfile,

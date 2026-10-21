@@ -29,12 +29,13 @@ export type Issue = {
   // When the body was last edited, or null when it never was. Title and
   // comment changes don't count.
   editedAt: string | null;
-  // Its native parent, or null when it has none.
+  // Its parent, or null when it has none.
   nativeParent: IssueId | null;
-  // When a native sub-issue was last added, and which, or null when none was.
+  // When a sub-issue was last linked, and which when the platform says, or
+  // null when none was or the platform doesn't report it.
   latestLink: { ticket: IssueId | null; at: string } | null;
   subIssues: { number: IssueId; state: "open" | "closed" }[];
-  blockedBy: { number: number; state: "open" | "closed" }[];
+  blockedBy: { number: IssueId; state: "open" | "closed" }[];
 };
 
 // Why the factory paused a run, which it resumes by itself, and the reset the
@@ -90,6 +91,9 @@ export type Claim = {
 export type Repository = {
   name: string;
   configuration: FactoryConfiguration;
+  // Its platform's role names whose readiness the factory accepts, and the
+  // accounts whose readiness it never accepts.
+  authorization: { authorizedRoles: string[]; neverAuthorize: string[] };
   paused: string | null;
   issues: Issue[];
   claims: Claim[];
@@ -104,8 +108,6 @@ export type Settings = {
   drainThreshold: number | null;
   pauseThreshold: number | null;
   timeLimitMinutes: number;
-  // The repository roles whose readiness the factory accepts.
-  authorizedRoles: string[];
 };
 
 // A provider's usage reading recent enough to trust: its fullest window's
@@ -200,7 +202,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   const closing = new Set(
     snapshot.repositories.flatMap((repository) =>
       repository.issues
-        .filter((issue) => closes(issue, policy(repository, snapshot.settings)))
+        .filter((issue) => closes(issue, policy(repository)))
         .map((issue) => key(repository.name, issue.number)),
     ),
   );
@@ -280,7 +282,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       (issue.labels.includes(labels.paused)
         ? `labelled ${labels.paused}; the factory resumes its run by itself`
         : null) ??
-      exclusion(issue, repository, snapshot.settings) ??
+      exclusion(issue, repository) ??
       (snapshot.runs.some(
         (run) =>
           run.repository === repository.name && run.issue === issue.number,
@@ -329,10 +331,10 @@ function key(repository: string, issue: number): string {
   return `${repository}#${issue}`;
 }
 
-function policy(repository: Repository, settings: Settings): Policy {
+function policy(repository: Repository): Policy {
   return {
     ready: repository.configuration.labels.ready,
-    authorizedRoles: settings.authorizedRoles,
+    ...repository.authorization,
   };
 }
 
@@ -463,13 +465,13 @@ function relaunch(
   const at = { repository: repository.name, issue: issue.number };
   const { labels } = repository.configuration;
   const reason = issue.labels.includes(labels.ready)
-    ? exclusion(issue, repository, snapshot.settings)
+    ? exclusion(issue, repository)
     : `it no longer carries ${labels.ready}`;
   if (reason) {
     const readiness = readinessExclusion(
       issue,
       repository.issues,
-      policy(repository, snapshot.settings),
+      policy(repository),
     );
     if (issue.labels.includes(labels.ready) && readiness?.waiting)
       return [{ kind: "skip", ...at, reason: `retry waits: ${reason}` }];
@@ -744,19 +746,11 @@ function oldestFirst(
 
 // A ready-labelled issue's exclusion from pickup, given its repository, whose
 // open issues may hold it.
-function exclusion(
-  issue: Issue,
-  repository: Repository,
-  settings: Settings,
-): string | null {
+function exclusion(issue: Issue, repository: Repository): string | null {
   const { labels } = repository.configuration;
   const needsInput = needsInputExclusion(issue, labels);
   if (needsInput) return needsInput;
-  const held = readinessExclusion(
-    issue,
-    repository.issues,
-    policy(repository, settings),
-  );
+  const held = readinessExclusion(issue, repository.issues, policy(repository));
   if (held) return held.reason;
   if (issue.labels.includes(labels.failed))
     return `labelled ${labels.failed}; remove the label to run it again`;
