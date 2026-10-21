@@ -71,6 +71,18 @@ never touches its issues, a paused run is one issue's run, marked on that
 issue.
 _Avoid_: Limited run, held run, failed run
 
+**Hosting platform**:
+Where a served repository's issues, labels, roles and pull requests live, such
+as GitHub, which the factory reaches through Postern, the hosting platform
+package. Short form "platform".
+_Avoid_: Forge
+
+**Never-authorize account**:
+An account the host configuration names for a hosting platform whose
+readiness never counts, whatever its role there. Required on a platform that
+doesn't mark bots.
+_Avoid_: Bot list, denylist
+
 **Provider**:
 An agent CLI and the subscription behind it, on which the factory runs a
 model, such as Claude Code or Codex.
@@ -91,6 +103,6 @@ daemon's own builder and have no build cache pruned.
 _Avoid_: Build cache, default builder
 
 **Run outcome**:
-How a factory run ended, read from GitHub and the run's branch: done, awaiting
-merge, needs input, or failed.
+How a factory run ended, read from the hosting platform and the run's branch:
+done, awaiting merge, needs input, or failed.
 _Avoid_: Result, status

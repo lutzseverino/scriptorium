@@ -3,6 +3,7 @@
 // default; unknown fields are refused, and nothing comes from the environment.
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import type { PlatformName } from "@lutzseverino/postern";
 import {
   adapterNames,
   createRegistry,
@@ -18,15 +19,15 @@ export type HostConfiguration = {
   timeLimitMinutes: number;
   usage: UsagePolicy;
   pollSeconds: number;
-  readiness: { authorizedRoles: Role[] };
+  // Each hosting platform's settings, by the platform Postern detects from a
+  // served repository's remote. A repository on a platform without settings
+  // isn't served.
+  platforms: Partial<Record<PlatformName, PlatformSettings>>;
   // Path prefixes the factory's GitHub App can't push, such as
   // `.github/workflows/`.
   unpushablePaths: string[];
   stateDirectory: string;
   gitIdentity: { name: string; email: string };
-  // The executable and arguments that print a token for the repository named
-  // by the `<owner>/<name>` argument appended to them.
-  github: { tokenCommand: string[] };
   // Where sandbox images build: the daemon's own builder unless the host opts
   // into the factory builder and the pruning of its cache.
   imageBuilder: ImageBuilder;
@@ -55,8 +56,31 @@ export type UsagePolicy = {
 export const afterDrains = ["auto-resume", "owner-resume"] as const;
 export type AfterDrain = (typeof afterDrains)[number];
 
-export const roles = ["admin", "maintain", "write", "triage", "read"] as const;
-export type Role = (typeof roles)[number];
+export type PlatformSettings = {
+  // The executable and arguments that print a token for the repository whose
+  // path, such as `<owner>/<name>`, is appended to them.
+  tokenCommand: string[];
+  // The platform's role names, exactly as it reports them, whose holders'
+  // readiness the factory accepts.
+  authorizedRoles: string[];
+  // The accounts, by the login the platform reports, whose readiness the
+  // factory never accepts, whatever their role. Required where the platform
+  // marks no bots.
+  neverAuthorize?: string[];
+};
+
+// Each platform's repository role names.
+export const roles = {
+  github: ["admin", "maintain", "write", "triage", "read"],
+} as const satisfies Record<PlatformName, readonly string[]>;
+
+const platformNames = Object.keys(roles) as PlatformName[];
+
+// The settings in the form before `platforms`, read as GitHub's.
+type GitHubShorthand = {
+  readiness: { authorizedRoles: string[] };
+  github: { tokenCommand: string[] };
+};
 
 // Reads and validates the host configuration, or throws naming every problem.
 // A valid configuration that still uses a deprecated form tells `warn`, or
@@ -135,11 +159,20 @@ function migrated(
   };
 }
 
-function withDefaults(configuration: HostConfiguration): HostConfiguration {
+function withDefaults(
+  configuration: HostConfiguration & Partial<GitHubShorthand>,
+): HostConfiguration {
   const usage: Partial<UsagePolicy> = configuration.usage;
   const retention: Partial<ImageRetention> = configuration.imageRetention ?? {};
+  const { readiness, github, ...rest } = configuration;
   return {
-    ...configuration,
+    ...rest,
+    platforms: configuration.platforms ?? {
+      github: {
+        tokenCommand: github!.tokenCommand,
+        authorizedRoles: readiness!.authorizedRoles,
+      },
+    },
     usage: {
       drainThreshold: usage.drainThreshold!,
       pauseThreshold: usage.pauseThreshold ?? null,
@@ -155,6 +188,18 @@ function withDefaults(configuration: HostConfiguration): HostConfiguration {
 
 function hostConfigurationProblems(value: unknown): string[] {
   const problems: string[] = [];
+  // `readiness` and `github` are GitHub's settings in the form before
+  // `platforms`, which still reads them, but not alongside `platforms`.
+  const given = (
+    typeof value === "object" && value !== null ? value : {}
+  ) as Record<string, unknown>;
+  const has = (name: string) => Object.hasOwn(given, name);
+  const shorthand = !has("platforms") && (has("readiness") || has("github"));
+  if (has("platforms"))
+    for (const name of ["readiness", "github"].filter(has))
+      problems.push(
+        `${name}: is GitHub's setting in the form before platforms and can't be set with platforms; move it into platforms.github`,
+      );
   object(
     {
       repositories: list(
@@ -205,15 +250,33 @@ function hostConfigurationProblems(value: unknown): string[] {
         (seconds) => timer(seconds * 1000),
         "is not a positive number of seconds a timer can wait",
       ),
-      readiness: object({
-        authorizedRoles: list(
-          text(
-            (role) => (roles as readonly string[]).includes(role),
-            `is not one of ${roles.join(", ")}`,
-          ),
-          { unique: (role) => role, nonEmpty: true },
-        ),
-      }),
+      readiness: object({ authorizedRoles: authorizedRoles("github") }),
+      platforms: (platforms, path, problems) => {
+        record(
+          (entry, path, problems, name) =>
+            object(
+              {
+                tokenCommand: list(text(), { nonEmpty: true }),
+                authorizedRoles: authorizedRoles(name as PlatformName),
+                neverAuthorize: list(
+                  text((login) => !/\s/.test(login), "is not an account login"),
+                  { unique: (login) => login.toLowerCase() },
+                ),
+              },
+              ["neverAuthorize"],
+            )(entry, path, problems),
+          (name) =>
+            (platformNames as string[]).includes(name)
+              ? null
+              : `is not a platform Postern serves; choose ${platformNames.join(" or ")}`,
+        )(platforms, path, problems);
+        if (
+          typeof platforms === "object" &&
+          platforms !== null &&
+          Object.keys(platforms).length === 0
+        )
+          problems.push(`${path}: is empty`);
+      },
       unpushablePaths: list(
         text(
           (prefix) => !isAbsolute(prefix) && !prefix.split("/").includes(".."),
@@ -242,7 +305,11 @@ function hostConfigurationProblems(value: unknown): string[] {
         ["obsoletePairs", "cacheMinimumAgeHours"],
       ),
     },
-    ["imageBuilder", "imageRetention"],
+    [
+      "imageBuilder",
+      "imageRetention",
+      ...(shorthand ? ["platforms"] : ["readiness", "github"]),
+    ],
   )(value, "", problems);
   const usage = (value as { usage?: Partial<UsagePolicy> } | null)?.usage;
   const { drainThreshold: drain, pauseThreshold: pause } = usage ?? {};
@@ -263,6 +330,14 @@ function hostConfigurationProblems(value: unknown): string[] {
     }
   }
   return problems;
+}
+
+function authorizedRoles(platform: PlatformName): Check {
+  const names: readonly string[] = roles[platform];
+  return list(
+    text((role) => names.includes(role), `is not one of ${names.join(", ")}`),
+    { unique: (role) => role, nonEmpty: true },
+  );
 }
 
 const percentage = number(

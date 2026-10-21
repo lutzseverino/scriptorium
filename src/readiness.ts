@@ -1,22 +1,29 @@
 // The readiness module: whether an issue's ready label counts, decided from
-// its ready-label events, its body's last edit, its native links and its
-// blockers. It knows no issue template.
+// its ready-label changes, its body's last edit, its links and its blockers,
+// as the platform reports them. It knows no issue template and reads no
+// issue body.
 import type { Issue, IssueId } from "./factory.ts";
 
 // Who last applied an issue's ready label. Only a user authorizes, by their
-// repository role now, which is null when this pass could not read it. A bot
-// or app never authorizes, nor does an account GitHub no longer knows as a
-// user.
+// repository role now as the platform names it, which is null when they hold
+// none. A user whose role this pass could not read waits. A bot or app never
+// authorizes, nor does an account the platform no longer knows.
 export type Actor =
   | { kind: "user"; login: string; role: string | null }
+  | { kind: "unreadable"; login: string }
   | { kind: "bot"; login: string }
   | { kind: "unknown" };
 
 // The latest event that applied an issue's ready label.
 export type Readiness = { at: string; actor: Actor };
 
-// The repository's ready label and the host's authorized roles.
-export type Policy = { ready: string; authorizedRoles: string[] };
+// The repository's ready label, and its platform's role names and accounts
+// the host configuration authorizes and never authorizes.
+export type Policy = {
+  ready: string;
+  authorizedRoles: string[];
+  neverAuthorize: string[];
+};
 
 // A permanent refusal or a transient wait while a role lookup is unreadable.
 export type ReadinessHold = { reason: string; waiting: boolean };
@@ -63,11 +70,12 @@ export function readinessExclusion(
 
 // Why a ready-labelled issue's readiness doesn't count, as a clause after
 // "its readiness" or "whose readiness", or null when it counts: the label's
-// latest actor must hold an authorized role now, and the label must be newer
-// than the body's last edit. `on` names the issue to re-apply it on when that
-// is another issue.
+// latest actor must be a user the host doesn't exclude, holding an authorized
+// role now, and the label must be newer than the body's last edit when the
+// platform reports it. `on` names the issue to re-apply it on when that is
+// another issue.
 function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
-  const { ready, authorizedRoles } = policy;
+  const { ready, authorizedRoles, neverAuthorize } = policy;
   const reapply = `remove and re-apply ${ready}${on}`;
   const authorized = `a person with the ${authorizedRoles.join(" or ")} role must ${reapply}`;
   if (issue.ready === null)
@@ -86,10 +94,25 @@ function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
       reason: `is refused: ${ready} was applied by an account that is not a user, which never authorizes; ${authorized}`,
       waiting: false,
     };
-  if (actor.role === null)
+  // Platform logins ignore case.
+  if (
+    neverAuthorize.some(
+      (account) => account.toLowerCase() === actor.login.toLowerCase(),
+    )
+  )
+    return {
+      reason: `is refused: ${ready} was applied by @${actor.login}, an account the host configuration never lets authorize; ${authorized}`,
+      waiting: false,
+    };
+  if (actor.kind === "unreadable")
     return {
       reason: `waits: the repository role of @${actor.login}, who applied ${ready}, could not be read this pass`,
       waiting: true,
+    };
+  if (actor.role === null)
+    return {
+      reason: `is refused: ${ready} was applied by @${actor.login}, who holds no repository role; ${authorized}`,
+      waiting: false,
     };
   if (!authorizedRoles.includes(actor.role))
     return {

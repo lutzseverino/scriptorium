@@ -96,9 +96,9 @@ which also drops its cache; the next build creates it again from the new pin.
 ### Host and adapter tests
 
 The host runner's tests in `test/host.test.ts` drive whole passes, stop
-signals and restarts with a stateful GitHub CLI fake, a fake Sandcastle behind
-the real provider registry, a fake sandbox removal, and real Git clones of
-local bare remotes, so they need Git. The decision core's tests in
+signals and restarts with a stateful fake of each repository's Postern
+connection, a fake Sandcastle behind the real provider registry, a fake
+sandbox removal, and real Git clones of local bare remotes, so they need Git. The decision core's tests in
 `test/factory.test.ts` drive it with snapshots, and the host
 configuration's tests read the fixture files in
 `test/fixtures/host-configuration/`. Factory configuration validation reads
@@ -123,15 +123,23 @@ requests on a fake clock over a state directory, including a request left
 behind by a stopped process, and `test/resume.test.ts` covers the `resume`
 command's arguments and refusals; the host tests run that command as its own
 process against a running host.
-The GitHub CLI fake serves each issue's timeline from one fixture shape (label
-events with their actors, body and title edits, comments and sub-issue links)
-and each account's repository role, so the host tests drive the adapter's
-readiness reads. `test/boundary.test.ts` checks that the package imports
-nothing from outside itself and that its issue query reads no body.
+The connection fake serves each issue's timeline from one fixture shape (label
+events with their actors, body and title edits, comments and sub-issue links),
+each account's repository role and the platform's capability flags, so the
+host tests drive the platform module's readiness reads, including platforms
+without bot marking, edit times or link times, and a remote no platform serves.
+`test/platform.test.ts` drives that module through Postern's real GitHub
+adapter over a fake `fetch`, without network access, and fails each state
+transition part way. `test/boundary.test.ts` checks that the package imports
+nothing from outside itself but Node.js, Sandcastle and Postern, and that no
+module reads an issue's body.
 The token tests drive the cache with a fake token command and clock; the one
 that runs the GitHub CLI against the sandbox's token file skips when `gh` is
 not installed. The run log's tests rely on file watching, which the published
 log follows while an agent runs.
+
+Postern is a pinned runtime dependency, at an exact `1.x` version; bump it
+within major 1 and run the platform, host and boundary tests.
 
 Sandcastle is a pinned runtime dependency, at 0.12.0; the smoke test in
 `test/sandcastle.test.ts` constructs its agent and sandbox configurations

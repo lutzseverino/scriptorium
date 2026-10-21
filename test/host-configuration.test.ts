@@ -54,14 +54,91 @@ test("a complete host configuration is read as written", () => {
       afterDrain: "auto-resume",
     },
     pollSeconds: 300,
-    readiness: { authorizedRoles: ["admin", "maintain"] },
+    platforms: {
+      github: {
+        tokenCommand: ["/usr/local/bin/factory-token", "--app", "7"],
+        authorizedRoles: ["admin", "maintain"],
+        neverAuthorize: ["dependabot[bot]"],
+      },
+    },
     unpushablePaths: [".github/workflows/"],
     stateDirectory: "/var/lib/factory",
     gitIdentity: { name: "factory[bot]", email: "factory@example.com" },
-    github: { tokenCommand: ["/usr/local/bin/factory-token", "--app", "7"] },
     imageBuilder: "daemon",
     imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
   });
+});
+
+test("readiness and github, the form before platforms, are read as GitHub's platform settings", () => {
+  const { platforms, ...rest } = read(fixture("valid")).configuration;
+  assert.deepEqual(read(fixture("github-shorthand")), {
+    configuration: {
+      ...rest,
+      platforms: {
+        github: {
+          tokenCommand: ["/usr/local/bin/factory-token", "--app", "7"],
+          authorizedRoles: ["admin", "maintain"],
+        },
+      },
+    },
+    warnings: [],
+  });
+  assert.deepEqual(platforms.github!.authorizedRoles, ["admin", "maintain"]);
+});
+
+test("the form before platforms can't be set alongside platforms, and a configuration without either names platforms", (t) => {
+  const path = join(directory(t), "host.json");
+  const valid = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const shorthand = JSON.parse(
+    readFileSync(fixture("github-shorthand"), "utf8"),
+  );
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ...valid,
+      readiness: shorthand.readiness,
+      github: shorthand.github,
+    }),
+  );
+  assert.deepEqual(refused(path), [
+    `The host configuration ${path} is invalid:`,
+    "- readiness: is GitHub's setting in the form before platforms and can't be set with platforms; move it into platforms.github",
+    "- github: is GitHub's setting in the form before platforms and can't be set with platforms; move it into platforms.github",
+  ]);
+  const { platforms: _, ...without } = valid;
+  writeFileSync(path, JSON.stringify(without));
+  assert.deepEqual(refused(path), [
+    `The host configuration ${path} is invalid:`,
+    "- platforms: is missing",
+  ]);
+  writeFileSync(path, JSON.stringify({ ...valid, platforms: {} }));
+  assert.deepEqual(refused(path), [
+    `The host configuration ${path} is invalid:`,
+    "- platforms: is empty",
+  ]);
+  // The accounts that never authorize are optional and may be none.
+  for (const neverAuthorize of [undefined, []]) {
+    const github = { ...valid.platforms.github, neverAuthorize };
+    writeFileSync(path, JSON.stringify({ ...valid, platforms: { github } }));
+    assert.deepEqual(
+      read(path).configuration.platforms.github!.neverAuthorize,
+      neverAuthorize,
+    );
+  }
+});
+
+test("each platform's role names, accounts and token command are validated", () => {
+  assert.deepEqual(refusal("platforms-malformed"), [
+    `The host configuration ${fixture("platforms-malformed")} is invalid:`,
+    "- platforms.github.botMarking: is not a host configuration field",
+    "- platforms.github.tokenCommand: is empty",
+    '- platforms.github.authorizedRoles[0]: "Admin" is not one of admin, maintain, write, triage, read',
+    '- platforms.github.authorizedRoles[2]: repeats "maintain"',
+    '- platforms.github.neverAuthorize[1]: repeats "Dependabot[bot]"',
+    '- platforms.github.neverAuthorize[2]: "two words" is not an account login',
+    "- platforms.github.neverAuthorize[3]: is not a non-empty string",
+    "- platforms.gitlab: is not a platform Postern serves; choose github",
+  ]);
 });
 
 test("images build with the daemon's own builder unless the host opts into the factory builder", (t) => {
@@ -243,7 +320,7 @@ test("a pause threshold below the drain threshold is refused", (t) => {
 test("for one release the legacy usageThreshold is read as the drain threshold, with a callback warning", () => {
   const { configuration, warnings } = read(fixture("legacy"));
   assert.deepEqual(configuration, {
-    ...read(fixture("valid")).configuration,
+    ...read(fixture("github-shorthand")).configuration,
     usage: {
       drainThreshold: 80,
       pauseThreshold: null,

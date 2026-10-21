@@ -1,0 +1,31 @@
+{
+  "repositories": ["acme/widgets", "acme/gadgets"],
+  "providers": {
+    "claude-code": { "cap": 2, "credential": "/etc/factory/claude-token" },
+    "codex": { "cap": 1, "credential": "/etc/factory/codex-auth.json" }
+  },
+  "models": {
+    "default": "claude-sonnet-5-5",
+    "retry": "claude-opus-5-5@xhigh"
+  },
+  "timeLimitMinutes": 240,
+  "usage": {
+    "drainThreshold": 90,
+    "pauseThreshold": 95,
+    "afterDrain": "auto-resume"
+  },
+  "pollSeconds": 300,
+  "platforms": {
+    "github": {
+      "tokenCommand": [],
+      "authorizedRoles": ["Admin", "maintain", "maintain"],
+      "neverAuthorize": ["dependabot[bot]", "Dependabot[bot]", "two words", ""],
+      "botMarking": false
+    },
+    "gitlab": { "tokenCommand": ["/usr/local/bin/gitlab-token"] }
+  },
+  "unpushablePaths": [".github/workflows/"],
+  "stateDirectory": "/var/lib/factory",
+  "gitIdentity": { "name": "factory[bot]", "email": "factory@example.com" },
+  "imageRetention": { "obsoletePairs": 3, "cacheMinimumAgeHours": 24 }
+}

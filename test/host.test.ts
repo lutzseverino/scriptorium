@@ -15,6 +15,17 @@ import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { RunOptions, RunResult } from "@ai-hero/sandcastle";
 import type { DockerOptions } from "@ai-hero/sandcastle/sandboxes/docker";
+import {
+  PlatformError,
+  type Account,
+  type Comment,
+  type ConnectOptions,
+  type Connection,
+  type Issue,
+  type IssueState,
+  type IssueTrackerCapabilities,
+  type PullRequest,
+} from "@lutzseverino/postern";
 import { sandboxEnvironment } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
 import type { FactoryEvent } from "../src/events.ts";
@@ -25,29 +36,19 @@ import { createRegistry } from "../src/providers.ts";
 import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
 
-// The host runner, run against a stateful GitHub CLI fake, real Git clones
-// of local bare remotes, the provider registry over a fake Sandcastle, and a
-// temporary state directory.
+// The host runner, run against a stateful fake of each repository's Postern
+// connection, real Git clones of local bare remotes, the provider registry
+// over a fake Sandcastle, and a temporary state directory.
 
 // One event of an issue's timeline, the one shape every timeline fixture
 // takes. `edited` is a body edit and `renamed` a title edit. An actor whose
-// login ends in `[bot]` is a bot or app, and a null actor an account GitHub
-// no longer knows.
+// login ends in `[bot]` is a bot or app, and a null actor an account the
+// platform no longer knows.
 type TimelineEvent = { at: string } & (
   | { event: "labeled"; label: string; actor: string | null }
   | { event: "edited" | "renamed" | "commented" }
   | { event: "linked"; subIssue: number }
 );
-
-// The GraphQL timeline item type each fixture event appears as; a body edit
-// is no timeline item.
-const itemTypes = {
-  labeled: "LABELED_EVENT",
-  renamed: "RENAMED_TITLE_EVENT",
-  commented: "ISSUE_COMMENT",
-  linked: "SUB_ISSUE_ADDED_EVENT",
-  edited: null,
-} as const;
 
 type IssueSpec = {
   number: number;
@@ -61,6 +62,15 @@ type IssueSpec = {
   comments?: string[];
   // Events after the issue's creation, when the owner applied its labels.
   timeline?: TimelineEvent[];
+};
+
+// Every capability GitHub's adapter offers.
+const githubCapabilities: IssueTrackerCapabilities = {
+  nativeParent: true,
+  nativeBlockers: true,
+  bodyEditTime: true,
+  linkTime: true,
+  botMarking: true,
 };
 
 const environment = {
@@ -105,12 +115,16 @@ function remote(t: TestContext, files: Record<string, string>): string {
   return bare;
 }
 
-// GitHub, which accepts only the token the command last printed for each
-// repository and reads each account's repository role from `roles`.
-function fakeGitHub(
+// The hosting platform behind each repository's Postern connection, which
+// accepts only the token the command last printed for that repository, reads
+// each account's repository role from `roles`, and offers `capabilities`.
+// Each write is recorded in `events` as it happens.
+function fakePlatform(
   repositories: Record<string, IssueSpec[]>,
   tokens: Record<string, string | Error>,
-  roles: Record<string, string | Error>,
+  roles: Record<string, string | null | Error>,
+  capabilities: IssueTrackerCapabilities,
+  events: string[],
 ) {
   const state = Object.fromEntries(
     Object.entries(repositories).map(([name, issues]) => [
@@ -148,196 +162,207 @@ function fakeGitHub(
     assert.ok(issue, `${repository}#${number} exists`);
     return issue;
   };
-  const value = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
-  const field = (args: string[], name: string) =>
-    args
-      .find(
-        (arg, index) => args[index - 1] === "-F" && arg.startsWith(`${name}=`),
-      )
-      ?.slice(name.length + 1);
-  const names = (labels: string[]) => ({
-    nodes: labels.map((name) => ({ name })),
-  });
 
-  const calls: string[][] = [];
+  // Each port operation, as `[repository, operation, ...arguments]`.
+  const calls: unknown[][] = [];
   const labels = new Map<string, Set<string>>();
 
-  // Edits GitHub refuses, as `<owner>/<name>#<n>`.
+  // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
 
-  // The issue's timeline items of the types a `timelineItems` connection
-  // asks for, oldest first, like GitHub's.
-  const timelineItems = (
-    issue: (typeof state)[string][number],
-    types: string[],
-    last: number,
-    local: (number: number) => unknown,
-  ) => ({
-    nodes: issue.timeline
-      .filter((item) => types.includes(itemTypes[item.event] ?? ""))
-      .slice(-last)
-      .map((item) => ({
-        createdAt: item.at,
-        ...(item.event === "labeled" && {
-          label: { name: item.label },
-          actor:
-            item.actor === null
-              ? null
-              : item.actor.endsWith("[bot]")
-                ? { __typename: "Bot", login: item.actor.slice(0, -5) }
-                : { __typename: "User", login: item.actor },
-        }),
-        ...(item.event === "linked" && { subIssue: local(item.subIssue) }),
-      })),
-  });
   const latest = (items: TimelineEvent[]) =>
     items
       .map((item) => item.at)
       .sort()
       .at(-1) ?? null;
+  const lower = <T extends string>(value: string) => value.toLowerCase() as T;
+  const account = (login: string | null): Account | null =>
+    login === null
+      ? null
+      : {
+          login,
+          bot: capabilities.botMarking ? login.endsWith("[bot]") : null,
+        };
 
-  async function gh(token: string, args: string[]): Promise<string> {
-    calls.push(args);
-    const permission =
-      args[0] === "api" &&
-      /^repos\/([^/]+\/[^/]+)\/collaborators\/([^/]+)\/permission$/.exec(
-        args[1],
+  // The connection to `repository`, which always passes the factory's section
+  // names.
+  function connect(repository: string, options: ConnectOptions): Connection {
+    assert.deepEqual(options.relationshipSections, {
+      parent: "Parent",
+      blockedBy: "Blocked by",
+    });
+    const credential = options.credential as () => Promise<string>;
+    // Every request authenticates with the token as it stands.
+    async function request(operation: string, ...args: unknown[]) {
+      calls.push([repository, operation, ...args]);
+      assert.equal(
+        await credential(),
+        tokens[repository],
+        `${repository}'s token`,
       );
-    const repository = permission
-      ? permission[1]
-      : args[0] === "api"
-        ? `${field(args, "owner")}/${field(args, "name")}`
-        : value(args, "--repo");
-    assert.equal(token, tokens[repository], `${repository}'s token`);
-    if (permission) {
-      assert.equal(args.length, 2);
-      const role = roles[permission[2]] ?? "";
-      if (role instanceof Error) throw role;
-      return JSON.stringify({ role_name: role });
     }
-    if (args[0] === "label" && args[1] === "create") {
-      const existing = labels.get(repository) ?? new Set<string>();
-      existing.add(args[2]);
-      labels.set(repository, existing);
-      return "";
-    }
-    if (args[0] === "api") {
-      const query = args.find((arg) => arg.startsWith("query="))!;
-      if (query.includes("closedByPullRequestsReferences")) {
-        const issue = find(repository, field(args, "number")!);
-        assert.equal(field(args, "branch"), `factory/issue-${issue.number}`);
-        return JSON.stringify({
-          data: {
-            repository: {
-              issue: {
-                state: issue.state,
-                closedByPullRequestsReferences: {
-                  nodes: issue.pullRequests.map((pullRequest) => ({
-                    state: pullRequest,
-                    createdAt: "2026-10-09T12:00:00Z",
-                    isCrossRepository: false,
-                  })),
-                },
-              },
-              pullRequests: { nodes: [] },
-            },
-          },
-        });
-      }
-      const local = (number: number) => ({
-        number,
-        repository: { nameWithOwner: repository },
-      });
-      const connections = [
-        ...query.matchAll(
-          /(\w+): timelineItems\(itemTypes: \[([A-Z_, ]+)\], last: (\d+)\)/g,
-        ),
-      ];
-      return JSON.stringify([
-        {
-          data: {
-            repository: {
-              issues: {
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: state[repository]
-                  .filter((issue) => issue.state === "OPEN")
-                  .map((issue) => ({
-                    number: issue.number,
-                    createdAt: issue.createdAt,
-                    updatedAt: latest(issue.timeline) ?? issue.createdAt,
-                    lastEditedAt: latest(
-                      issue.timeline.filter((item) => item.event === "edited"),
-                    ),
-                    labels: names(issue.labels),
-                    parent: issue.parent ? local(issue.parent) : null,
-                    subIssues: {
-                      nodes: issue.subIssues.map((child) => ({
-                        ...local(child.number),
-                        state: child.state ?? "OPEN",
-                      })),
-                    },
-                    blockedBy: { nodes: issue.blockedBy },
-                    ...Object.fromEntries(
-                      connections.map(([, alias, types, last]) => [
-                        alias,
-                        timelineItems(
-                          issue,
-                          types.split(/,\s*/),
-                          Number(last),
-                          local,
-                        ),
-                      ]),
-                    ),
-                  })),
-              },
-            },
-          },
+    const reference = (number: number, issueState: string) => ({
+      repository,
+      number,
+      state: lower<IssueState>(issueState),
+    });
+    const facts = (issue: (typeof state)[string][number]): Issue => ({
+      number: issue.number,
+      id: issue.number,
+      nodeId: null,
+      url: `https://platform.test/${repository}/issues/${issue.number}`,
+      state: lower(issue.state),
+      title: `Issue ${issue.number}`,
+      body: "### Parent\n\n#99\n\n### Blocked by\n\n#98\n",
+      author: account("owner"),
+      labels: [...issue.labels],
+      createdAt: issue.createdAt,
+      parent: issue.parent ? reference(issue.parent, "OPEN") : null,
+      subIssues: issue.subIssues.map((child) =>
+        reference(child.number, child.state ?? "OPEN"),
+      ),
+      blockedBy: issue.blockedBy.map((blocker) =>
+        reference(blocker.number, blocker.state),
+      ),
+      bodyEditTime: latest(
+        issue.timeline.filter((item) => item.event === "edited"),
+      ),
+      linkTime: latest(
+        issue.timeline.filter((item) => item.event === "linked"),
+      ),
+    });
+    const edit = (number: number) => {
+      const issue = find(repository, number);
+      if (refused.has(`${repository}#${number}`))
+        throw new PlatformError("forbidden", "the platform refused the edit");
+      return issue;
+    };
+    const unused = () => {
+      throw new Error("the host never uses this operation");
+    };
+    return {
+      repository: { platform: "github", host: "github.com", path: repository },
+      issueTracker: {
+        capabilities,
+        async issues(filter = {}) {
+          await request("issues", filter);
+          return state[repository]
+            .filter(
+              (issue) =>
+                lower(issue.state) === (filter.state ?? "open") &&
+                (filter.label === undefined ||
+                  issue.labels.includes(filter.label)),
+            )
+            .map(facts);
         },
-      ]);
-    }
-    if (args[0] === "issue" && args[1] === "list")
-      return JSON.stringify(
-        state[repository]
-          .filter(
-            (issue) =>
-              issue.state === "CLOSED" &&
-              issue.labels.includes(value(args, "--label")),
-          )
-          .map(({ number }) => ({ number })),
-      );
-    const issue = find(repository, args[2]);
-    if (args[1] === "edit") {
-      if (refused.has(`${repository}#${issue.number}`))
-        throw new Error("GitHub refused the edit");
-      for (let index = 5; index < args.length; index += 2)
-        if (args[index] === "--add-label") {
-          issue.labels.push(args[index + 1]);
-          issue.timeline.push({
-            event: "labeled",
-            label: args[index + 1],
-            actor: "factory[bot]",
-            at: "2026-10-09T12:00:00Z",
-          });
-        } else if (args[index] === "--remove-label")
-          issue.labels = issue.labels.filter(
-            (label) => label !== args[index + 1],
+        async labelChanges(number) {
+          await request("labelChanges", number);
+          return find(repository, number).timeline.flatMap((item, id) =>
+            item.event === "labeled"
+              ? [
+                  {
+                    id,
+                    action: "added" as const,
+                    label: item.label,
+                    actor: account(item.actor),
+                    time: item.at,
+                  },
+                ]
+              : [],
           );
-        else throw new Error(`unexpected gh issue edit flag ${args[index]}`);
-      return "";
-    }
-    if (args[1] === "comment") {
-      issue.comments.push(value(args, "--body"));
-      return "";
-    }
-    if (args[1] === "close") {
-      issue.comments.push(value(args, "--comment"));
-      issue.state = "CLOSED";
-      return "";
-    }
-    throw new Error(`unexpected gh ${args.join(" ")}`);
+        },
+        async addLabels(number, names) {
+          await request("addLabels", number, ...names);
+          const issue = edit(number);
+          for (const label of names) {
+            events.push(`add ${repository}#${number} ${label}`);
+            if (!issue.labels.includes(label)) issue.labels.push(label);
+            issue.timeline.push({
+              event: "labeled",
+              label,
+              actor: "factory[bot]",
+              at: "2026-10-09T12:00:00Z",
+            });
+          }
+        },
+        async removeLabel(number, label) {
+          await request("removeLabel", number, label);
+          const issue = edit(number);
+          if (!issue.labels.includes(label))
+            throw new PlatformError("notFound", "Label does not exist");
+          events.push(`remove ${repository}#${number} ${label}`);
+          issue.labels = issue.labels.filter((name) => name !== label);
+        },
+        async createLabel(label) {
+          await request("createLabel", label);
+          const existing = labels.get(repository) ?? new Set<string>();
+          labels.set(repository, existing);
+          if (existing.has(label.name))
+            throw new PlatformError("rejected", "Validation Failed", {
+              status: 422,
+            });
+          existing.add(label.name);
+          return label;
+        },
+        async createComment(number, comment) {
+          await request("createComment", number, comment);
+          edit(number).comments.push(comment);
+          return {} as Comment;
+        },
+        async closeIssue(number) {
+          await request("closeIssue", number);
+          edit(number).state = "CLOSED";
+        },
+        issue: unused,
+        comments: unused,
+        updateComment: unused,
+      },
+      pullRequests: {
+        capabilities: { closingReferences: true },
+        async closing(number) {
+          await request("closing", number);
+          return find(repository, number).pullRequests.map(
+            (pullRequest) =>
+              ({
+                state: lower(pullRequest),
+                createdAt: "2026-10-09T12:00:00Z",
+                crossRepository: false,
+              }) as PullRequest,
+          );
+        },
+        async byHeadBranch(branch) {
+          await request("byHeadBranch", branch);
+          assert.match(branch, /^factory\/issue-\d+$/);
+          return [];
+        },
+        pullRequest: unused,
+        reviews: unused,
+        reviewThreads: unused,
+        checks: unused,
+        mergesThroughQueue: unused,
+        comment: unused,
+        squashMerge: unused,
+      },
+      releaseSource: {
+        capabilities: {},
+        releases: unused,
+        tagCommit: unused,
+      },
+      access: {
+        capabilities: {},
+        async role(login) {
+          await request("role", login);
+          const role = roles[login] ?? null;
+          if (role instanceof Error) throw role;
+          return role;
+        },
+        viewer: unused,
+        request: unused,
+      },
+    };
   }
 
-  return { gh, find, refused, calls, labels };
+  return { connect, find, refused, calls, labels };
 }
 
 // Sandcastle that records each run, with the token the sandbox would read,
@@ -407,8 +432,6 @@ function fakeSandcastle() {
 const invocation = (text: string | undefined) =>
   text?.split("\n\nUnattended execution:\n")[0];
 
-const value = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
-
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 
 // Waits, on real time, for what file I/O finishes, such as a run's cleanup.
@@ -431,6 +454,8 @@ function host(
     remotes,
     tokens = {},
     roles = { owner: "admin" },
+    capabilities = githubCapabilities,
+    unserved = [],
     configuration = {},
     caps = { "claude-code": 2, codex: 1 },
     imageFailures = [],
@@ -441,7 +466,10 @@ function host(
     repositories: Record<string, IssueSpec[]>;
     remotes: Record<string, string>;
     tokens?: Record<string, string | Error>;
-    roles?: Record<string, string | Error>;
+    roles?: Record<string, string | null | Error>;
+    capabilities?: IssueTrackerCapabilities;
+    // The repositories whose remote no platform adapter serves.
+    unserved?: string[];
     configuration?: Partial<HostConfiguration>;
     caps?: { "claude-code": number; codex: number };
     // Each build in turn fails with its error, or succeeds on null.
@@ -476,7 +504,15 @@ function host(
       tokens[name] ?? `ghs_${name.replace("/", "_")}`,
     ]),
   );
-  const github = fakeGitHub(repositories, tokenOf, roles);
+  // Sandbox removals and label writes, in order.
+  const events: string[] = [];
+  const github = fakePlatform(
+    repositories,
+    tokenOf,
+    roles,
+    capabilities,
+    events,
+  );
   const fake = fakeSandcastle();
   const { sandcastle, launched } = fake;
   const resolved: HostConfiguration = {
@@ -493,11 +529,12 @@ function host(
       afterDrain: "auto-resume",
     },
     pollSeconds: 300,
-    readiness: { authorizedRoles: ["admin"] },
+    platforms: {
+      github: { tokenCommand: ["unused"], authorizedRoles: ["admin"] },
+    },
     unpushablePaths: [".github/workflows/"],
     stateDirectory: join(root, "state"),
     gitIdentity: { name: "Factory", email: "factory@example.test" },
-    github: { tokenCommand: ["unused"] },
     imageBuilder: "daemon",
     imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
     ...configuration,
@@ -513,20 +550,22 @@ function host(
   const reports: string[] = [];
   const tokenCommands: string[] = [];
   const clock = { now: new Date("2026-10-09T12:00:00Z") };
-  // Sandbox removals and issue edits, in order.
-  const events: string[] = [];
   const starts: (() => void)[] = [];
   const usageReads: string[] = [];
   // Each image retention's current and running images, and each cache prune.
   const retentions: { current: string[]; running: string[] }[] = [];
   let prunes = 0;
   const ports: HostPorts = {
-    async gh(token, args) {
-      if (args[0] === "issue" && args[1] === "edit")
-        events.push(
-          `edit ${value(args, "--repo")}#${args[2]} ${args.slice(5).join(" ")}`,
+    connect(remote, options) {
+      const name = Object.keys(remotes).find(
+        (name) => remotes[name] === remote,
+      )!;
+      if (unserved.includes(name))
+        throw new PlatformError(
+          "unsupported",
+          "No platform adapter serves the remote on host git.example.test.",
         );
-      return github.gh(token, args);
+      return github.connect(name, options);
     },
     git: async (_token, cwd, args) => git(cwd, args),
     async token(repository) {
@@ -1165,9 +1204,7 @@ test("empty-frontier status and events expose simultaneous providers, including 
   assert.equal(deliveries.length, 7);
   assert.equal(run.launched.length, 0);
   assert.equal(
-    run.github.calls.some(
-      (args) => args[0] === "issue" && args[1] === "comment",
-    ),
+    run.github.calls.some(([, operation]) => operation === "createComment"),
     false,
   );
 });
@@ -1629,7 +1666,7 @@ test("a failed write stops only its repository's decisions for the pass", async 
   ]);
   assert.ok(
     run.reports.includes(
-      "acme/widgets#4 claim failed, so acme/widgets waits for the next pass: Error: GitHub refused the edit",
+      "acme/widgets#4 claim failed, so acme/widgets waits for the next pass: PlatformError: the platform refused the edit",
     ),
     run.reports.join("\n"),
   );
@@ -2087,12 +2124,10 @@ test("the configured template and state labels drive first attempts, retries and
     `the run ended without an open pull request: claude-code/claude-opus-5-5@high #2 log=${join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-2.log")}; broken`,
   );
   assert.equal(
-    run.github.calls.some((args) =>
-      args.some(
-        (arg, index) =>
-          ["--add-label", "--remove-label"].includes(arg) &&
-          args[index + 1] === "queued",
-      ),
+    run.github.calls.some(
+      ([, operation, , label]) =>
+        ["addLabels", "removeLabel"].includes(operation as string) &&
+        label === "queued",
     ),
     false,
   );
@@ -2293,7 +2328,7 @@ test("the first pass removes the sandboxes an earlier process left before it cla
   await run.tick();
   assert.deepEqual(run.events, [
     "stop sandboxes",
-    "edit acme/widgets#4 --add-label factory:running",
+    "add acme/widgets#4 factory:running",
   ]);
 });
 
@@ -2313,7 +2348,7 @@ test("a stop signal records the running runs as interrupted and removes their sa
   run.interrupt();
   assert.deepEqual(run.events, [
     "stop sandboxes",
-    "edit acme/widgets#4 --add-label factory:running",
+    "add acme/widgets#4 factory:running",
     "stop sandboxes",
   ]);
   assert.equal(launch.removed, true);
@@ -2383,7 +2418,7 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
   ]);
   assert.deepEqual(run.events, [
     "stop sandboxes",
-    "edit acme/widgets#4 --add-label factory:running",
+    "add acme/widgets#4 factory:running",
     "stop sandboxes",
     "stop sandboxes",
   ]);
@@ -2514,10 +2549,10 @@ function held(run: ReturnType<typeof host>, issue: number) {
 }
 
 test("readiness counts only from a user whose role, read once a pass, the host authorizes", async (t) => {
-  const roles: Record<string, string | Error> = {
+  const roles: Record<string, string | null | Error> = {
     owner: "admin",
     casey: "write",
-    morgan: new Error("HTTP 502"),
+    morgan: new PlatformError("unavailable", "GitHub answered with 502"),
   };
   const run = host(t, {
     repositories: {
@@ -2536,8 +2571,8 @@ test("readiness counts only from a user whose role, read once a pass, the host a
   });
   const lookups = () =>
     run.github.calls
-      .filter((args) => args[0] === "api" && args[1].startsWith("repos/"))
-      .map((args) => args[1]);
+      .filter(([, operation]) => operation === "role")
+      .map(([, , login]) => login);
   await run.tick();
   assert.deepEqual(
     // The two Claude Code token reads can finish in either order.
@@ -2552,7 +2587,7 @@ test("readiness counts only from a user whose role, read once a pass, the host a
   );
   assert.equal(
     held(run, 3),
-    `its readiness is refused: ready-for-agent was applied by release-bot, a bot or app, which never authorizes; ${authorized}`,
+    `its readiness is refused: ready-for-agent was applied by release-bot[bot], a bot or app, which never authorizes; ${authorized}`,
   );
   assert.equal(
     held(run, 4),
@@ -2562,16 +2597,12 @@ test("readiness counts only from a user whose role, read once a pass, the host a
     held(run, 5),
     "its readiness waits: the repository role of @morgan, who applied ready-for-agent, could not be read this pass",
   );
-  assert.deepEqual(lookups(), [
-    "repos/acme/widgets/collaborators/owner/permission",
-    "repos/acme/widgets/collaborators/casey/permission",
-    "repos/acme/widgets/collaborators/morgan/permission",
-  ]);
+  assert.deepEqual(lookups(), ["owner", "casey", "morgan"]);
   // Refused readiness writes nothing to GitHub.
   assert.deepEqual(run.events, [
     "stop sandboxes",
-    "edit acme/widgets#1 --add-label factory:running",
-    "edit acme/widgets#6 --add-label factory:running",
+    "add acme/widgets#1 factory:running",
+    "add acme/widgets#6 factory:running",
   ]);
   for (const number of [2, 3, 4, 5])
     assert.deepEqual(
@@ -2635,6 +2666,145 @@ test("readiness must be newer than the body's last edit, whatever the title and 
   );
 });
 
+test("without the platform's edit and link times, readiness skips those comparisons and invents no time", async (t) => {
+  const later = "2026-10-09T10:00:01Z";
+  const repositories = {
+    "acme/widgets": [
+      {
+        number: 1,
+        subIssues: [{ number: 2 }],
+        timeline: [
+          labelled("owner"),
+          { event: "linked", subIssue: 2, at: later },
+        ],
+      },
+      { number: 2, parent: 1 },
+      {
+        number: 4,
+        timeline: [labelled("owner"), { event: "edited", at: later }],
+      },
+    ] satisfies IssueSpec[],
+  };
+  const {
+    bodyEditTime: _edits,
+    linkTime: _links,
+    ...timeless
+  } = githubCapabilities;
+  for (const [capabilities, launched] of [
+    [githubCapabilities, []],
+    [timeless, ["acme/widgets#2", "acme/widgets#4"]],
+  ] as const) {
+    const run = host(t, {
+      repositories,
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      capabilities,
+    });
+    await run.tick();
+    assert.deepEqual(
+      run.launched.map(({ options }) => options.name).sort(),
+      launched,
+    );
+    if (launched.length === 0) {
+      assert.match(held(run, 2)!, /whose readiness predates its latest ticket/);
+      assert.match(held(run, 4)!, /not after the body's last edit/);
+    }
+  }
+});
+
+test("on a platform that marks no bots, the host must name the accounts that never authorize, and they never do", async (t) => {
+  const { botMarking: _, ...unmarked } = githubCapabilities;
+  const repositories = {
+    "acme/widgets": [
+      { number: 1 },
+      { number: 2, timeline: [labelled("Release-Helper")] },
+      { number: 3, timeline: [labelled("release-bot[bot]")] },
+      { number: 4, timeline: [labelled("riley")] },
+    ],
+  };
+  const roles = { owner: "admin", "release-helper": "admin" };
+  const unlisted = host(t, {
+    repositories,
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    capabilities: unmarked,
+    roles,
+  });
+  await unlisted.tick();
+  assert.deepEqual(unlisted.launched, []);
+  assert.deepEqual(unlisted.status().repositories[0], {
+    ...unlisted.status().repositories[0],
+    state: "paused",
+    reason:
+      "github marks no bots, so the host configuration must list the accounts that never authorize in platforms.github.neverAuthorize",
+  });
+  assert.deepEqual(unlisted.github.find("acme/widgets", 1).labels, [ready]);
+
+  const listed = host(t, {
+    repositories,
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    capabilities: unmarked,
+    roles,
+    configuration: {
+      platforms: {
+        github: {
+          tokenCommand: ["unused"],
+          authorizedRoles: ["admin"],
+          neverAuthorize: ["release-helper", "release-bot[bot]"],
+        },
+      },
+    },
+  });
+  await listed.tick();
+  assert.deepEqual(
+    listed.launched.map(({ options }) => options.name),
+    ["acme/widgets#1"],
+  );
+  const authorized =
+    "a person with the admin role must remove and re-apply ready-for-agent";
+  for (const [number, login] of [
+    [2, "Release-Helper"],
+    [3, "release-bot[bot]"],
+  ] as const)
+    assert.equal(
+      held(listed, number),
+      `its readiness is refused: ready-for-agent was applied by @${login}, an account the host configuration never lets authorize; ${authorized}`,
+    );
+  // A user the platform reports no role for holds none.
+  assert.equal(
+    held(listed, 4),
+    `its readiness is refused: ready-for-agent was applied by @riley, who holds no repository role; ${authorized}`,
+  );
+});
+
+test("a repository whose remote no platform serves is refused, and the others are still served", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    unserved: ["acme/widgets"],
+  });
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/gadgets#3"],
+  );
+  const [widgets] = run.status().repositories;
+  assert.equal(widgets.state, "paused");
+  assert.equal(
+    widgets.reason,
+    "its remote is on no platform the factory serves: No platform adapter serves the remote on host git.example.test.",
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [ready]);
+  assert.equal(
+    run.github.calls.some(([repository]) => repository === "acme/widgets"),
+    false,
+  );
+});
+
 test("a parent's readiness releases its tickets and closes it only when it counts and follows its latest link", async (t) => {
   const linked = (subIssue: number): TimelineEvent => ({
     event: "linked",
@@ -2676,7 +2846,7 @@ test("a parent's readiness releases its tickets and closes it only when it count
   );
   assert.equal(
     held(run, 2),
-    "sub-issue of #1, whose readiness predates its latest ticket #2; remove and re-apply ready-for-agent on #1 once its tickets are published",
+    "sub-issue of #1, whose readiness predates its latest ticket; remove and re-apply ready-for-agent on #1 once its tickets are published",
   );
   assert.equal(
     held(run, 5),
@@ -2950,8 +3120,8 @@ test("claim settling reads pull requests separately from issue closure and gives
 });
 
 test("an orphaned claim waits for a failed role lookup without a failure comment or losing its retry", async (t) => {
-  const roles: Record<string, string | Error> = {
-    owner: new Error("HTTP 502"),
+  const roles: Record<string, string | null | Error> = {
+    owner: new PlatformError("unavailable", "GitHub answered with 502"),
   };
   const run = host(t, {
     repositories: {

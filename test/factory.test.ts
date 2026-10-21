@@ -73,6 +73,10 @@ function repository(
       modelLabelPrefix: "model:",
       prompt: "{skillPrefix}implement #{issue}",
     },
+    authorization: {
+      authorizedRoles: ["admin", "maintain"],
+      neverAuthorize: [],
+    },
     paused: null,
     issues,
     claims: [],
@@ -91,6 +95,7 @@ function snapshot({
   holds = {},
   owners = {},
   settings = {},
+  authorization,
 }: {
   issues?: Issue[];
   runs?: Run[];
@@ -100,10 +105,16 @@ function snapshot({
   holds?: Record<string, UsageHold | null>;
   owners?: Snapshot["owners"];
   settings?: Partial<Settings>;
+  authorization?: Repository["authorization"];
 } = {}): Snapshot {
   return {
     now,
-    repositories: repositories ?? [repository(widgets, issues, { claims })],
+    repositories: repositories ?? [
+      repository(widgets, issues, {
+        claims,
+        ...(authorization && { authorization }),
+      }),
+    ],
     runs,
     usage: Object.fromEntries(
       Object.entries(usage).map(([provider, reading]) => [
@@ -120,7 +131,6 @@ function snapshot({
       drainThreshold: 80,
       pauseThreshold: null,
       timeLimitMinutes: 240,
-      authorizedRoles: ["admin", "maintain"],
       ...settings,
     },
   };
@@ -206,6 +216,7 @@ test("claimed, failed and blocked issues are skipped with their reasons", () => 
         blockedBy: [
           { number: 2, state: "open" },
           { number: 3, state: "closed" },
+          { number: "acme/gadgets#8", state: "open" },
         ],
       }),
       issue(7, ["ready-for-agent"], {
@@ -218,7 +229,7 @@ test("claimed, failed and blocked issues are skipped with their reasons", () => 
     skipOf(decisions, 5),
     "labelled factory:failed; remove the label to run it again",
   );
-  assert.equal(skipOf(decisions, 6), "blocked by #2");
+  assert.equal(skipOf(decisions, 6), "blocked by #2, acme/gadgets#8");
   assert.deepEqual(launched(decisions), ["acme/widgets#7"]);
 });
 
@@ -242,7 +253,7 @@ test("readiness from a user holding an authorized role releases the issue", () =
 });
 
 test("readiness from a role the host doesn't authorize is refused", () => {
-  for (const role of ["write", "triage", "read", "none", "custom-reviewer"]) {
+  for (const role of ["write", "triage", "read", "custom-reviewer"]) {
     const decisions = decide({
       issues: [
         issue(4, undefined, readyBy({ ...owner, login: "casey", role })),
@@ -256,9 +267,49 @@ test("readiness from a role the host doesn't authorize is refused", () => {
   }
   const widened = decide({
     issues: [issue(4, undefined, readyBy({ ...owner, role: "triage" }))],
-    settings: { authorizedRoles: ["triage"] },
+    authorization: { authorizedRoles: ["triage"], neverAuthorize: [] },
   });
   assert.deepEqual(launched(widened), ["acme/widgets#4"]);
+});
+
+test("readiness from a user who holds no repository role is refused", () => {
+  const decisions = decide({
+    issues: [
+      issue(4, undefined, readyBy({ ...owner, login: "casey", role: null })),
+    ],
+  });
+  assert.deepEqual(launches(decisions), []);
+  assert.equal(
+    skipOf(decisions, 4),
+    `its readiness is refused: ready-for-agent was applied by @casey, who holds no repository role; ${reapply}`,
+  );
+});
+
+test("readiness from an account the host never lets authorize is refused, whatever its role", () => {
+  const decisions = decide({
+    issues: [
+      issue(4, undefined, readyBy({ ...owner, login: "Release-Helper" })),
+      issue(
+        5,
+        undefined,
+        readyBy({ kind: "unreadable", login: "release-helper" }),
+      ),
+      issue(6, undefined, readyBy(owner)),
+    ],
+    authorization: {
+      authorizedRoles: ["admin", "maintain"],
+      neverAuthorize: ["release-helper"],
+    },
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#6"]);
+  for (const [number, login] of [
+    [4, "Release-Helper"],
+    [5, "release-helper"],
+  ] as const)
+    assert.equal(
+      skipOf(decisions, number),
+      `its readiness is refused: ready-for-agent was applied by @${login}, an account the host configuration never lets authorize; ${reapply}`,
+    );
 });
 
 test("readiness from a bot, an app or an account that is not a user never authorizes", () => {
@@ -286,7 +337,9 @@ test("readiness from a bot, an app or an account that is not a user never author
 
 test("a failed role lookup holds the issue for that pass only", () => {
   const unread = decide({
-    issues: [issue(4, undefined, readyBy({ ...owner, role: null }))],
+    issues: [
+      issue(4, undefined, readyBy({ kind: "unreadable", login: "owner" })),
+    ],
   });
   assert.deepEqual(launches(unread), []);
   assert.equal(
@@ -423,7 +476,7 @@ test("a finished parent stays open while its readiness is refused or unread", ()
       `is refused: ready-for-agent was applied at ${released}, not after the body's last edit at ${released}; review the edit, then remove and re-apply ready-for-agent`,
     ],
     [
-      readyBy({ ...owner, role: null }, released),
+      readyBy({ kind: "unreadable", login: "owner" }, released),
       "waits: the repository role of @owner, who applied ready-for-agent, could not be read this pass",
     ],
   ] as const) {
@@ -528,7 +581,7 @@ test("a ticket waits while its parent's readiness is refused or unread", () => {
       `whose readiness is refused: ready-for-agent was applied at ${released}, not after the body's last edit at 2026-10-09T10:07:00Z; review the edit, then ${onParent}`,
     ],
     [
-      readyBy({ ...owner, role: null }, released),
+      readyBy({ kind: "unreadable", login: "owner" }, released),
       "whose readiness waits: the repository role of @owner, who applied ready-for-agent, could not be read this pass",
     ],
   ] as const) {
@@ -1950,7 +2003,7 @@ test("a failed first attempt waits for an unreadable readiness role, including i
       const authorizing = parent ? issues[1] : waiting;
       authorizing.ready = {
         at: now,
-        actor: { kind: "user", login: "owner", role: null },
+        actor: { kind: "unreadable", login: "owner" },
       };
       const claims: Claim[] = [{ issue: 4, pullRequest: "none" }];
       const observed = orphaned

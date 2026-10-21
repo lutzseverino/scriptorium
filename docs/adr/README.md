@@ -18,3 +18,8 @@ This directory records consequential decisions local to the factory.
 - [Default the factory's own comment wording](0005-default-the-factorys-own-comment-wording.md):
   optional deterministic comment templates default the factory's own reports
   while other products' conventions remain explicit configuration.
+- [Reach the hosting platform through Postern](0006-reach-the-hosting-platform-through-postern.md):
+  the factory reads and writes issues, roles and pull requests through
+  Postern's facts while keeping readiness and authorization, and the host
+  configuration names each platform's accepted roles and accounts that never
+  authorize.
