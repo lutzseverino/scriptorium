@@ -31,6 +31,7 @@ import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 
 import { readReviewer } from "./pull-request-reviewer.mjs";
+import { readReviewPolicy } from "./review-policy.mjs";
 import {
   reviewRequestedAt,
   reviewerState,
@@ -40,6 +41,7 @@ export { reviewRequestedAt } from "./reviewer.mjs";
 
 const checksBoundMs = 5 * 60_000;
 const settledCodes = {
+  skipped: 0,
   reviewed: 0,
   unavailable: 3,
   "not requested": 4,
@@ -73,6 +75,8 @@ const workflowRunLink = (link) =>
 // is not reached.
 export const decide = ({
   reviewer,
+  author,
+  policy,
   head,
   checks,
   runs = [],
@@ -93,6 +97,8 @@ export const decide = ({
         comments,
         reviews,
         now,
+        author,
+        policy,
       })
     : undefined;
   const review = reviewer
@@ -310,14 +316,14 @@ const pushTime = async (pull) => {
 // Reads one look at the pull request. The head's workflow runs are read by
 // its SHA, which also finds `pull_request_target` runs; its push time is
 // cached per head only when GitHub recorded it.
-const look = async (number, pushTimes, reviewer) => {
+const look = async (number, pushTimes, reviewer, policy) => {
   const [pull, pages, reviewPages, reviewCommentPages] = await Promise.all([
     gh([
       "pr",
       "view",
       number,
       "--json",
-      "headRefOid,headRefName,createdAt,statusCheckRollup",
+      "headRefOid,headRefName,createdAt,statusCheckRollup,author",
     ]),
     reviewer
       ? gh([
@@ -389,6 +395,8 @@ const look = async (number, pushTimes, reviewer) => {
         }),
       ),
     reviewer,
+    author: pull.author?.login,
+    policy,
     reviews: reviewPages.flat().map((review) => ({
       ...review,
       comments: commentsByReview.get(review.id) ?? [],
@@ -397,6 +405,7 @@ const look = async (number, pushTimes, reviewer) => {
       Date.parse(pull.createdAt),
       comments,
       reviewer,
+      { author: pull.author?.login, policy },
     ),
     ...push,
     comments,
@@ -407,9 +416,11 @@ const main = async () => {
   const startedAt = Date.now();
   let options;
   let reviewer;
+  let policy;
   try {
     options = parseArguments(process.argv.slice(2));
     reviewer = readReviewer();
+    policy = readReviewPolicy();
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     return 1;
@@ -420,7 +431,7 @@ const main = async () => {
   for (;;) {
     let state;
     try {
-      state = await look(options.number, pushTimes, reviewer);
+      state = await look(options.number, pushTimes, reviewer, policy);
     } catch (error) {
       process.stderr.write(`wait.mjs: ${error.message}\n`);
       return 1;

@@ -8,5 +8,5 @@
     "paused": "factory:paused"
   },
   "modelLabelPrefix": "model:",
-  "prompt": "{skillPrefix}implement #{issue}"
+  "prompt": "{skillPrefix}implement #{issue}\n\nApply the repository's app-author review policy in docs/agents/project.md."
 }

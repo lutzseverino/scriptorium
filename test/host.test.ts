@@ -1793,6 +1793,10 @@ test("custom prompts and retries retain the unattended execution and completion 
   await run.tick();
   for (const { options } of run.launched) {
     assert.match(options.prompt!, /ship #4/);
+    assert.match(options.prompt!, /This is a factory run/);
+    assert.match(options.prompt!, /repository-owned.*review policy/);
+    assert.match(options.prompt!, /fixes, rebases, retries and resumed runs/);
+    assert.match(options.prompt!, /supplied credentials/);
     assert.match(options.prompt!, /no interactive notification or resume loop/);
     assert.match(options.prompt!, /foreground/);
     assert.match(options.prompt!, /detaching shell commands/);
@@ -1823,6 +1827,7 @@ test("an aborted launch retains dirty recovery state across restart without publ
   await restarted.tick();
   assert.equal(run.launched.length, 2);
   assert.match(run.launched[1].options.prompt!, /Recovery state:/);
+  assert.match(run.launched[1].options.prompt!, /This is a factory run/);
   assert.ok(run.launched[1].options.prompt!.includes(work));
   assert.equal(readFileSync(join(work, "unfinished"), "utf8"), "retain me");
   assert.equal(
