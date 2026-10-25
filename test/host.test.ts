@@ -1797,6 +1797,21 @@ test("custom prompts and retries retain the unattended execution and completion 
     assert.match(options.prompt!, /repository-owned.*review policy/);
     assert.match(options.prompt!, /fixes, rebases, retries and resumed runs/);
     assert.match(options.prompt!, /supplied credentials/);
+    assert.match(options.prompt!, /Before every delivery push.*fetch.*origin/);
+    assert.match(options.prompt!, /resolve.*remote default branch/);
+    assert.match(options.prompt!, /outgoing commits.*per-parent.*diff/);
+    assert.match(options.prompt!, /rebase or replay.*issue.*current base/);
+    assert.match(
+      options.prompt!,
+      /Never merge the default branch into the issue branch/,
+    );
+    assert.match(options.prompt!, /clean final diff.*reverted.*rewritten/);
+    assert.match(options.prompt!, /Intentional workflow edits.*visible/);
+    assert.match(options.prompt!, /permission refusal.*stop.*owner handoff/);
+    assert.match(
+      options.prompt!,
+      /no second push.*credential discovery.*identity switch/,
+    );
     assert.match(options.prompt!, /no interactive notification or resume loop/);
     assert.match(options.prompt!, /foreground/);
     assert.match(options.prompt!, /detaching shell commands/);
@@ -1828,6 +1843,23 @@ test("an aborted launch retains dirty recovery state across restart without publ
   assert.equal(run.launched.length, 2);
   assert.match(run.launched[1].options.prompt!, /Recovery state:/);
   assert.match(run.launched[1].options.prompt!, /This is a factory run/);
+  assert.match(run.launched[1].options.prompt!, /Before every delivery push/);
+  assert.match(
+    run.launched[1].options.prompt!,
+    /committed, staged, unstaged and untracked/,
+  );
+  assert.match(
+    run.launched[1].options.prompt!,
+    /existing PR.*review.*handoff context/,
+  );
+  assert.match(
+    run.launched[1].options.prompt!,
+    /owner.*reconstruct.*current base/,
+  );
+  assert.match(
+    run.launched[1].options.prompt!,
+    /uncertain.*conflict.*preserve.*hand off/,
+  );
   assert.ok(run.launched[1].options.prompt!.includes(work));
   assert.equal(readFileSync(join(work, "unfinished"), "utf8"), "retain me");
   assert.equal(

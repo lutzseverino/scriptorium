@@ -481,6 +481,59 @@ apply. The merge outcome comment records actual internal review outcomes and
 states: "No external reviewer runs on app-authored PRs." Skipping external
 review is neither a response timeout nor external approval.
 
+### Delivery from the current default branch
+
+Before every delivery push, including retries and recovered runs, the agent
+refreshes the remote default branch and inspects both outgoing history and
+the change against it. From the run's worktree:
+
+```sh
+git fetch --prune origin
+git remote set-head origin --auto
+git log --stat --patch -m origin/HEAD..HEAD
+git diff --stat origin/HEAD...HEAD
+git diff origin/HEAD...HEAD
+```
+
+Resolve the remote's default rather than assuming `main`. Review every
+outgoing commit, including each merge parent's patch, for issue ownership.
+A clean final workflow diff is insufficient: a workflow edit followed by its
+revert, or an unrelated rewritten base commit, can still be outgoing history.
+Keep intentional workflow edits visible; never strip them to make a push
+succeed.
+
+When the base has advanced, rebase the verified issue commits onto
+`origin/HEAD`, or replay only those commits onto a new branch from it. Never
+merge the default branch into the issue branch. Before changing history,
+preserve the original head with a backup branch and retain staged, unstaged
+and untracked work. For a verified issue-only dirty worktree, one option is
+`git stash push --include-untracked`, record its object ID, and restore with
+`git stash apply --index <saved-stash>` after rebase or selective replay. Keep
+the backup and stash until the reconstruction and all worktree layers have
+been verified. Preserve any additional ignored work separately. Recheck both
+history and diff, review `git status` and the index, and rerun the repository's
+required validation on the reconstructed change before publication.
+
+Continue an existing PR and its review and handoff context where applicable;
+reconstruction alone authorizes no force push or replacement PR. If ownership
+is uncertain, an update or restoration conflicts, or publication needs an
+owner decision, preserve the original work and ask under the repository's
+owner-question rules. After a permission refusal, stop and hand off without
+a second push, credential discovery or identity switch. Ask how to proceed
+without assuming broader App permissions are necessary. A later owner request
+can authorize reconstruction; the refusal itself cannot authorize a retry.
+
+The shared clone's `updateClone()` refreshes its default branch before a
+launch. The explicit Sandcastle branch strategy reuses an existing issue
+branch and preserves its dirty worktree; that refresh does not update the
+issue branch. Delivery Git operations belong to the implementation agent.
+The host's history-aware restricted-path detection runs after an ended run or
+claim, not as a pre-push gate. The exact Git operations behind the reported
+[workflow-permission refusals in #49](https://github.com/lutzseverino/scriptorium/issues/49)
+remain unverified. Local regression fixtures demonstrate rebase and selective
+replay with an advanced default branch, hidden workflow history and preserved
+dirty work; they do not reproduce a GitHub refusal or prove agent compliance.
+
 ### Foreground execution and incomplete runs
 
 The factory adds an unattended execution contract to the configured prompt,
@@ -518,8 +571,12 @@ failure is reported; keep the clone for inspection.
 Committed work remains on `factory/issue-<n>`. Sandcastle preserves dirty
 worktrees, including staged, unstaged and untracked changes, and reuses them
 on retry without resetting those changes. Before each launch the host reads
-the preserved state again and tells the agent to continue it and revalidate
-before publication. Recovery performs no push or PR creation and grants no
+the preserved state again and tells the agent to continue from it and revalidate
+before publication, following the [delivery procedure](#delivery-from-the-current-default-branch).
+Continuing preserves work and existing PR, review and handoff context; it does
+not require retaining unrelated history or override an owner's explicit
+request to reconstruct the issue's changes on a current base. Recovery
+performs no push or PR creation and grants no
 readiness. Pauses and interruptions retain their existing relaunch rules.
 
 For manual recovery after a final failure, retain the repository's clone and
@@ -528,7 +585,9 @@ For manual recovery after a final failure, retain the repository's clone and
 branch's commits and the worktree's `git status`, including its index and
 untracked files. Continue in that worktree, or let the factory reuse it after
 removing the failed label when the failure has been addressed. Revalidate the
-recovered work before delivering it. Do not remove the clone or force-remove
+recovered work before delivering it. An owner-directed reconstruction follows
+the same preservation and history checks above, handing back preserved work
+when ownership is uncertain or conflicts arise. Do not remove the clone or force-remove
 the worktree while it holds work you need. A captured session is diagnostic
 context; the factory does not resume a live session or a background process.
 
