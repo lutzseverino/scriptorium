@@ -1,11 +1,18 @@
 // Repository data determines requests, completion and bounded review waits.
+import { reviewSkipped } from "./review-policy.mjs";
+
 const requestComments = (comments, reviewer) =>
   comments.filter(
     (comment) => comment.body.trim() === reviewer.request.comment,
   );
 
-export const reviewRequestedAt = (openedAt, comments, reviewer) => {
-  if (!reviewer) return null;
+export const reviewRequestedAt = (
+  openedAt,
+  comments,
+  reviewer,
+  { author, policy } = {},
+) => {
+  if (!reviewer || reviewSkipped(author, policy)) return null;
   const requests = requestComments(comments, reviewer).map((comment) =>
     Date.parse(comment.createdAt),
   );
@@ -15,8 +22,9 @@ export const reviewRequestedAt = (openedAt, comments, reviewer) => {
 
 export const reviewerState = (
   reviewer,
-  { head, requestedAt, pushedAt, comments, reviews = [], now },
+  { head, requestedAt, pushedAt, comments, reviews = [], now, author, policy },
 ) => {
+  if (reviewSkipped(author, policy)) return "skipped";
   if (
     reviews.some(
       (review) =>
@@ -86,11 +94,12 @@ export const reviewerState = (
 
 export const reviewerPhrase = (reviewer, state) =>
   ({
+    skipped: "No external reviewer runs on app-authored PRs.",
     reviewed: "reviewer reviewed",
     unavailable: "reviewer unavailable",
     "not requested": "review not requested for this head",
-    "request bound reached": `review not requested for this head; review request bound reached (${reviewer.bounds.reviewRequests})`,
-    "no response": `reviewer did not respond within ${reviewer.bounds.responseMinutes} minutes`,
-    "not reviewing": `reviewer did not review within ${reviewer.bounds.reviewMinutes} minutes`,
+    "request bound reached": `review not requested for this head; review request bound reached (${reviewer?.bounds.reviewRequests})`,
+    "no response": `reviewer did not respond within ${reviewer?.bounds.responseMinutes} minutes`,
+    "not reviewing": `reviewer did not review within ${reviewer?.bounds.reviewMinutes} minutes`,
     pending: "review pending",
   })[state];

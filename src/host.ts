@@ -1007,6 +1007,7 @@ export function prompt(
   );
   const guidance = [
     "Unattended execution:",
+    "This is a factory run. Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs. Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced. Use only the supplied credentials; never discover or switch identities to trigger a review.",
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
     `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes still determine delivery.`,
     ...(recovery

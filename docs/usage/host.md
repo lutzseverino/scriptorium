@@ -448,6 +448,39 @@ paused label that no run on the host holds is such a claim. Failing or
 releasing a claim removes whichever of the two labels it carries, and a claim
 kept awaiting merge or retried carries the running label.
 
+### External review of factory pull requests
+
+On 2026-10-25 the owner accepted that Codex cannot be triggered by the
+factory app, although a request from the owner's account works, and that no
+settings fix is available. The [decision in issue #47](https://github.com/lutzseverino/scriptorium/issues/47#issuecomment-6400027564)
+is to proceed with the factory's internal Standards and Spec reviews and no
+external reviewer on its app-authored PRs. An owner can still manually request
+Codex review. Runs use only their supplied credentials; they never switch to
+the owner's account to trigger one.
+
+The host adds factory-run context to every launch prompt, including retries
+and recovered runs, and directs the agent to the repository's app-author
+review policy. The host remains independent of reviewer names and repository
+review configuration. Each consuming repository keeps its policy explicit in
+its configured `prompt` and agent guidance and implements it in its own
+request and wait workflow.
+
+In this repository, `.github/factory-review-policy.json` contains version `1`
+and the factory app's `author` login. The babysit request and wait commands
+compare the PR's author with that login, accepting GitHub's REST
+`<slug>[bot]` and CLI `app/<slug>` forms. Matching PRs get no external review
+request or response/review wait on initial or later heads, including after
+fixes, rebases and resumed runs. The separate
+`.github/pull-request-reviewer.json` remains intact for owner-authored PRs.
+Repositories without the app-author policy keep their configured reviewer
+behavior for every PR.
+
+Required checks and their waits, internal Standards and Spec reviews, merge
+authorization and handling of review findings that actually arrive still
+apply. The merge outcome comment records actual internal review outcomes and
+states: "No external reviewer runs on app-authored PRs." Skipping external
+review is neither a response timeout nor external approval.
+
 ### Foreground execution and incomplete runs
 
 The factory adds an unattended execution contract to the configured prompt,
