@@ -207,6 +207,33 @@ test("only issues carrying ready-for-agent reach the frontier", () => {
   );
 });
 
+test("a configured skip label prevents new pickup until it is removed", () => {
+  const skipped = repository(widgets, [
+    issue(4, ["ready-for-agent", "manual-delivery"]),
+  ]);
+  skipped.configuration.labels.skip = "manual-delivery";
+  const decisions = decide({
+    repositories: [
+      skipped,
+      repository(gadgets, [issue(5, ["ready-for-agent", "manual-delivery"])]),
+    ],
+  });
+  assert.deepEqual(decisions.filter((decision) => decision.issue === 4), [
+    {
+      kind: "skip",
+      ...at(4),
+      reason: "labelled `manual-delivery`; delivered outside the factory",
+    },
+  ]);
+  assert.deepEqual(launched(decisions), ["acme/gadgets#5"]);
+
+  skipped.issues[0].labels = ["ready-for-agent"];
+  assert.deepEqual(
+    decide({ repositories: [skipped] }).map(({ kind }) => kind),
+    ["claim", "launch"],
+  );
+});
+
 test("claimed, failed and blocked issues are skipped with their reasons", () => {
   const decisions = decide({
     issues: [
@@ -1481,6 +1508,36 @@ const limit = {
 const pausing = { paused: limit, commented: false };
 const pausedRun = { paused: limit, commented: true };
 const pausedLabels = ["ready-for-agent", "factory:paused"];
+
+test("adding the skip label leaves running work, outcomes, retries and resumes unchanged", () => {
+  for (const ended of [
+    null,
+    none,
+    { timedOut: false, pullRequest: "open" } as const,
+    { interrupted: true } as const,
+    pausing,
+    pausedRun,
+  ]) {
+    const labels = ended && "paused" in ended ? pausedLabels : claimed;
+    const current = repository(widgets, [issue(4, [...labels])]);
+    current.configuration.labels.skip = "manual-delivery";
+    const input = {
+      repositories: [current],
+      runs: [run(4, { ended })],
+      usage: { "claude-code": 10 },
+    };
+    const before = decide(input);
+    current.issues[0].labels.push("manual-delivery");
+    const after = decide(input);
+    // A running issue's pickup skip can change wording; its run decisions
+    // must stay the same, including eventual retry and relaunch decisions.
+    assert.deepEqual(
+      after.filter(({ kind }) => kind !== "skip"),
+      before.filter(({ kind }) => kind !== "skip"),
+      JSON.stringify(ended),
+    );
+  }
+});
 
 test("a run that ended on its provider's usage limit pauses its issue once, without a retry or a cap slot", () => {
   const retry = {

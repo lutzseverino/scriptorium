@@ -275,6 +275,9 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const { labels, modelLabelPrefix } = repository.configuration;
     if (!issue.labels.includes(labels.ready)) continue;
     const reason =
+      (labels.skip !== undefined && issue.labels.includes(labels.skip)
+        ? `labelled \`${labels.skip}\`; delivered outside the factory`
+        : null) ??
       needsInputExclusion(issue, labels) ??
       (issue.labels.includes(labels.running)
         ? "claimed by a running factory run"

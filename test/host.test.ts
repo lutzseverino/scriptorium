@@ -2090,6 +2090,72 @@ for (const scenario of [
   });
 }
 
+test("the repository's skip label holds fresh attempts without factory label writes", async (t) => {
+  const configuration = {
+    ...conventions,
+    labels: { ...conventions.labels, skip: "manual-delivery" },
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["ready-for-agent", "manual-delivery"] },
+        {
+          number: 5,
+          labels: ["ready-for-agent", "manual-delivery", "factory:failed"],
+        },
+        {
+          number: 6,
+          labels: ["ready-for-agent", "manual-delivery", "factory:needs-input"],
+        },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify(configuration),
+      }),
+    },
+    caps: { "claude-code": 3, codex: 1 },
+  });
+  await run.tick();
+  const reason = "labelled `manual-delivery`; delivered outside the factory";
+  assert.deepEqual(run.status().repositories[0].held, [
+    { issue: 4, reason },
+    { issue: 5, reason },
+    { issue: 6, reason },
+  ]);
+  assert.ok(run.reports.some((line) => line.includes(reason)));
+  assert.equal(run.launched.length, 0);
+  assert.deepEqual(
+    run.github.labels.get("acme/widgets"),
+    new Set([
+      "factory:running", "factory:failed", "factory:needs-input", "factory:paused",
+    ]),
+  );
+  assert.deepEqual(run.events.filter((event) => event !== "stop sandboxes"), []);
+
+  // Clearing an earlier outcome must not bypass delivery outside the factory.
+  for (const number of [5, 6])
+    run.github.find("acme/widgets", number).labels = [
+      "ready-for-agent", "manual-delivery",
+    ];
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.deepEqual(run.events.filter((event) => event !== "stop sandboxes"), []);
+
+  for (const number of [4, 5, 6])
+    run.github.find("acme/widgets", number).labels = ["ready-for-agent"];
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#4", "acme/widgets#5", "acme/widgets#6"],
+  );
+  for (const number of [4, 5, 6])
+    assert.deepEqual(run.github.find("acme/widgets", number).labels, [
+      "ready-for-agent", "factory:running",
+    ]);
+});
+
 test("the configured template and state labels drive first attempts, retries and failures", async (t) => {
   const configuration = {
     version: 1,

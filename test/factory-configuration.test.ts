@@ -37,6 +37,29 @@ test("the configuration this repository adopted from Repo Canon is accepted", ()
   assert.equal(readFactoryConfiguration(adopted).version, 1);
 });
 
+test("a skip label is optional, trimmed and distinct from every other label", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  configuration.labels.skip = "manual-delivery";
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(readFactoryConfiguration(path), configuration);
+
+  for (const skip of ["", " manual", "manual ", null, 7]) {
+    configuration.labels.skip = skip;
+    writeFileSync(path, JSON.stringify(configuration));
+    assert.throws(() => readFactoryConfiguration(path), {
+      message: `The factory configuration ${path} is invalid:\n- labels.skip: is not a non-empty trimmed string`,
+    });
+  }
+  for (const name of ["ready", "running", "failed", "needsInput", "paused"]) {
+    configuration.labels.skip = configuration.labels[name].toUpperCase();
+    writeFileSync(path, JSON.stringify(configuration));
+    assert.throws(() => readFactoryConfiguration(path), {
+      message: `The factory configuration ${path} is invalid:\n- labels.skip: must differ from labels.${name}, ignoring case`,
+    });
+  }
+});
+
 test("missing fields are refused instead of supplied from defaults", () => {
   assert.throws(() => readFactoryConfiguration(fixture("missing")), {
     message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- modelLabelPrefix: is missing\n- prompt: is missing\n- labels.needsInput: is missing\n- labels.paused: is missing`,
