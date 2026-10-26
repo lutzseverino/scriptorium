@@ -20,6 +20,26 @@ pnpm install --prod --frozen-lockfile
 node src/main.ts /etc/factory/host.json
 ```
 
+This manual installation runs on the host and does not inherit the toolchain
+image's store setting. Production-only installation still uses a pnpm content
+store. Keep the platform default when suitable; if it selects a path inside
+the checkout or one the installing user cannot write, choose an external
+directory owned by that user:
+
+```sh
+export pnpm_config_store_dir="$HOME/.local/share/pnpm/store"
+pnpm store path
+pnpm install --prod --frozen-lockfile
+```
+
+If home is restricted, use another writable absolute path outside the checkout.
+pnpm 11 also supports `--store-dir /absolute/writable/store` on the install and
+`store path` commands, or `storeDir` in the user's global YAML configuration;
+`npm_config_store_dir` and non-authentication `.npmrc` settings are not read.
+No existing cache needs deleting or migrating. The homelab automated updater
+already passes its own explicit staging store with `--store-dir`, outside the
+extracted source, and needs no additional image-derived setting.
+
 Releases up to `scriptorium-v1.0.5` were published from
 `lutzseverino/repo-canon`, with the package in its `factory/` directory; a
 checkout of one of those tags installs and starts from `factory/` instead. A
