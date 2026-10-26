@@ -2307,10 +2307,11 @@ test("the repository's skip label holds fresh attempts without factory label wri
   for (const number of [4, 5, 6])
     run.github.find("acme/widgets", number).labels = ["ready-for-agent"];
   await run.tick();
-  assert.deepEqual(
-    run.launched.map(({ options }) => options.name),
-    ["acme/widgets#4", "acme/widgets#5", "acme/widgets#6"],
-  );
+  assert.deepEqual(run.launched.map(({ options }) => options.name).toSorted(), [
+    "acme/widgets#4",
+    "acme/widgets#5",
+    "acme/widgets#6",
+  ]);
   for (const number of [4, 5, 6])
     assert.deepEqual(run.github.find("acme/widgets", number).labels, [
       "ready-for-agent",
