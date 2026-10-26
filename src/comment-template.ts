@@ -22,6 +22,7 @@ const names = {
     "label",
   ],
   close: ["tickets"],
+  awaitingMerge: ["provider", "model", "effort", "attempt", "log", "label"],
 } as const;
 
 type Comment = keyof typeof names;
@@ -29,6 +30,8 @@ type Values = Record<string, string | number | string[] | null | undefined>;
 type Part = string | { name: string; section?: Part[] };
 
 const defaults = {
+  awaitingMerge:
+    "The factory agent run has ended, but its pull request remains open.\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}The factory retains this issue's claim without a live agent. The owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Removing `{label}` alone does not resume the run, and merging the pull request does not always close the issue.",
   pause:
     "The factory paused this run: {provider} {cause}{#reset}, resets {reset}{/reset}.\n\n- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n\nThe factory resumes the run by itself and removes `{label}` when it does; nobody needs to act.",
   failure:

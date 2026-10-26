@@ -187,6 +187,10 @@ export function repositoryPlatform(
       await issueTracker.createComment(issue, comment);
     },
 
+    async awaitingMerge(issue: number, comment: string) {
+      await issueTracker.createComment(issue, comment);
+    },
+
     async pause(issue: number, comment: string) {
       await transition(issue, labels.paused, [labels.running]);
       await issueTracker.createComment(issue, comment);

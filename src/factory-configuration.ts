@@ -14,7 +14,12 @@ export type FactoryConfiguration = {
   };
   modelLabelPrefix: string;
   prompt: string;
-  comments?: { pause?: string; failure?: string; close?: string };
+  comments?: {
+    pause?: string;
+    failure?: string;
+    close?: string;
+    awaitingMerge?: string;
+  };
 };
 
 export const factoryConfigurationPath = ".factory/config.json";
@@ -108,9 +113,15 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
         "pause",
         "failure",
         "close",
+        "awaitingMerge",
       ]);
       if (comments)
-        for (const name of ["pause", "failure", "close"] as const) {
+        for (const name of [
+          "pause",
+          "failure",
+          "close",
+          "awaitingMerge",
+        ] as const) {
           if (!Object.hasOwn(comments, name)) continue;
           const template = comments[name];
           if (typeof template !== "string" || template.length === 0)
