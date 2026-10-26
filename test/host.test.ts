@@ -1948,6 +1948,152 @@ for (const timedOut of [false, true])
     ]);
     await run.tick();
     assert.equal(run.launched.length, 2, "the awaiting claim holds no slot");
+    const comments = run.github.find("acme/widgets", 4).comments;
+    assert.equal(comments.length, 1);
+    assert.match(comments[0], /claim without a live agent/);
+  });
+
+test("an ended run awaiting merge tells its issue once across polls, label removal and restart", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.pullRequests.push("OPEN");
+  issue.labels.push("factory:needs-input");
+  await run.tick();
+  assert.deepEqual(issue.comments, [], "a live run needs no notice");
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(issue.comments.length, 1);
+  assert.match(issue.comments[0], /agent run has ended.*pull request remains open/s);
+  assert.match(issue.comments[0], /retains.*claim without a live agent/);
+  assert.match(issue.comments[0], /owner must.*merging or closing/i);
+  assert.match(issue.comments[0], /continue observing/);
+  assert.match(issue.comments[0], /attempt 1/);
+  assert.doesNotMatch(issue.comments[0], /pick this issue up again/);
+  await run.tick();
+  issue.labels = ["ready-for-agent"];
+  const restarted = run.restart();
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(issue.comments.length, 1);
+  assert.equal(run.launched.length, 1);
+  assert.ok(
+    run.status().providers.every(
+      (provider: { running: number }) => provider.running === 0,
+    ),
+  );
+  issue.pullRequests = ["MERGED"];
+  const decisions = await restarted.tick();
+  assert.equal(decisions[0].kind, "fail");
+  assert.equal(issue.comments.length, 2);
+  assert.match(issue.comments[1], /merged without closing the issue/);
+});
+
+test("orphan claims awaiting merge are notified once, retry failed delivery and reset after release", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["factory:running"], pullRequests: ["OPEN"] },
+        {
+          number: 5,
+          labels: ["factory:paused", "factory:needs-input"],
+          pullRequests: ["OPEN"],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  const first = run.github.find("acme/widgets", 4);
+  const second = run.github.find("acme/widgets", 5);
+  run.github.refused.add("acme/widgets#4");
+  await run.tick();
+  assert.equal(first.comments.length, 0);
+  assert.ok(run.reports.some((line) => line.includes("keep failed")));
+  run.github.refused.clear();
+  let active = run.restart();
+  await active.tick();
+  assert.equal(first.comments.length, 1);
+  assert.equal(second.comments.length, 1);
+  assert.doesNotMatch(first.comments[0], /Model:|Log:|attempt/);
+  assert.deepEqual(second.labels, ["factory:needs-input", "factory:running"]);
+  await active.tick();
+  active = run.restart();
+  await active.tick();
+  assert.equal(first.comments.length, 1);
+  assert.equal(second.comments.length, 1);
+  assert.equal(run.launched.length, 0);
+  first.state = "CLOSED";
+  first.pullRequests = ["MERGED"];
+  second.pullRequests = ["CLOSED"];
+  await active.tick();
+  assert.deepEqual(first.labels, []);
+  assert.deepEqual(second.labels, ["factory:needs-input"]);
+  // A later orphan claim on the same issue is eligible for its own notice.
+  second.labels.push("factory:running");
+  second.pullRequests = ["OPEN"];
+  await active.tick();
+  assert.equal(second.comments.length, 2);
+  // A claim removed outside the host also ends its notification lifetime.
+  second.labels = ["factory:needs-input"];
+  await active.tick();
+  second.labels.push("factory:running");
+  await run.restart().tick();
+  assert.equal(second.comments.length, 3);
+});
+
+for (const comments of [
+  undefined,
+  {},
+  { pause: "Waiting." },
+  {
+    awaitingMerge:
+      "Held: {provider}/{model}@{effort} #{attempt}{#log} ({log}){/log}; {label}",
+  },
+])
+  test(`a legacy unsettled record retries its awaiting-merge notice, templates: ${JSON.stringify(comments)}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".factory/config.json": JSON.stringify({ ...conventions, comments }),
+        }),
+      },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    issue.pullRequests.push("OPEN");
+    run.launched[0].finish();
+    await run.drain();
+    // This pre-notification record has no delivered flag, as on an older host.
+    const previous = recordOf(run.state, 4, 1);
+    assert.equal(previous.awaitingMergeNotified, undefined);
+    run.github.refused.add("acme/widgets#4");
+    await run.restart().tick();
+    assert.equal(issue.comments.length, 0);
+    assert.equal(recordOf(run.state, 4, 1).awaitingMergeNotified, undefined);
+    run.github.refused.clear();
+    const restarted = run.restart();
+    await restarted.tick();
+    if (comments?.awaitingMerge)
+      assert.equal(
+        issue.comments[0],
+        `Held: claude-code/claude-sonnet-5-5@high #1 (${join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-1.log")}); factory:running`,
+      );
+    else assert.match(issue.comments[0], /factory agent run has ended/);
+    await restarted.tick();
+    await run.restart().tick();
+    assert.equal(issue.comments.length, 1);
+    assert.equal(run.launched.length, 1);
+    const recovered = recordOf(run.state, 4, 1);
+    assert.equal(recovered.attempt, 1);
+    assert.equal(recovered.pullRequestSince, previous.pullRequestSince);
+    assert.equal(recovered.log, previous.log);
+    assert.equal(recovered.awaitingMergeNotified, true);
   });
 
 for (const scenario of [
@@ -3036,7 +3182,9 @@ test("a second attempt awaiting merge cannot retry after its pull request closes
   const [decision] = await restarted.tick();
   assert.equal(decision.kind, "fail");
   assert.equal(run.launched.length, 2);
+  assert.equal(issue.comments.length, 2);
   assert.match(issue.comments[0], /attempt 2/);
+  assert.match(issue.comments[1], /run failed:.*pull request closed/);
 });
 
 for (const ended of ["timed out", "orphaned"] as const)
@@ -4069,7 +4217,10 @@ test("a run that exits before the pause threshold's stop settles as it ended", a
     { kind: "keep", repository: "acme/widgets", issue: 4 },
   ]);
   assert.equal(recordOf(run.state, 4, 1).pausing, null);
-  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+  const comments = run.github.find("acme/widgets", 4).comments;
+  assert.equal(comments.length, 1);
+  assert.match(comments[0], /agent run has ended/);
+  assert.doesNotMatch(comments[0], /paused this run/);
 });
 
 test("a usage hold stops new claims through unknown usage and a restart until its deadline", async (t) => {

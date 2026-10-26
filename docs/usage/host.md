@@ -415,7 +415,8 @@ The process owns everything under `stateDirectory`:
 | `usage.json`                                     | Each provider's last good usage reading with when it was read and its reset, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                  |
 | `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                           |
 | `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                              |
-| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline and whether its issue was told when it paused, and whether the host settled it. |
+| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline and whether its issue was told when it paused, whether it delivered the awaiting-merge notice, and whether the host settled it. |
+| `repositories/<owner>/<name>/claims/` | Successful awaiting-merge notice markers for label-only orphan claims, `issue-<n>.json`; removed when their claim settles or is no longer observed. |
 | `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory and its raw log.                                                                                                                                                                                                                                                |
 
 Sandbox images live in the host's Docker daemon, tagged as the
@@ -431,22 +432,42 @@ issue closed.
 
 | First matching observation               | Run outcome    | Action                                                                  |
 | ---------------------------------------- | -------------- | ----------------------------------------------------------------------- |
-| Pull request open                        | Awaiting merge | Keep the claim without taking a provider cap slot.                      |
+| Pull request open                        | Awaiting merge | Tell the issue once and keep the claim without taking a provider cap slot. |
 | Issue closed                             | Done           | Release the claim.                                                      |
 | Pull request merged, issue open          | Failed, final  | Fail without retrying.                                                  |
 | Configured needs-input label present     | Needs input    | Release without failure or retry, including after timeout or orphaning. |
 | Unpushed commits under `unpushablePaths` | Failed, final  | Fail without retrying and name the paths.                               |
 | Anything else                            | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                 |
 
-After the owner answers the question and removes the needs-input label, pickup
-starts a fresh attempt 1 on the existing branch. Interrupted and
-[paused runs](#paused-runs) bypass the table and relaunch as the same attempt.
-An orphaned claim with no interrupted or paused record settles as a failed
-attempt; an existing run record supplies its attempt number, and a claim with
-no record counts as attempt 1. An issue carrying the configured running or
-paused label that no run on the host holds is such a claim. Failing or
+An ended run awaiting merge posts one deterministic issue notice, without an
+agent or provider usage. It says the run ended, its pull request remains open,
+and the factory retains the claim without a live agent. The owner must resolve
+the pull request by merging or closing it; the factory keeps observing the
+outcome under the table above. Merging does not always close the issue. The
+notice uses the factory's default wording or the optional
+[`comments.awaitingMerge` template](factory-configuration.md#comment-templates).
+Successful delivery is recorded for that attempt or retained orphan claim, so
+later polls and host restarts do not repeat it. Older unsettled records and
+label-only orphan claims get the notice once when next observed awaiting
+merge. A failed comment write can retry on a later pass.
+
+The running label and an unsettled host run record are independent pickup
+gates. Removing the running label alone leaves the host record holding the
+issue, including after restart, and launches no new run. An open pull request
+keeps the claim with or without the needs-input label. To hand work back, close
+the pull request before removing needs-input, wait for the factory to release
+the claim, then remove needs-input so pickup starts a fresh attempt 1 on the
+existing branch. Resolve a merged pull request's issue by closing it if the
+work finished it; a merged PR leaving its issue open fails for good.
+
+Interrupted and [paused runs](#paused-runs) bypass the table and relaunch as
+the same attempt. An orphaned claim with no interrupted or paused record uses
+the table; an existing run record supplies its attempt number, and a claim
+with no record counts as attempt 1. An issue carrying the configured running
+or paused label that no run on the host holds is such a claim. Failing or
 releasing a claim removes whichever of the two labels it carries, and a claim
-kept awaiting merge or retried carries the running label.
+kept awaiting merge or retried carries the running label. The notice starts no
+babysitting or retry attempt and changes no outcome precedence.
 
 ### External review of factory pull requests
 

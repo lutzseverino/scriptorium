@@ -1043,7 +1043,11 @@ for (const attempt of [1, 2] as const)
 
 test("an ended run's open pull request keeps its claim with or without a needs-input label", () => {
   for (const attempt of [1, 2] as const)
-    for (const timedOut of [false, true])
+    for (const ending of [
+      { timedOut: false },
+      { timedOut: true },
+      { timedOut: false, orphaned: true as const },
+    ])
       for (const needsInput of [false, true]) {
         const decisions = decide({
           issues: [
@@ -1052,7 +1056,7 @@ test("an ended run's open pull request keeps its claim with or without a needs-i
               needsInput ? [...claimed, "factory:needs-input"] : claimed,
             ),
           ],
-          runs: [run(4, { attempt, ended: { timedOut, pullRequest: "open" } })],
+          runs: [run(4, { attempt, ended: { ...ending, pullRequest: "open" } })],
         });
         assert.deepEqual(decisions[0], { kind: "keep", ...at(4) });
         assert.deepEqual(launches(decisions), []);

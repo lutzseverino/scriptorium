@@ -153,6 +153,7 @@ test("comment templates are optional and individually configurable in version 1"
     {},
     { pause: "Waiting: {cause}" },
     { failure: "{unpushableCount}", close: "Done.\n" },
+    { awaitingMerge: "Held: {provider}/{model}@{effort} {attempt} {log} {label}" },
   ]) {
     writeFileSync(path, JSON.stringify({ ...configuration, comments }));
     assert.deepEqual(readFactoryConfiguration(path), {
@@ -174,6 +175,12 @@ test("every supplied comment template is validated before any comment is needed"
     { pause: "" },
     { failure: null },
     { close: {} },
+    ...["", null, 1, [], {}].map((awaitingMerge) => ({ awaitingMerge })),
+    { awaitingMerge: "{failure}" },
+    { awaitingMerge: "{#provider}{unknown}{/provider}" },
+    { awaitingMerge: "{#log}never closed" },
+    { awaitingMerge: "{/log}" },
+    { awaitingMerge: "{#log}{#provider}{/log}{/provider}" },
     { pause: "{failure}" },
     { failure: "{reset}" },
     { close: "{provider}" },

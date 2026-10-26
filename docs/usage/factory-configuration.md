@@ -38,7 +38,7 @@ values and versions other than numeric `1` are invalid.
 | `labels.skip`       | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                  |
 | `modelLabelPrefix`  | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
 | `prompt`            | A string containing both `{skillPrefix}` and `{issue}`. Every occurrence expands to the provider's skill prefix and the issue number.           |
-| `comments`          | Optional object with optional `pause`, `failure` and `close` comment templates. Each supplied entry is a non-empty string.                      |
+| `comments`          | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.                      |
 
 Label names and the model label prefix must be non-empty strings without
 leading or trailing whitespace. All configured label names, including the
@@ -79,10 +79,10 @@ the factory.
 
 ## Comment templates
 
-The factory writes three issue comments deterministically, without an agent,
+The factory writes four issue comments deterministically, without an agent,
 prompt or provider usage. Add `comments` to the required configuration to
 replace any of their wording. This optional example changes only the pause
-comment and keeps the default failure and parent-close comments:
+comment and keeps the default failure, parent-close and awaiting-merge comments:
 
 ```json
 {
@@ -130,8 +130,10 @@ as more template syntax. These are the only names for each comment:
 | `pause`   | `provider`, `model`, `effort`, `attempt`, `cause`, `reset`, `threshold`, `label`                     |
 | `failure` | `failure`, `provider`, `model`, `effort`, `attempt`, `log`, `unpushable`, `unpushableCount`, `label` |
 | `close`   | `tickets`                                                                                            |
+| `awaitingMerge` | `provider`, `model`, `effort`, `attempt`, `log`, `label` |
 
-`label` is the configured paused or failed label for that comment. `cause` and
+`label` is the configured paused, failed or running label for `pause`,
+`failure` or `awaitingMerge`, respectively. `cause` and
 `failure` remain factory-written English phrases. `threshold` is the numeric
 pause threshold only for a pause at that threshold; it is empty for an actual
 usage-limit pause. `reset` and `log` are empty when absent. A failed claim
@@ -139,6 +141,12 @@ without a run has no provider, model, effort, attempt or log. Their sections
 do not render. `unpushable` is the list of paths the factory cannot push, and
 `unpushableCount` is their number, present only when at least one path exists.
 `tickets` contains closed-ticket references such as `#4` or `owner/repo#4`.
+For `awaitingMerge`, provider, model, effort, attempt and log describe the ended
+run. A label-only orphan claim has none of those facts; their sections do not
+render. The notice means the claim is retained without a live agent until the
+owner resolves its open pull request. Removing a state label alone does not
+resume an unsettled host run, and merging need not close the issue. See the
+[run outcomes and recovery rules](host.md#run-outcomes).
 
 Every supplied template is validated when configuration is read, before any
 comment is needed. An unknown name in any of the three syntax forms, including
@@ -166,6 +174,12 @@ Failure:
 
 ```json
 "The factory run failed: {failure}.\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}{#unpushable}- Unpushable: `{unpushable}`\n{/unpushable}{#unpushableCount}\nA person with permission to push these paths must deliver the change.\n\n{/unpushableCount}Remove `{label}` to let the factory pick this issue up again."
+```
+
+Awaiting merge:
+
+```json
+"The factory agent run has ended, but its pull request remains open.\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}The factory retains this issue's claim without a live agent. The owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Removing `{label}` alone does not resume the run, and merging the pull request does not always close the issue."
 ```
 
 Parent close:

@@ -109,6 +109,9 @@ export type HostPorts = {
 export const dockerfilePath = ".factory/Dockerfile";
 
 type HostRun = Run & {
+  // Successful awaiting-merge notice for this attempt, independent of the
+  // ending observation refreshed on each pass and on startup.
+  awaitingMergeNotified?: true;
   launchResult?: LaunchResult;
   recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
@@ -242,6 +245,7 @@ export function createHost(
       clone: join(root, "clone"),
       logs: join(root, "logs"),
       runs: join(root, "runs"),
+      claims: join(root, "claims"),
       // Each running sandbox's private directory.
       sandboxes: join(root, "sandboxes"),
     };
@@ -450,7 +454,19 @@ export function createHost(
       if (paths.length) claim.unpushedChanges = paths;
       claims.push(claim);
     }
+    // A label-only claim's notice lives as long as the observed claim. Keep
+    // it across label swaps, but not after the claim disappears.
+    const { claims: notices } = directory(name);
+    const retained = new Set(claims.map(({ issue }) => `issue-${issue}.json`));
+    if (existsSync(notices))
+      for (const file of readdirSync(notices))
+        if (/^issue-\d+\.json$/.test(file) && !retained.has(file))
+          rmSync(join(notices, file));
     return claims;
+  }
+
+  function claimNoticePath(repository: string, issue: number): string {
+    return join(directory(repository).claims, `issue-${issue}.json`);
   }
 
   // Earlier outcome rows settle without consulting the branch. Both runs
@@ -486,6 +502,7 @@ export function createHost(
   }
 
   function forget(decision: { repository: string; issue: number }) {
+    rmSync(claimNoticePath(decision.repository, decision.issue), { force: true });
     const run = find(decision);
     if (!run) return;
     runs.splice(runs.indexOf(run), 1);
@@ -835,7 +852,27 @@ export function createHost(
         // Awaiting merge takes no cap slot but retains its attempt and PR
         // history until the claim settles, including across a restart.
         const run = find(decision);
-        if (run) record(run);
+        if (run) {
+          if (!run.awaitingMergeNotified) {
+            await platform.awaitingMerge(
+              decision.issue,
+              awaitingMergeComment(pass.configuration!, run),
+            );
+            run.awaitingMergeNotified = true;
+          }
+          record(run);
+        } else {
+          const path = claimNoticePath(decision.repository, decision.issue);
+          if (!existsSync(path)) {
+            await platform.awaitingMerge(
+              decision.issue,
+              awaitingMergeComment(pass.configuration!),
+            );
+            mkdirSync(directory(decision.repository).claims, { recursive: true });
+            writeFileSync(`${path}.partial`, '{"awaitingMergeNotified":true}\n');
+            renameSync(`${path}.partial`, path);
+          }
+        }
         return;
       }
       case "release":
@@ -1070,6 +1107,21 @@ function recoveredPause(recorded: {
     },
     commented,
   };
+}
+
+// A retained claim without a host run has no model or log to name.
+function awaitingMergeComment(
+  configuration: FactoryConfiguration,
+  run?: HostRun,
+): string {
+  return renderComment("awaitingMerge", configuration.comments?.awaitingMerge, {
+    provider: run?.provider,
+    model: run?.model,
+    effort: run?.effort,
+    attempt: run?.attempt,
+    log: run?.log,
+    label: configuration.labels.running,
+  });
 }
 
 // Each pause tells its issue once; it names no log output.
