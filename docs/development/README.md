@@ -18,6 +18,28 @@ CI's `Test (Node.js 24)` and `Test (Node.js 26)` jobs, in
 pull request and push to `main`. The required `Test` check passes only when
 both jobs succeed; the required `PR metadata` check keeps its Node.js 24 default.
 
+The toolchain image sets `pnpm_config_store_dir` to
+`/home/agent/.local/share/pnpm/store`, which the runtime agent user can write,
+including when the checkout is mounted separately from home. Local development
+keeps pnpm's platform defaults. If those defaults select a store inside the
+checkout or an unwritable location, choose a writable directory outside the
+checkout instead:
+
+```sh
+export pnpm_config_store_dir="$HOME/.local/share/pnpm/store"
+pnpm store path
+pnpm install --frozen-lockfile
+```
+
+Choose another external directory owned by your user if home is restricted.
+For a single command, `--store-dir /absolute/writable/store` also selects the
+store; use the same flag with `pnpm store path` to inspect that selection.
+These are [pnpm 11 configuration mechanisms](https://pnpm.io/11.x/configuring);
+`npm_config_store_dir` and non-authentication `.npmrc` settings are not read.
+pnpm copies packages when the selected store and checkout are on different
+filesystems. `.pnpm-store/` is ignored as a backstop for leftover or explicitly
+local stores; no cache needs deleting or migrating.
+
 The stack uses TypeScript 7, oxlint 1, Prettier 3 with its defaults, and
 Node's test runner (`node --test`). `pnpm validate` runs the typecheck, lint,
 format check and tests. Run `pnpm format` to format authored files. The lint
