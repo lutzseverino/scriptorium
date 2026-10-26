@@ -19,14 +19,14 @@ conventions this repository follows, where Scriptorium lived until
 
 ## Installation
 
-On a Linux host with Node.js 24 or 26, Git, the GitHub CLI and Docker, check
+On a Linux host with Node.js 24 or 26, pnpm 11, Git, the GitHub CLI and Docker, check
 out the latest release and start the process with the host configuration's path:
 
 ```sh
 git clone https://github.com/lutzseverino/scriptorium.git
 cd scriptorium
 git checkout "$(gh release view --repo lutzseverino/scriptorium --json tagName --jq .tagName)"
-npm ci --omit=dev
+pnpm install --prod --frozen-lockfile
 node src/main.ts /etc/factory/host.json
 ```
 

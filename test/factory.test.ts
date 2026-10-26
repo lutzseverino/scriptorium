@@ -218,13 +218,16 @@ test("a configured skip label prevents new pickup until it is removed", () => {
       repository(gadgets, [issue(5, ["ready-for-agent", "manual-delivery"])]),
     ],
   });
-  assert.deepEqual(decisions.filter((decision) => decision.issue === 4), [
-    {
-      kind: "skip",
-      ...at(4),
-      reason: "labelled `manual-delivery`; delivered outside the factory",
-    },
-  ]);
+  assert.deepEqual(
+    decisions.filter((decision) => decision.issue === 4),
+    [
+      {
+        kind: "skip",
+        ...at(4),
+        reason: "labelled `manual-delivery`; delivered outside the factory",
+      },
+    ],
+  );
   assert.deepEqual(launched(decisions), ["acme/gadgets#5"]);
 
   skipped.issues[0].labels = ["ready-for-agent"];
@@ -1056,7 +1059,9 @@ test("an ended run's open pull request keeps its claim with or without a needs-i
               needsInput ? [...claimed, "factory:needs-input"] : claimed,
             ),
           ],
-          runs: [run(4, { attempt, ended: { ...ending, pullRequest: "open" } })],
+          runs: [
+            run(4, { attempt, ended: { ...ending, pullRequest: "open" } }),
+          ],
         });
         assert.deepEqual(decisions[0], { kind: "keep", ...at(4) });
         assert.deepEqual(launches(decisions), []);

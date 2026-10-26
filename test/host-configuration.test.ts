@@ -334,7 +334,8 @@ test("for one release the legacy usageThreshold is read as the drain threshold, 
 });
 
 test("one-argument callers migrate usageThreshold and warn on stderr", () => {
-  const validator = new URL("../src/host-configuration.ts", import.meta.url).href;
+  const validator = new URL("../src/host-configuration.ts", import.meta.url)
+    .href;
   const result = spawnSync(
     process.execPath,
     [

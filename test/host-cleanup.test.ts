@@ -42,7 +42,11 @@ for (const failing of [false, true])
         assert.equal(result.status, 1, output);
         assert.match(output, /expected teardown failure/);
       } else assert.equal(result.status, 0, output);
-      assert.deepEqual(readdirSync(temporary), ["factory-test-unrelated"], output);
+      assert.deepEqual(
+        readdirSync(temporary),
+        ["factory-test-unrelated"],
+        output,
+      );
       assert.equal(
         readFileSync(join(unrelated, "keep"), "utf8"),
         "unrelated fixture\n",

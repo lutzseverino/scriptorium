@@ -4,20 +4,25 @@ This directory explains how to develop and release the factory package.
 
 ## Setup and validation
 
-Use stable Node.js 24 or 26 with npm, Git, and Docker for the sandbox image
+Use stable Node.js 24 or 26 with pnpm 11.28.8, Git, and Docker for the sandbox image
 tests. Node.js 24 remains the default toolchain.
 Follow the [contribution guidelines](../../CONTRIBUTING.md) for delivery.
 Install GitHub CLI and authenticate it with your existing GitHub login before
 running package tests: the upstream digest comparison uses authenticated
 `gh api` requests for public release metadata. Missing CLI or authentication
 fails that check; only an unavailable local network may skip it. From the
-repository root, run `npm ci --include=dev`, `npm run typecheck`, and
-`npm test`. Run `git diff --check` over the change before opening a pull
+repository root, run `pnpm install --frozen-lockfile` and `pnpm validate`. Run `git diff --check` over the change before opening a pull
 request. Run these commands with each supported major before requesting review.
 CI's `Test (Node.js 24)` and `Test (Node.js 26)` jobs, in
-`.github/workflows/ci.yml`, run the same install, typecheck and tests for every
+`.github/workflows/ci.yml`, run the same install and validation for every
 pull request and push to `main`. The required `Test` check passes only when
 both jobs succeed; the required `PR metadata` check keeps its Node.js 24 default.
+
+The stack uses TypeScript 7, oxlint 1, Prettier 3 with its defaults, and
+Node's test runner (`node --test`). `pnpm validate` runs the typecheck, lint,
+format check and tests. Run `pnpm format` to format authored files. The lint
+and format ignores exclude vendored code, Repository Standards state, installed
+skills and the exact scripts Repo Canon installs.
 
 The package runs TypeScript through Node.js type stripping on both majors and
 emits no build output. The typecheck uses strict TypeScript, Node module

@@ -10,7 +10,9 @@ test("host status accepts the original three arguments with no provider statuses
     {
       updatedAt: now,
       providers: [],
-      repositories: [{ repository: "acme/widgets", state: "running", held: [] }],
+      repositories: [
+        { repository: "acme/widgets", state: "running", held: [] },
+      ],
     },
   );
 });

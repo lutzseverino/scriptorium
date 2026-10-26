@@ -153,7 +153,10 @@ test("comment templates are optional and individually configurable in version 1"
     {},
     { pause: "Waiting: {cause}" },
     { failure: "{unpushableCount}", close: "Done.\n" },
-    { awaitingMerge: "Held: {provider}/{model}@{effort} {attempt} {log} {label}" },
+    {
+      awaitingMerge:
+        "Held: {provider}/{model}@{effort} {attempt} {log} {label}",
+    },
   ]) {
     writeFileSync(path, JSON.stringify({ ...configuration, comments }));
     assert.deepEqual(readFactoryConfiguration(path), {
