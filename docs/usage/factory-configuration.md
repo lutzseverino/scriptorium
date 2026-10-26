@@ -35,10 +35,10 @@ values and versions other than numeric `1` are invalid.
 | `labels.failed`     | The label the factory adds after a final failure. Remove it to allow another run.                                                               |
 | `labels.needsInput` | The label an agent adds when it needs an answer. After answering, remove it to allow a fresh first attempt.                                     |
 | `labels.paused`     | The label the factory swaps in for the running label when it pauses a run: the factory paused the run and resumes it by itself; leave it alone. |
-| `labels.skip`       | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                  |
+| `labels.skip`       | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
 | `modelLabelPrefix`  | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
 | `prompt`            | A string containing both `{skillPrefix}` and `{issue}`. Every occurrence expands to the provider's skill prefix and the issue number.           |
-| `comments`          | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.                      |
+| `comments`          | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
 
 Label names and the model label prefix must be non-empty strings without
 leading or trailing whitespace. All configured label names, including the
@@ -125,12 +125,12 @@ A list inserted directly with `{name}` joins its items with newlines; use a
 section to supply per-item formatting. Inserted values are text, never parsed
 as more template syntax. These are the only names for each comment:
 
-| Comment   | Names                                                                                                |
-| --------- | ---------------------------------------------------------------------------------------------------- |
-| `pause`   | `provider`, `model`, `effort`, `attempt`, `cause`, `reset`, `threshold`, `label`                     |
-| `failure` | `failure`, `provider`, `model`, `effort`, `attempt`, `log`, `unpushable`, `unpushableCount`, `label` |
-| `close`   | `tickets`                                                                                            |
-| `awaitingMerge` | `provider`, `model`, `effort`, `attempt`, `log`, `label` |
+| Comment         | Names                                                                                                |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| `pause`         | `provider`, `model`, `effort`, `attempt`, `cause`, `reset`, `threshold`, `label`                     |
+| `failure`       | `failure`, `provider`, `model`, `effort`, `attempt`, `log`, `unpushable`, `unpushableCount`, `label` |
+| `close`         | `tickets`                                                                                            |
+| `awaitingMerge` | `provider`, `model`, `effort`, `attempt`, `log`, `label`                                             |
 
 `label` is the configured paused, failed or running label for `pause`,
 `failure` or `awaitingMerge`, respectively. `cause` and

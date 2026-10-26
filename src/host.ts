@@ -502,7 +502,9 @@ export function createHost(
   }
 
   function forget(decision: { repository: string; issue: number }) {
-    rmSync(claimNoticePath(decision.repository, decision.issue), { force: true });
+    rmSync(claimNoticePath(decision.repository, decision.issue), {
+      force: true,
+    });
     const run = find(decision);
     if (!run) return;
     runs.splice(runs.indexOf(run), 1);
@@ -868,8 +870,13 @@ export function createHost(
               decision.issue,
               awaitingMergeComment(pass.configuration!),
             );
-            mkdirSync(directory(decision.repository).claims, { recursive: true });
-            writeFileSync(`${path}.partial`, '{"awaitingMergeNotified":true}\n');
+            mkdirSync(directory(decision.repository).claims, {
+              recursive: true,
+            });
+            writeFileSync(
+              `${path}.partial`,
+              '{"awaitingMergeNotified":true}\n',
+            );
             renameSync(`${path}.partial`, path);
           }
         }

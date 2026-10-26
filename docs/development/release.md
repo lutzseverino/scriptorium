@@ -35,16 +35,16 @@ receive a patch.
 Each release is one pull request into `main`, titled `<type>: release vX.Y.Z`
 for compatible releases: use `feat` for a capability, `fix` for a fix, or
 `chore` for maintenance only. A breaking release is titled
-`feat!: release vX.Y.Z`. The pull request updates `package.json` and
-`package-lock.json` together, and carries the changes needed for the release.
+`feat!: release vX.Y.Z`. The pull request updates `package.json`, regenerates `pnpm-lock.yaml` with
+`pnpm install --lockfile-only`, and carries the changes needed for the release.
 Nothing is committed for the release after it merges.
 
 Follow the [contribution guidelines](../../CONTRIBUTING.md), including review,
 the PR body, issue reference, and squash merge. The body names the version and
 the previous factory tag, with its repository when that is
 `lutzseverino/repo-canon`. It summarizes the package diff since that tag,
-reports the package typecheck and tests and the CI outcome, and carries draft
-release notes. For breaking releases, include Impact and Migration, describing
+reports `pnpm validate` on both supported Node.js majors and the CI outcome,
+and carries draft release notes. For breaking releases, include Impact and Migration, describing
 the configuration or sandbox contract change and the ordered host migration.
 Run the checks in the [development guide](README.md#setup-and-validation) on
 the final commit.
@@ -55,15 +55,17 @@ Only the owner performs publication. In an up-to-date checkout of `main`,
 set `factory_version` to the chosen SemVer and `factory_pr` to the merged
 release pull request's number. Save the reviewed release notes in the task's
 scratch directory and set `factory_notes` to that file's absolute path.
-Read the reviewed head and merge commit, fetch both, and confirm the manifest
-and lockfile at the merge commit both name `factory_version`:
+Read the reviewed head and merge commit and fetch both. Confirm that the
+manifest at the merge commit names `factory_version`, and inspect the lockfile
+for the reviewed dependency pins. pnpm does not record the root package version
+in its lockfile:
 
 ```sh
 factory_reviewed_head=$(gh pr view "$factory_pr" --json headRefOid --template '{{.headRefOid}}')
 factory_merge=$(gh pr view "$factory_pr" --json mergeCommit --template '{{.mergeCommit.oid}}')
 git fetch origin main "$factory_reviewed_head"
 git show "$factory_merge:package.json"
-git show "$factory_merge:package-lock.json"
+git show "$factory_merge:pnpm-lock.yaml"
 ```
 
 Compare the entire released tree with the reviewed head before tagging. A

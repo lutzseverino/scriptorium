@@ -10,7 +10,11 @@
   "scripts": {
     "start": "node src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "lint": "oxlint --deny-warnings",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "validate": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "0.12.0",
@@ -19,6 +23,9 @@
   "devDependencies": {
     "@standard-schema/spec": "1.1.0",
     "@types/node": "24.19.2",
-    "typescript": "6.0.3"
-  }
+    "typescript": "7.0.2",
+    "oxlint": "1.89.0",
+    "prettier": "3.9.10"
+  },
+  "packageManager": "pnpm@11.28.8"
 }

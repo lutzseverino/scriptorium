@@ -1968,7 +1968,10 @@ test("an ended run awaiting merge tells its issue once across polls, label remov
   await run.drain();
   await run.tick();
   assert.equal(issue.comments.length, 1);
-  assert.match(issue.comments[0], /agent run has ended.*pull request remains open/s);
+  assert.match(
+    issue.comments[0],
+    /agent run has ended.*pull request remains open/s,
+  );
   assert.match(issue.comments[0], /retains.*claim without a live agent/);
   assert.match(issue.comments[0], /owner must.*merging or closing/i);
   assert.match(issue.comments[0], /continue observing/);
@@ -1982,9 +1985,11 @@ test("an ended run awaiting merge tells its issue once across polls, label remov
   assert.equal(issue.comments.length, 1);
   assert.equal(run.launched.length, 1);
   assert.ok(
-    run.status().providers.every(
-      (provider: { running: number }) => provider.running === 0,
-    ),
+    run
+      .status()
+      .providers.every(
+        (provider: { running: number }) => provider.running === 0,
+      ),
   );
   issue.pullRequests = ["MERGED"];
   const decisions = await restarted.tick();
@@ -2275,19 +2280,29 @@ test("the repository's skip label holds fresh attempts without factory label wri
   assert.deepEqual(
     run.github.labels.get("acme/widgets"),
     new Set([
-      "factory:running", "factory:failed", "factory:needs-input", "factory:paused",
+      "factory:running",
+      "factory:failed",
+      "factory:needs-input",
+      "factory:paused",
     ]),
   );
-  assert.deepEqual(run.events.filter((event) => event !== "stop sandboxes"), []);
+  assert.deepEqual(
+    run.events.filter((event) => event !== "stop sandboxes"),
+    [],
+  );
 
   // Clearing an earlier outcome must not bypass delivery outside the factory.
   for (const number of [5, 6])
     run.github.find("acme/widgets", number).labels = [
-      "ready-for-agent", "manual-delivery",
+      "ready-for-agent",
+      "manual-delivery",
     ];
   await run.tick();
   assert.equal(run.launched.length, 0);
-  assert.deepEqual(run.events.filter((event) => event !== "stop sandboxes"), []);
+  assert.deepEqual(
+    run.events.filter((event) => event !== "stop sandboxes"),
+    [],
+  );
 
   for (const number of [4, 5, 6])
     run.github.find("acme/widgets", number).labels = ["ready-for-agent"];
@@ -2298,7 +2313,8 @@ test("the repository's skip label holds fresh attempts without factory label wri
   );
   for (const number of [4, 5, 6])
     assert.deepEqual(run.github.find("acme/widgets", number).labels, [
-      "ready-for-agent", "factory:running",
+      "ready-for-agent",
+      "factory:running",
     ]);
 });
 

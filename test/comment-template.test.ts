@@ -150,18 +150,26 @@ test("awaiting-merge defaults and overrides render run facts and omit absent orp
     "The factory agent run has ended, but its pull request remains open.\n\nThe factory retains this issue's claim without a live agent. The owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Removing `working` alone does not resume the run, and merging the pull request does not always close the issue.",
   );
   assert.equal(
-    renderComment("awaitingMerge", "{provider}/{model}@{effort} #{attempt}{#log} ({log}){/log}; {label}", {
-      provider: "codex",
-      model: "gpt-5.5",
-      effort: "high",
-      attempt: 2,
-      log: "/host/run.log",
-      label: "working",
-    }),
+    renderComment(
+      "awaitingMerge",
+      "{provider}/{model}@{effort} #{attempt}{#log} ({log}){/log}; {label}",
+      {
+        provider: "codex",
+        model: "gpt-5.5",
+        effort: "high",
+        attempt: 2,
+        log: "/host/run.log",
+        label: "working",
+      },
+    ),
     "codex/gpt-5.5@high #2 (/host/run.log); working",
   );
   assert.equal(
-    renderComment("awaitingMerge", "Held.{#provider} {provider}/{model}@{effort} #{attempt}{/provider}{#log} ({log}){/log} {label}", { label: "working" }),
+    renderComment(
+      "awaitingMerge",
+      "Held.{#provider} {provider}/{model}@{effort} #{attempt}{/provider}{#log} ({log}){/log} {label}",
+      { label: "working" },
+    ),
     "Held. working",
   );
 });
