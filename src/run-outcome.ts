@@ -25,8 +25,8 @@ export function runOutcome(
   observation: Observation,
   timeLimitMinutes: number,
 ): RunOutcome {
-  if (observation.pullRequest === "open") return { kind: "awaiting merge" };
   if (observation.issueClosed) return { kind: "done" };
+  if (observation.pullRequest === "open") return { kind: "awaiting merge" };
   if (observation.pullRequest === "merged")
     return {
       kind: "failed",

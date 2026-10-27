@@ -163,10 +163,11 @@ export function repositoryPlatform(
       return states.includes("closed") ? "closed" : "none";
     },
 
-    // The closed issues still carrying the running or the paused label.
+    // Closed issues carrying any active state label, including questions
+    // whose claims were already released.
     async readClosedClaims(): Promise<number[]> {
       const numbers = new Set<number>();
-      for (const label of [labels.running, labels.paused])
+      for (const label of [labels.running, labels.paused, labels.needsInput])
         for (const { number } of await issueTracker.issues({
           state: "closed",
           label,
@@ -181,6 +182,15 @@ export function repositoryPlatform(
     // carries.
     release: (issue: number) =>
       transition(issue, null, [labels.running, labels.paused]),
+
+    // A closed issue no longer needs an owner's answer. Keep this separate
+    // from release, which also settles open issues with pending questions.
+    releaseClosed: (issue: number) =>
+      transition(issue, null, [
+        labels.running,
+        labels.paused,
+        labels.needsInput,
+      ]),
 
     async fail(issue: number, comment: string) {
       await transition(issue, labels.failed, [labels.running, labels.paused]);

@@ -1930,12 +1930,9 @@ test("each repository uses its own labels and model label prefix", () => {
   assert.equal(skipOf(decisions, 4), undefined);
 });
 
-test("a closed issue is done regardless of timeout, unpushable commits or pull request history, unless a pull request is open", () => {
+test("a closed issue is done regardless of timeout, unpushable commits or pull request history", () => {
   for (const pullRequest of ["none", "closed", "merged", "open"] as const) {
-    const decision =
-      pullRequest === "open"
-        ? { kind: "keep", ...at(4) }
-        : { kind: "release", ...at(4) };
+    const decision = { kind: "release", ...at(4) };
     for (const timedOut of [false, true])
       assert.deepEqual(
         decide({

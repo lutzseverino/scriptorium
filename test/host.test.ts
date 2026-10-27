@@ -169,6 +169,7 @@ function fakePlatform(
 
   // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
+  const failedRemovals = new Map<string, Error>();
 
   const latest = (items: TimelineEvent[]) =>
     items
@@ -287,6 +288,10 @@ function fakePlatform(
         },
         async removeLabel(number, label) {
           await request("removeLabel", number, label);
+          const failure = failedRemovals.get(
+            `${repository}#${number} ${label}`,
+          );
+          if (failure) throw failure;
           const issue = edit(number);
           if (!issue.labels.includes(label))
             throw new PlatformError("notFound", "Label does not exist");
@@ -362,7 +367,7 @@ function fakePlatform(
     };
   }
 
-  return { connect, find, refused, calls, labels };
+  return { connect, find, refused, failedRemovals, calls, labels };
 }
 
 // Sandcastle that records each run, with the token the sandbox would read,
@@ -3415,7 +3420,7 @@ test("a failed claim without a run supplies empty run facts to its template", as
   ]);
 });
 
-test("claim settling reads pull requests separately from issue closure and gives merged work precedence over needs input", async (t) => {
+test("closed claims release even with an open pull request while open merged work precedes needs input", async (t) => {
   const run = host(t, {
     repositories: {
       "acme/widgets": [
@@ -3441,7 +3446,7 @@ test("claim settling reads pull requests separately from issue closure and gives
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   assert.deepEqual(await run.tick(), [
-    { kind: "keep", repository: "acme/widgets", issue: 4 },
+    { kind: "release", repository: "acme/widgets", issue: 4 },
     { kind: "release", repository: "acme/widgets", issue: 5 },
     {
       kind: "fail",
@@ -3452,9 +3457,7 @@ test("claim settling reads pull requests separately from issue closure and gives
       log: null,
     },
   ]);
-  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
-    "factory:running",
-  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, []);
   assert.deepEqual(run.github.find("acme/widgets", 5).labels, []);
   assert.deepEqual(run.github.find("acme/widgets", 6).labels, [
     "factory:needs-input",
@@ -4498,3 +4501,155 @@ test("the owner's resume command with a drain threshold opens claims up to the r
     ),
   );
 });
+
+for (const configured of [false, true])
+  test(`closed issues clear active markers after restart with ${configured ? "repository-specific" : "default"} labels`, async (t) => {
+    const labels = configured
+      ? {
+          ...conventions.labels,
+          running: "worker:active",
+          needsInput: "worker:question",
+          paused: "worker:paused",
+        }
+      : conventions.labels;
+    const unrelated = [
+      labels.ready,
+      labels.failed,
+      "model:gpt-6.1-sol",
+      "factory:skip",
+    ];
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 1,
+            state: "CLOSED",
+            labels: [...unrelated, labels.running],
+          },
+          {
+            number: 2,
+            state: "CLOSED",
+            labels: [...unrelated, labels.needsInput],
+          },
+          {
+            number: 3,
+            state: "CLOSED",
+            labels: [
+              ...unrelated,
+              labels.running,
+              labels.needsInput,
+              labels.paused,
+            ],
+            pullRequests: ["OPEN"],
+          },
+          { number: 4, state: "CLOSED", labels: [...unrelated, labels.paused] },
+          { number: 5, labels: [labels.ready, labels.needsInput] },
+          {
+            number: 6,
+            labels: [labels.ready, labels.running],
+            pullRequests: ["OPEN"],
+          },
+        ],
+      },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".factory/config.json": JSON.stringify({ ...conventions, labels }),
+        }),
+      },
+    });
+    const restarted = run.restart();
+    await restarted.tick();
+    for (const number of [1, 2, 3, 4]) {
+      const issue = run.github.find("acme/widgets", number);
+      assert.deepEqual(issue.labels, unrelated);
+      assert.deepEqual(issue.comments, []);
+    }
+    await restarted.tick();
+    assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
+      labels.ready,
+      labels.needsInput,
+    ]);
+    assert.deepEqual(run.github.find("acme/widgets", 6).labels, [
+      labels.ready,
+      labels.running,
+    ]);
+    assert.equal(run.launched.length, 0);
+  });
+
+test("a failed closed-issue label removal is rediscovered after restart without a running marker", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          state: "CLOSED",
+          labels: [
+            "factory:running",
+            "factory:paused",
+            "factory:needs-input",
+            "factory:failed",
+          ],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  const failure = "acme/widgets#4 factory:needs-input";
+  run.github.failedRemovals.set(
+    failure,
+    new PlatformError("unavailable", "temporary label write failure"),
+  );
+  await run.tick();
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "factory:needs-input",
+    "factory:failed",
+  ]);
+  assert.ok(
+    run.reports.some((line) => line.includes("temporary label write failure")),
+  );
+  run.github.failedRemovals.delete(failure);
+  const restarted = run.restart();
+  await restarted.tick();
+  await restarted.tick();
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "factory:failed",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+  assert.equal(run.launched.length, 0);
+});
+
+for (const state of ["live", "ended", "awaiting merge", "paused", "restarted"])
+  for (const closure of ["merged", "external"])
+    test(`${closure} closure clears labels for a ${state} run`, async (t) => {
+      const run = host(t, {
+        repositories: { "acme/widgets": [{ number: 4 }] },
+        remotes: { "acme/widgets": remote(t, factoryFiles) },
+      });
+      await run.tick();
+      const issue = run.github.find("acme/widgets", 4);
+      issue.pullRequests = ["OPEN"];
+      if (state !== "live") {
+        if (state === "paused") endOnLimit(run.launched[0]);
+        run.launched[0].finish();
+        await settled();
+        if (state !== "ended") await run.tick();
+      }
+      issue.labels.push("factory:needs-input");
+      issue.state = "CLOSED";
+      if (closure === "merged") issue.pullRequests = ["MERGED"];
+      const active = state === "restarted" ? run.restart() : run;
+      const comments = [...issue.comments];
+      await active.tick();
+      assert.deepEqual(issue.labels, ["ready-for-agent"]);
+      assert.deepEqual(issue.comments, comments);
+      if (state === "live") {
+        run.launched[0].finish();
+        await settled();
+        await active.tick();
+      }
+      assert.equal(recordOf(run.state, 4, 1).settled, true);
+      await active.tick();
+      assert.deepEqual(issue.labels, ["ready-for-agent"]);
+      assert.equal(run.launched.length, 1);
+    });

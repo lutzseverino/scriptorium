@@ -412,8 +412,8 @@ export function createHost(
     };
   }
 
-  // Every running- or paused-labelled issue, open or closed, that no run on
-  // the host holds. Pull request state and issue closure remain independent.
+  // Reconcile closed issues even when a live run holds them or their only
+  // remaining marker is needs-input. Open claims keep pending questions.
   async function readClaims(
     name: string,
     platform: RepositoryPlatform,
@@ -423,8 +423,10 @@ export function createHost(
     const held = (number: number) =>
       runs.some((run) => run.repository === name && run.issue === number);
     const claims: Claim[] = [];
+    const closed = await platform.readClosedClaims();
+    for (const number of closed) await platform.releaseClosed(number);
     const numbers = [
-      ...(await platform.readClosedClaims()),
+      ...closed,
       ...issues
         .filter(
           (issue) =>
