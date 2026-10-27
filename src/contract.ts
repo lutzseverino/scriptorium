@@ -8,6 +8,29 @@ import type { ReadinessHold } from "./readiness.ts";
 const feedbackMarker = "<!-- repo-canon:issue-contract-feedback -->";
 const stateLine = /^<!-- repo-canon:issue-contract-state (.+) -->$/m;
 
+// Removing a triage category cannot turn a stale Brief approval into a body
+// contract. Label history is available without reading a direct issue's body.
+export function hasBriefContract(
+  labels: string[],
+  changes: LabelChange[],
+): boolean {
+  if (
+    labels.some((label) =>
+      [
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
+      ].includes(label),
+    )
+  )
+    return false;
+  return [...labels, ...changes.map((change) => change.label)].some(
+    (label) => label === "bug" || label === "enhancement",
+  );
+}
+
 // Match the contract validator's top-level Markdown heading recognition,
 // including formatted and setext headings, excluding code and blockquotes.
 function inlineText(tokens: Token[]): string {
@@ -39,6 +62,7 @@ export function briefReadiness(
   comments: Comment[],
   ready: LabelChange,
   platform: string,
+  latestDeletion: string | null,
 ): ReadinessHold | null {
   const refuse = (detail: string): ReadinessHold => ({
     reason: `is refused: ${detail}; publish and review the current Agent Brief, then remove and re-apply ${ready.label}`,
@@ -46,6 +70,13 @@ export function briefReadiness(
   });
   const brief = comments.filter(isBrief).sort((a, b) => b.id - a.id)[0];
   if (!brief) return refuse("the current Agent Brief is missing");
+  if (
+    latestDeletion !== null &&
+    Date.parse(ready.time) <= Date.parse(latestDeletion)
+  )
+    return refuse(
+      "a deleted comment may have superseded the current Agent Brief after its review; deleted text is unavailable",
+    );
   // The revision and feedback formats below are Repo Canon's GitHub contract.
   // Other platforms must supply equivalent evidence before pickup can proceed.
   if (platform !== "github")

@@ -158,7 +158,10 @@ without bot marking, edit times or link times, and a remote no platform serves.
 `test/platform.test.ts` drives that module through Postern's real GitHub
 adapter over a fake `fetch`, without network access. Platform and host fixtures
 cover edited, replaced, deleted and freshly reviewed Agent Briefs, stale or
-untrusted validator feedback, unreadable comments and parent readiness. The
+untrusted validator feedback, category removal, comment deletion history,
+unreadable comments and parent readiness. GitHub deletion facts not exposed by
+the neutral comment port use Postern's authenticated `access.request` fallback;
+the factory still makes the revision decision. The
 factory recognizes Brief headings with Marked, pinned to the validator's
 parser version, and computes the published
 `repo-canon/issue-contract-revision/v1` fingerprint itself; it imports no

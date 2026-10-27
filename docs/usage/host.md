@@ -365,8 +365,9 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   last edit, to the second. A title change or ordinary discussion doesn't count. After
   reviewing an edit, remove and re-apply the label. On a platform that
   doesn't report the body's last edit, the factory skips this check.
-- **Agent Brief revision binding.** For triaged requests labelled `bug` or
-  `enhancement`, the factory reads comments through Postern and selects the
+- **Agent Brief revision binding.** For requests carrying `bug` or
+  `enhancement` now or in their label history, the factory reads comments
+  through Postern and selects the
   top-level Markdown Agent Brief heading in the highest-ID comment, as the
   repository contract validator does. Wayfinder maps and children keep their
   existing behavior. On GitHub, the validator notice from the bot account
@@ -382,6 +383,14 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   skipping the Brief check. Directly authored body contracts retain the body
   check above. This is a pickup-snapshot guarantee, not an atomic lock against
   a contract edit after pickup.
+  Removing a category cannot bypass this check. The factory also reads GitHub's
+  latest comment-deletion event through Postern. A deletion at or after the
+  ready event holds pickup until fresh review and readiness, even if an old
+  Brief and its matching approval survive. GitHub does not retain the deleted
+  text, so the factory cannot establish whether that comment superseded the
+  Brief; this can also hold after ordinary discussion is deleted. Unreadable
+  deletion history waits for access to recover. Direct contracts with no
+  triage-category history need neither comment nor deletion-history access.
 - **Parents.** An open issue with native sub-issues in the same repository is
   a parent, and it never launches. Its sub-issue runs only while the parent's
   readiness counts, is newer than the parent's latest sub-issue link, to the

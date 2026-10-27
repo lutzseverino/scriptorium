@@ -62,6 +62,7 @@ type IssueSpec = {
   pullRequests?: string[];
   comments?: string[];
   discussion?: Comment[] | Error;
+  latestDeletion?: string | null | Error;
   // Events after the issue's creation, when the owner applied its labels.
   timeline?: TimelineEvent[];
 };
@@ -141,6 +142,7 @@ function fakePlatform(
           pullRequests: [],
           comments: [] as string[],
           discussion: [] as Comment[] | Error,
+          latestDeletion: null as string | null | Error,
           ...spec,
         };
         return {
@@ -370,7 +372,35 @@ function fakePlatform(
           return role;
         },
         viewer: unused,
-        request: unused,
+        async request(options) {
+          assert.equal(options.path, "/graphql");
+          const body = options.body as {
+            query: string;
+            variables: { number: number };
+          };
+          assert.match(body.query, /COMMENT_DELETED_EVENT/);
+          await request("commentDeletions", body.variables.number);
+          const deletion = find(
+            repository,
+            body.variables.number,
+          ).latestDeletion;
+          if (deletion instanceof Error) throw deletion;
+          return {
+            status: 200,
+            headers: {},
+            data: {
+              data: {
+                repository: {
+                  issue: {
+                    timelineItems: {
+                      nodes: deletion === null ? [] : [{ createdAt: deletion }],
+                    },
+                  },
+                },
+              },
+            },
+          };
+        },
       },
     };
   }
@@ -2914,9 +2944,15 @@ test("pickup and parent readiness use the current Agent Brief even while stale l
         ]),
         triaged(4, [approvalComment]),
         triaged(5, new PlatformError("unavailable", "Comments unavailable")),
-        triaged(6, edited, { subIssues: [{ number: 7 }] }),
+        triaged(6, approved, {
+          subIssues: [{ number: 7 }],
+          latestDeletion: "2026-10-06T00:00:00Z",
+        }),
         { number: 7, parent: 6 },
-        triaged(8, edited, { subIssues: [{ number: 80, state: "CLOSED" }] }),
+        triaged(8, approved, {
+          subIssues: [{ number: 80, state: "CLOSED" }],
+          latestDeletion: "2026-10-06T00:00:00Z",
+        }),
         triaged(9, approved, { subIssues: [{ number: 90, state: "CLOSED" }] }),
       ],
     },
@@ -2955,7 +2991,25 @@ test("pickup and parent readiness use the current Agent Brief even while stale l
     at: "2026-10-07T00:00:00Z",
     id: 43,
   });
-  run.github.find("acme/widgets", 6).discussion = approved;
+  run.github.find("acme/widgets", 6).discussion = [
+    briefComment,
+    {
+      ...approvalComment,
+      body: approvalComment.body.replace(
+        '"reviewEventId":"42"',
+        '"reviewEventId":"43"',
+      ),
+    },
+  ];
+  run.github
+    .find("acme/widgets", 6)
+    .timeline.push({
+      event: "labeled",
+      label: ready,
+      actor: "owner",
+      at: "2026-10-07T00:00:00Z",
+      id: 43,
+    });
   await run.tick();
   assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
     "acme/widgets#1",

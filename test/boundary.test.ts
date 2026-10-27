@@ -38,7 +38,9 @@ test("no module reads an issue's body; only Postern's adapter reads relationship
   for (const file of ["platform.ts", "readiness.ts", "factory.ts", "host.ts"])
     assert.doesNotMatch(
       readFileSync(join(source, file), "utf8"),
-      /\.body\b|\bbody:|\{[^}]*\bbody\b[^}]*\}\s*=/,
+      // A transport request may have a body; issue content cannot be read or
+      // destructured. Brief comment bodies are confined to contract.ts.
+      /\.body\b|\{[^}]*\bbody\b[^}]*\}\s*=/,
       file,
     );
 });

@@ -125,8 +125,30 @@ async function briefIssues(
   details: Record<string, unknown> = {},
   eventId = 42,
   role = "admin",
+  deletion: string | null | number = null,
+  categorized = true,
 ) {
   const { connection } = github((request) => {
+    if (request === "FactoryCommentDeletions")
+      return typeof deletion === "number"
+        ? {
+            status: deletion,
+            data: { message: "Deletion history unavailable" },
+          }
+        : {
+            status: 200,
+            data: {
+              data: {
+                repository: {
+                  issue: {
+                    timelineItems: {
+                      nodes: deletion === null ? [] : [{ createdAt: deletion }],
+                    },
+                  },
+                },
+              },
+            },
+          };
     if (request === "PosternIssues")
       return {
         status: 200,
@@ -146,7 +168,20 @@ async function briefIssues(
     if (request.endsWith("/events"))
       return {
         status: 200,
-        data: [labeled(eventId, user("owner"), "2026-10-05T00:00:00Z")],
+        data: [
+          ...(categorized
+            ? [labeled(40, user("owner"), "2026-10-01T00:00:00Z", "bug")]
+            : []),
+          labeled(eventId, user("owner"), "2026-10-05T00:00:00Z"),
+          ...(categorized
+            ? [
+                {
+                  ...labeled(44, user("owner"), "2026-10-06T00:00:00Z", "bug"),
+                  event: "unlabeled",
+                },
+              ]
+            : []),
+        ],
       };
     if (request.endsWith("/permission"))
       return {
@@ -400,6 +435,78 @@ test("Wayfinder contracts retain their readiness behavior without Brief evidence
     });
     assert.equal(readinessExclusion(issues[0], issues, policy), null);
   }
+});
+
+test("deleting an unrecorded replacement cannot revive an older approved Brief", async () => {
+  // Brief 12 was posted and deleted before validator cleanup. Only Brief 10
+  // and its still-matching old approval survive in the comments endpoint.
+  const issues = await briefIssues(
+    [briefComment, approvalComment],
+    {},
+    42,
+    "admin",
+    "2026-10-06T00:00:00Z",
+  );
+  assert.match(
+    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
+    /deleted comment/,
+  );
+});
+
+test("removing the category label cannot bypass current Brief protection", async () => {
+  const issues = await briefIssues(
+    [
+      { ...briefComment, body: briefComment.body + "Changed scope.\n" },
+      approvalComment,
+    ],
+    { labels: page([{ name: labels.ready }]) },
+  );
+  assert.match(
+    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
+    /current Agent Brief/,
+  );
+});
+
+test("deletion evidence must be readable and strictly older than the reviewed readiness", async () => {
+  for (const deletion of [
+    "2026-10-05T00:00:00Z",
+    "2026-10-06T00:00:00Z",
+    502,
+    "malformed",
+  ]) {
+    const issues = await briefIssues(
+      [briefComment, approvalComment],
+      {},
+      42,
+      "admin",
+      deletion,
+    );
+    const hold = readinessExclusion(issues[0], issues, policy);
+    assert.ok(hold);
+    assert.equal(hold.waiting, deletion === 502 || deletion === "malformed");
+  }
+  const reviewedAfterDeletion = await briefIssues(
+    [briefComment, approvalComment],
+    {},
+    42,
+    "admin",
+    "2026-10-04T00:00:00Z",
+  );
+  assert.equal(
+    readinessExclusion(reviewedAfterDeletion[0], reviewedAfterDeletion, policy),
+    null,
+  );
+});
+
+test("a deleted Brief stays held after category removal while direct contracts need no comment access", async () => {
+  const directLabels = { labels: page([{ name: labels.ready }]) };
+  const deleted = await briefIssues([approvalComment], directLabels);
+  assert.match(
+    readinessExclusion(deleted[0], deleted, policy)!.reason,
+    /current Agent Brief is missing/,
+  );
+  const direct = await briefIssues(403, directLabels, 42, "admin", 403, false);
+  assert.equal(readinessExclusion(direct[0], direct, policy), null);
 });
 
 // A comment GitHub's REST API created on the issue.
