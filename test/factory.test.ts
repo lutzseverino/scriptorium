@@ -46,6 +46,7 @@ function issue(
     labels,
     ready: { at: createdAt, actor: owner },
     editedAt: null,
+    contractHold: null,
     nativeParent: null,
     latestLink: null,
     subIssues: [],
@@ -405,6 +406,44 @@ test("readiness must be strictly newer than the body's last edit", () => {
       ["acme/widgets#4"],
       `edited at ${editedAt}`,
     );
+});
+
+test("a current Brief hold gates pickup, retry, child release and parent closure", () => {
+  for (const waiting of [false, true]) {
+    const contractHold = {
+      reason: `${waiting ? "waits" : "is refused"}: the current Agent Brief needs review`,
+      waiting,
+    };
+    assert.deepEqual(
+      launches(decide({ issues: [issue(4, undefined, { contractHold })] })),
+      [],
+    );
+    const retry = decide({
+      issues: [issue(4, claimed, { contractHold })],
+      runs: [run(4, { ended: none })],
+    });
+    assert.ok(
+      retry.some((decision) => decision.kind === (waiting ? "skip" : "fail")),
+    );
+    assert.deepEqual(launches(retry), []);
+    const children = decide({
+      issues: [parent(released, { contractHold }), ...tickets()],
+    });
+    assert.deepEqual(launches(children), []);
+    assert.match(
+      skipOf(children, 5)!,
+      /sub-issue of #3, whose readiness.*current Agent Brief/,
+    );
+    const closing = decide({
+      issues: [
+        parent(released, {
+          contractHold,
+          subIssues: [{ number: 5, state: "closed" }],
+        }),
+      ],
+    });
+    assert.ok(closing.every((decision) => decision.kind !== "close"));
+  }
 });
 
 // A parent's readiness releases its tickets: it counts only when it was

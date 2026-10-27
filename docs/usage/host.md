@@ -349,8 +349,8 @@ and leaves an existing label's color and description as they are.
 ## Readiness
 
 The factory decides pickup itself from an issue's ready-label changes, its
-body's last edit, its links and its blockers, as the platform reports them. It
-knows no issue template and reads no issue body. On GitHub its links and
+body's last edit, its current Agent Brief approval, its links and its blockers,
+as the platform reports them. It reads no issue body. On GitHub its links and
 blockers are native; on a platform without native links Postern reads them
 from the issue's `Parent` and `Blocked by` sections, which the factory names.
 
@@ -361,10 +361,27 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   counts, nor does readiness from an account in `neverAuthorize`, whatever its
   role, or from an account without a role. A role it can't read holds the
   issue for that pass.
-- **Revision binding.** The ready label must be newer than the issue body's
-  last edit, to the second. A title change or a comment doesn't count. After
+- **Body revision binding.** The ready label must be newer than the issue body's
+  last edit, to the second. A title change or ordinary discussion doesn't count. After
   reviewing an edit, remove and re-apply the label. On a platform that
   doesn't report the body's last edit, the factory skips this check.
+- **Agent Brief revision binding.** For triaged requests labelled `bug` or
+  `enhancement`, the factory reads comments through Postern and selects the
+  top-level Markdown Agent Brief heading in the highest-ID comment, as the
+  repository contract validator does. Wayfinder maps and children keep their
+  existing behavior. On GitHub, the validator notice from the bot account
+  `github-actions[bot]` must approve the selected Brief's exact text, comment
+  identity and edit time, and bind it to the current ready-label event and
+  reviewer. The ready label must follow the Brief's edit time. An edit,
+  replacement or deletion holds pickup even when stale readiness and approval
+  survive; it never selects an older approved Brief or the intake body instead.
+  Missing or mismatching approval requires publishing and reviewing the current
+  Brief, then removing and re-applying readiness. An unreadable comment list
+  waits for access to recover. Arbitrary approval-like discussion grants
+  nothing. Platforms without this evidence hold triaged requests rather than
+  skipping the Brief check. Directly authored body contracts retain the body
+  check above. This is a pickup-snapshot guarantee, not an atomic lock against
+  a contract edit after pickup.
 - **Parents.** An open issue with native sub-issues in the same repository is
   a parent, and it never launches. Its sub-issue runs only while the parent's
   readiness counts, is newer than the parent's latest sub-issue link, to the
@@ -374,6 +391,9 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
 - **Closing.** An open issue whose readiness counts, with at least one native
   sub-issue and every sub-issue closed, in any repository, is closed with a
   comment listing them.
+
+The Brief check also gates retries, child release and readiness-dependent
+parent closure. Parent link-time and native-blocker checks still apply.
 
 Refused readiness is a skip with its reason in the process log and the
 [status file](#status-file). The factory never writes the ready label and

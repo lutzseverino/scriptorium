@@ -156,10 +156,20 @@ each account's repository role and the platform's capability flags, so the
 host tests drive the platform module's readiness reads, including platforms
 without bot marking, edit times or link times, and a remote no platform serves.
 `test/platform.test.ts` drives that module through Postern's real GitHub
-adapter over a fake `fetch`, without network access, and fails each state
+adapter over a fake `fetch`, without network access. Platform and host fixtures
+cover edited, replaced, deleted and freshly reviewed Agent Briefs, stale or
+untrusted validator feedback, unreadable comments and parent readiness. The
+factory recognizes Brief headings with Marked, pinned to the validator's
+parser version, and computes the published
+`repo-canon/issue-contract-revision/v1` fingerprint itself; it imports no
+validator implementation at runtime. `test/contract-fixture.ts` records a
+known approval produced by the pinned validator. Keep selection and revision
+format compatibility when that validator changes. The platform tests fail each state
 transition part way. `test/boundary.test.ts` checks that the package imports
-nothing from outside itself but Node.js, Sandcastle and Postern, and that no
-module reads an issue's body.
+nothing from outside itself but Node.js, Sandcastle, Postern and the Brief's
+Markdown parser, and that the platform projection and decision modules read no
+issue body. Agent Brief text is comment content, read through Postern; contract
+recognition and readiness authorization stay in the factory.
 The token tests drive the cache with a fake token command and clock; the one
 that runs the GitHub CLI against the sandbox's token file skips when `gh` is
 not installed. The run log's tests rely on file watching, which the published

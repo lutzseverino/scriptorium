@@ -35,6 +35,7 @@ import type { Retention } from "../src/image-retention.ts";
 import { createRegistry } from "../src/providers.ts";
 import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
+import { briefComment, approvalComment } from "./contract-fixture.ts";
 
 // The host runner, run against a stateful fake of each repository's Postern
 // connection, real Git clones of local bare remotes, the provider registry
@@ -45,7 +46,7 @@ import { directory } from "./fakes.ts";
 // login ends in `[bot]` is a bot or app, and a null actor an account the
 // platform no longer knows.
 type TimelineEvent = { at: string } & (
-  | { event: "labeled"; label: string; actor: string | null }
+  | { event: "labeled"; label: string; actor: string | null; id?: number }
   | { event: "edited" | "renamed" | "commented" }
   | { event: "linked"; subIssue: number }
 );
@@ -60,6 +61,7 @@ type IssueSpec = {
   blockedBy?: { number: number; state: string }[];
   pullRequests?: string[];
   comments?: string[];
+  discussion?: Comment[] | Error;
   // Events after the issue's creation, when the owner applied its labels.
   timeline?: TimelineEvent[];
 };
@@ -138,6 +140,7 @@ function fakePlatform(
           blockedBy: [],
           pullRequests: [],
           comments: [] as string[],
+          discussion: [] as Comment[] | Error,
           ...spec,
         };
         return {
@@ -262,7 +265,7 @@ function fakePlatform(
             item.event === "labeled"
               ? [
                   {
-                    id,
+                    id: item.id ?? id,
                     action: "added" as const,
                     label: item.label,
                     actor: account(item.actor),
@@ -314,12 +317,17 @@ function fakePlatform(
           edit(number).comments.push(comment);
           return {} as Comment;
         },
+        async comments(number) {
+          await request("comments", number);
+          const discussion = find(repository, number).discussion;
+          if (discussion instanceof Error) throw discussion;
+          return discussion;
+        },
         async closeIssue(number) {
           await request("closeIssue", number);
           edit(number).state = "CLOSED";
         },
         issue: unused,
-        comments: unused,
         updateComment: unused,
       },
       pullRequests: {
@@ -2864,6 +2872,97 @@ function held(run: ReturnType<typeof host>, issue: number) {
       (entry: { issue: number }) => entry.issue === issue,
     )?.reason;
 }
+
+test("pickup and parent readiness use the current Agent Brief even while stale labels survive", async (t) => {
+  const approved = [briefComment, approvalComment];
+  const edited = [
+    {
+      ...briefComment,
+      body: briefComment.body + "Changed scope.\n",
+      updatedAt: "2026-10-06T00:00:00Z",
+    },
+    approvalComment,
+  ];
+  const triaged = (
+    number: number,
+    discussion: Comment[] | Error,
+    details: Partial<IssueSpec> = {},
+  ): IssueSpec => ({
+    number,
+    labels: [ready, "bug"],
+    discussion,
+    timeline: [
+      {
+        event: "labeled",
+        label: ready,
+        actor: "owner",
+        at: "2026-10-05T00:00:00Z",
+        id: 42,
+      },
+    ],
+    ...details,
+  });
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        triaged(1, approved),
+        triaged(2, edited),
+        triaged(3, [
+          briefComment,
+          approvalComment,
+          { ...briefComment, id: 12, nodeId: "IC_12" },
+        ]),
+        triaged(4, [approvalComment]),
+        triaged(5, new PlatformError("unavailable", "Comments unavailable")),
+        triaged(6, edited, { subIssues: [{ number: 7 }] }),
+        { number: 7, parent: 6 },
+        triaged(8, edited, { subIssues: [{ number: 80, state: "CLOSED" }] }),
+        triaged(9, approved, { subIssues: [{ number: 90, state: "CLOSED" }] }),
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    caps: { "claude-code": 5, codex: 1 },
+  });
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#1"],
+  );
+  for (const number of [2, 3, 4, 5, 7, 8])
+    assert.match(held(run, number)!, /current Agent Brief/);
+  assert.equal(run.github.find("acme/widgets", 8).state, "OPEN");
+  assert.equal(run.github.find("acme/widgets", 9).state, "CLOSED");
+  // Review of the actual edited Brief releases held work on the next pickup
+  // snapshot. The ready event and validator approval both reflect that review.
+  const reviewedEdit = [
+    edited[0],
+    {
+      ...approvalComment,
+      body: approvalComment.body
+        .replaceAll(
+          "e4a84a2dd9caf78e1d4dbf78e73f2a81004dc935cca474dbbc65aee038195c37",
+          "440a84cd3525f93b73b750b3cc8bcae6900a60626d0aab3ccd5e267d3a9479bd",
+        )
+        .replace('"reviewEventId":"42"', '"reviewEventId":"43"'),
+      updatedAt: "2026-10-07T00:00:01Z",
+    },
+  ];
+  run.github.find("acme/widgets", 2).discussion = reviewedEdit;
+  run.github.find("acme/widgets", 2).timeline.push({
+    event: "labeled",
+    label: ready,
+    actor: "owner",
+    at: "2026-10-07T00:00:00Z",
+    id: 43,
+  });
+  run.github.find("acme/widgets", 6).discussion = approved;
+  await run.tick();
+  assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
+    "acme/widgets#1",
+    "acme/widgets#2",
+    "acme/widgets#7",
+  ]);
+});
 
 test("readiness counts only from a user whose role, read once a pass, the host authorizes", async (t) => {
   const roles: Record<string, string | null | Error> = {

@@ -9,6 +9,7 @@ import {
   references,
   type Policy,
   type Readiness,
+  type ReadinessHold,
 } from "./readiness.ts";
 import {
   runOutcome,
@@ -27,8 +28,11 @@ export type Issue = {
   // null when it doesn't or no event applying it was found.
   ready: Readiness | null;
   // When the body was last edited, or null when it never was. Title and
-  // comment changes don't count.
+  // ordinary discussion changes don't count. Agent Briefs have their own gate.
   editedAt: string | null;
+  // The selected Agent Brief's revision binding, or null for an approved
+  // Brief or a directly authored body contract.
+  contractHold: ReadinessHold | null;
   // Its parent, or null when it has none.
   nativeParent: IssueId | null;
   // When a sub-issue was last linked, and which when the platform says, or

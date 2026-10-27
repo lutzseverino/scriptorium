@@ -13,6 +13,7 @@ import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { reference, type Actor } from "./readiness.ts";
 import type { PullRequestState } from "./run-outcome.ts";
+import { briefReadiness } from "./contract.ts";
 
 // The body sections a platform without native links reads an issue's parent
 // and blockers from. Only Postern's adapter reads them.
@@ -124,6 +125,37 @@ export function repositoryPlatform(
             ? { at: ready.time, actor: await actor(ready.actor) }
             : null,
           editedAt: capabilities.bodyEditTime ? issue.bodyEditTime : null,
+          contractHold:
+            ready &&
+            issue.labels.some(
+              (label) => label === "bug" || label === "enhancement",
+            ) &&
+            !issue.labels.some((label) =>
+              [
+                "wayfinder:map",
+                "wayfinder:research",
+                "wayfinder:prototype",
+                "wayfinder:grilling",
+                "wayfinder:task",
+              ].includes(label),
+            )
+              ? await issueTracker.comments(issue.number).then(
+                  (comments) =>
+                    briefReadiness(
+                      comments,
+                      ready,
+                      connection.repository.platform,
+                    ),
+                  (error) => {
+                    if (!(error instanceof PlatformError)) throw error;
+                    return {
+                      reason:
+                        "waits: the current Agent Brief and validator approval could not be read this pass; restore comment access and retry",
+                      waiting: true,
+                    };
+                  },
+                )
+              : null,
           nativeParent: issue.parent && id(issue.parent),
           // The platform reports when the latest sub-issue was linked, not
           // which.
