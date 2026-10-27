@@ -7,12 +7,19 @@ import {
   type Account,
   type Connection,
   type IssueReference,
+  type LabelChange,
 } from "@lutzseverino/postern";
 import type { FactoryConfiguration } from "./factory-configuration.ts";
 import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
-import { reference, type Actor } from "./readiness.ts";
+import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
+import { commentHistory } from "./comment-history.ts";
 import type { PullRequestState } from "./run-outcome.ts";
+import {
+  briefReadiness,
+  hasBriefContract,
+  briefHistoryCandidates,
+} from "./contract.ts";
 
 // The body sections a platform without native links reads an issue's parent
 // and blockers from. Only Postern's adapter reads them.
@@ -43,6 +50,83 @@ export function repositoryPlatform(
     number: id(linked),
     state: linked.state,
   });
+
+  // Postern's authenticated fallback for a GitHub fact its neutral comment
+  // port does not expose. Deleted text is unavailable, so a newer deletion
+  // prevents proving that the surviving Brief was never superseded.
+  // https://docs.github.com/en/graphql/reference/issues#commentdeletedevent
+  async function latestCommentDeletion(number: number): Promise<string | null> {
+    const [owner, name] = path.split("/");
+    const response = await access.request({
+      method: "POST",
+      path: "/graphql",
+      body: {
+        query: `query FactoryCommentDeletions($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            issue(number: $number) {
+              timelineItems(last: 1, itemTypes: [COMMENT_DELETED_EVENT]) {
+                nodes { ... on CommentDeletedEvent { createdAt } }
+              }
+            }
+          }
+        }`,
+        variables: { owner, name, number },
+      },
+    });
+    const result = response.data as {
+      errors?: unknown;
+      data?: {
+        repository?: {
+          issue?: { timelineItems?: { nodes?: { createdAt?: unknown }[] } };
+        };
+      };
+    } | null;
+    const nodes = result?.data?.repository?.issue?.timelineItems?.nodes;
+    if (
+      result?.errors ||
+      !Array.isArray(nodes) ||
+      nodes.length > 1 ||
+      (nodes.length === 1 &&
+        (typeof nodes[0]?.createdAt !== "string" ||
+          !Number.isFinite(Date.parse(nodes[0].createdAt))))
+    )
+      throw new PlatformError(
+        "invalidResponse",
+        "Comment deletion history could not be read",
+      );
+    return nodes.length === 0 ? null : (nodes[0].createdAt as string);
+  }
+
+  async function readBrief(
+    number: number,
+    ready: LabelChange,
+  ): Promise<ReadinessHold | null> {
+    try {
+      const comments = await issueTracker.comments(number);
+      const deletion =
+        connection.repository.platform === "github"
+          ? await latestCommentDeletion(number)
+          : null;
+      const histories: string[][] = [];
+      if (connection.repository.platform === "github")
+        for (const comment of briefHistoryCandidates(comments, ready))
+          histories.push(await commentHistory(access, comment));
+      return briefReadiness(
+        comments,
+        ready,
+        connection.repository.platform,
+        deletion,
+        histories,
+      );
+    } catch (error) {
+      if (!(error instanceof PlatformError)) throw error;
+      return {
+        reason:
+          "waits: the current Agent Brief, validator approval or comment history could not be read this pass; restore comment access and retry",
+        waiting: true,
+      };
+    }
+  }
 
   // An absent label counts as removed.
   async function remove(issue: number, label: string) {
@@ -110,12 +194,13 @@ export function repositoryPlatform(
       const issues: Issue[] = [];
       for (const issue of await issueTracker.issues()) {
         // Changes arrive in platform order, so the last match is the latest.
-        const ready = issue.labels.includes(labels.ready)
-          ? (await issueTracker.labelChanges(issue.number)).findLast(
-              (change) =>
-                change.action === "added" && change.label === labels.ready,
-            )
-          : undefined;
+        const changes = issue.labels.includes(labels.ready)
+          ? await issueTracker.labelChanges(issue.number)
+          : [];
+        const ready = changes.findLast(
+          (change) =>
+            change.action === "added" && change.label === labels.ready,
+        );
         issues.push({
           number: issue.number,
           createdAt: issue.createdAt,
@@ -124,6 +209,10 @@ export function repositoryPlatform(
             ? { at: ready.time, actor: await actor(ready.actor) }
             : null,
           editedAt: capabilities.bodyEditTime ? issue.bodyEditTime : null,
+          contractHold:
+            ready && hasBriefContract(issue.labels, changes)
+              ? await readBrief(issue.number, ready)
+              : null,
           nativeParent: issue.parent && id(issue.parent),
           // The platform reports when the latest sub-issue was linked, not
           // which.

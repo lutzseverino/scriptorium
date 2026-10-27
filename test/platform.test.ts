@@ -5,8 +5,11 @@ import {
   PlatformError,
   type Connection,
   type IssueTracker,
+  type Comment,
 } from "@lutzseverino/postern";
 import { relationshipSections, repositoryPlatform } from "../src/platform.ts";
+import { readinessExclusion } from "../src/readiness.ts";
+import { briefComment, approvalComment } from "./contract-fixture.ts";
 
 // One repository's platform reads and writes, through Postern's GitHub
 // adapter over a fake `fetch` that answers as GitHub's API, and through a
@@ -101,6 +104,523 @@ function labeled(id: number, actor: unknown, at: string, label = labels.ready) {
 }
 
 const user = (login: string) => ({ login, type: "User" });
+
+function restComment(comment: Comment) {
+  return {
+    id: comment.id,
+    node_id: comment.nodeId,
+    html_url: comment.url,
+    user: comment.author && {
+      login: comment.author.login,
+      type: comment.author.bot ? "Bot" : "User",
+    },
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+  };
+}
+
+async function briefIssues(
+  comments: Comment[] | number,
+  details: Record<string, unknown> = {},
+  eventId = 42,
+  role = "admin",
+  deletion: string | null | number = null,
+  categorized = true,
+  histories: Record<string, string[] | number | null> = {},
+) {
+  const { connection } = github((request, body) => {
+    if (request === "FactoryCommentEdits") {
+      const comment =
+        typeof comments === "number"
+          ? undefined
+          : comments.find((comment) => comment.nodeId === body.variables.id);
+      assert.ok(comment);
+      const history = histories[comment.nodeId!] ?? [comment.body];
+      const offset = Number(body.variables.after ?? 0);
+      return typeof history === "number"
+        ? { status: history, data: { message: "History unavailable" } }
+        : {
+            status: 200,
+            data: {
+              data: {
+                node: {
+                  body: comment.body,
+                  updatedAt: comment.updatedAt,
+                  lastEditedAt:
+                    comment.nodeId! in histories ||
+                    comment.updatedAt !== comment.createdAt
+                      ? comment.updatedAt
+                      : null,
+                  includesCreatedEdit: histories[comment.nodeId!] !== null,
+                  userContentEdits: {
+                    // One revision per API page, so a superseding Brief in
+                    // an older edit cannot be missed after the first page.
+                    nodes: history
+                      .slice(offset, offset + 1)
+                      .map((diff) => ({ diff, deletedAt: null })),
+                    pageInfo: {
+                      hasNextPage: offset + 1 < history.length,
+                      endCursor: String(offset + 1),
+                    },
+                  },
+                },
+              },
+            },
+          };
+    }
+    if (request === "FactoryCommentDeletions")
+      return typeof deletion === "number"
+        ? {
+            status: deletion,
+            data: { message: "Deletion history unavailable" },
+          }
+        : {
+            status: 200,
+            data: {
+              data: {
+                repository: {
+                  issue: {
+                    timelineItems: {
+                      nodes: deletion === null ? [] : [{ createdAt: deletion }],
+                    },
+                  },
+                },
+              },
+            },
+          };
+    if (request === "PosternIssues")
+      return {
+        status: 200,
+        data: {
+          data: {
+            repository: {
+              issues: page([
+                issueNode(1, {
+                  labels: page([{ name: labels.ready }, { name: "bug" }]),
+                  ...details,
+                }),
+              ]),
+            },
+          },
+        },
+      };
+    if (request.endsWith("/events"))
+      return {
+        status: 200,
+        data: [
+          ...(categorized
+            ? [labeled(40, user("owner"), "2026-10-01T00:00:00Z", "bug")]
+            : []),
+          labeled(eventId, user("owner"), "2026-10-05T00:00:00Z"),
+          ...(categorized
+            ? [
+                {
+                  ...labeled(44, user("owner"), "2026-10-06T00:00:00Z", "bug"),
+                  event: "unlabeled",
+                },
+              ]
+            : []),
+        ],
+      };
+    if (request.endsWith("/permission"))
+      return {
+        status: 200,
+        data: { permission: role, role_name: role },
+      };
+    if (request.endsWith("/comments"))
+      return typeof comments === "number"
+        ? { status: comments, data: { message: "Comments unavailable" } }
+        : { status: 200, data: comments.map(restComment) };
+  });
+  return repositoryPlatform(connection, labels).readIssues();
+}
+
+const policy = {
+  ready: labels.ready,
+  authorizedRoles: ["admin"],
+  neverAuthorize: [],
+};
+
+test("an edited Agent Brief holds pickup despite its old approval and ready label", async () => {
+  const issues = await briefIssues([
+    {
+      ...briefComment,
+      body: briefComment.body.replace("Keep pickup", "Change pickup"),
+      updatedAt: "2026-10-06T00:00:00Z",
+    },
+    approvalComment,
+  ]);
+  assert.match(
+    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
+    /current Agent Brief/,
+  );
+});
+
+test("approval binds the current Brief text, identity, edit time, reviewer and readiness event", async (t) => {
+  const changedApproval = (from: string, to: string) => ({
+    ...approvalComment,
+    body: approvalComment.body.replace(from, to),
+  });
+  for (const [name, comments, eventId] of [
+    [
+      "text edited before the label",
+      [
+        { ...briefComment, body: briefComment.body + "Changed.\n" },
+        approvalComment,
+      ],
+    ],
+    [
+      "edit time changed with the same text",
+      [{ ...briefComment, updatedAt: "2026-10-04T00:00:00Z" }, approvalComment],
+    ],
+    [
+      "newest Brief replaces an approved one",
+      [
+        { ...briefComment, id: 12, nodeId: "IC_12" },
+        approvalComment,
+        briefComment,
+      ],
+    ],
+    ["deletion cannot select the intake", [approvalComment]],
+    [
+      "deletion cannot select an older Brief",
+      [{ ...briefComment, id: 9, nodeId: "IC_9" }, approvalComment],
+    ],
+    ["approval absent", [briefComment]],
+    [
+      "approval unreadable",
+      [
+        briefComment,
+        {
+          ...approvalComment,
+          body: approvalComment.body.replace('"approved"', "broken JSON"),
+        },
+      ],
+    ],
+    [
+      "revision awaiting review",
+      [briefComment, changedApproval('"approved"', '"awaiting-review"')],
+    ],
+    [
+      "different label",
+      [
+        briefComment,
+        changedApproval(
+          '"label":"ready-for-agent"',
+          '"label":"ready-for-human"',
+        ),
+      ],
+    ],
+    [
+      "different reviewer",
+      [
+        briefComment,
+        changedApproval('"reviewer":"owner"', '"reviewer":"casey"'),
+      ],
+    ],
+    ["different readiness event", [briefComment, approvalComment], 43],
+    [
+      "approval-like human discussion",
+      [
+        briefComment,
+        { ...approvalComment, author: { login: "owner", bot: false } },
+      ],
+    ],
+    [
+      "approval-like bot discussion",
+      [
+        briefComment,
+        { ...approvalComment, author: { login: "other[bot]", bot: true } },
+      ],
+    ],
+    [
+      "unmarked validator account",
+      [
+        briefComment,
+        {
+          ...approvalComment,
+          author: { login: "github-actions[bot]", bot: null },
+        },
+      ],
+    ],
+    [
+      "newer validator feedback replaces approval",
+      [
+        briefComment,
+        { ...changedApproval('"approved"', '"awaiting-review"'), id: 12 },
+        approvalComment,
+      ],
+    ],
+  ] as const)
+    await t.test(name, async () => {
+      const issues = await briefIssues([...comments], {}, eventId);
+      assert.match(
+        readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
+        /current Agent Brief/,
+      );
+    });
+});
+
+test("the reviewed Brief is eligible; discussion, title edits and untrusted markers change no contract", async () => {
+  const discussion = {
+    ...briefComment,
+    id: 12,
+    nodeId: "IC_12",
+    updatedAt: "2026-10-06T00:00:00Z",
+  };
+  const comments = [
+    briefComment,
+    approvalComment,
+    ...[
+      "Ordinary discussion",
+      "```md\n## Agent Brief\n```",
+      "> ## Agent Brief",
+      "<!--\n## Agent Brief\n-->",
+      "<h2>Agent Brief</h2>",
+    ].map((body, index) => ({
+      ...discussion,
+      id: 12 + index,
+      nodeId: `IC_${12 + index}`,
+      body,
+    })),
+    {
+      ...approvalComment,
+      id: 20,
+      nodeId: "IC_20",
+      author: { login: "other[bot]", bot: true },
+      body: "<!-- repo-canon:issue-contract-feedback -->\ninvalid",
+    },
+  ];
+  const issues = await briefIssues(comments, { title: "New title" });
+  assert.equal(readinessExclusion(issues[0], issues, policy), null);
+});
+
+test("comment read failures wait with an actionable reason", async () => {
+  for (const status of [403, 502]) {
+    const issues = await briefIssues(status);
+    const hold = readinessExclusion(issues[0], issues, policy);
+    assert.equal(hold?.waiting, true);
+    assert.match(hold!.reason, /could not be read.*restore comment access/);
+  }
+});
+
+test("replacement Brief selection follows the validator's Markdown heading forms", async () => {
+  for (const heading of [
+    "# Agent Brief",
+    "### **AGENT** `BRIEF`",
+    "Agent Brief\n---",
+    "## Agent <span>Brief</span>",
+  ]) {
+    const replacement = {
+      ...briefComment,
+      id: 12,
+      nodeId: "IC_12",
+      body: heading + "\n\nReplacement work.",
+    };
+    const issues = await briefIssues([
+      replacement,
+      briefComment,
+      approvalComment,
+    ]);
+    assert.match(
+      readinessExclusion(issues[0], issues, policy)!.reason,
+      /not bound to the current Agent Brief/,
+      heading,
+    );
+  }
+});
+
+test("fresh review of the actual edited Brief restores eligibility without bypassing the current role", async () => {
+  const comments = [
+    { ...briefComment, updatedAt: "2026-10-04T00:00:00Z" },
+    {
+      ...approvalComment,
+      body: approvalComment.body.replaceAll(
+        "e4a84a2dd9caf78e1d4dbf78e73f2a81004dc935cca474dbbc65aee038195c37",
+        "04b85db999bfe31b6deb0e33630ac3558e3168c30d4ed53a8ab0a6dfc04e7758",
+      ),
+    },
+  ];
+  const issues = await briefIssues(comments);
+  assert.equal(readinessExclusion(issues[0], issues, policy), null);
+  const demoted = await briefIssues(comments, {}, 42, "read");
+  assert.match(
+    readinessExclusion(demoted[0], demoted, policy)!.reason,
+    /role read is not authorized/,
+  );
+  const replacement = await briefIssues([
+    {
+      ...briefComment,
+      id: 12,
+      nodeId: "IC_12",
+      updatedAt: "2026-10-04T00:00:00Z",
+    },
+    {
+      ...approvalComment,
+      body: approvalComment.body.replaceAll(
+        "e4a84a2dd9caf78e1d4dbf78e73f2a81004dc935cca474dbbc65aee038195c37",
+        "7a09a6067627e4fff97cdb28b650e95db8b8cdd3122bfefc58fec0ad5fafca65",
+      ),
+    },
+    briefComment,
+  ]);
+  assert.equal(readinessExclusion(replacement[0], replacement, policy), null);
+});
+
+test("Wayfinder contracts retain their readiness behavior without Brief evidence", async () => {
+  for (const label of [
+    "wayfinder:map",
+    "wayfinder:research",
+    "wayfinder:prototype",
+    "wayfinder:grilling",
+    "wayfinder:task",
+  ]) {
+    const issues = await briefIssues(502, {
+      labels: page([{ name: labels.ready }, { name: "bug" }, { name: label }]),
+    });
+    assert.equal(readinessExclusion(issues[0], issues, policy), null);
+  }
+});
+
+test("deleting an unrecorded replacement cannot revive an older approved Brief", async () => {
+  // Brief 12 was posted and deleted before validator cleanup. Only Brief 10
+  // and its still-matching old approval survive in the comments endpoint.
+  const issues = await briefIssues(
+    [briefComment, approvalComment],
+    {},
+    42,
+    "admin",
+    "2026-10-06T00:00:00Z",
+  );
+  assert.match(
+    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
+    /deleted comment/,
+  );
+});
+
+test("removing the category label cannot bypass current Brief protection", async () => {
+  const issues = await briefIssues(
+    [
+      { ...briefComment, body: briefComment.body + "Changed scope.\n" },
+      approvalComment,
+    ],
+    { labels: page([{ name: labels.ready }]) },
+  );
+  assert.match(
+    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
+    /current Agent Brief/,
+  );
+});
+
+test("deletion evidence must be readable and strictly older than the reviewed readiness", async () => {
+  for (const deletion of [
+    "2026-10-05T00:00:00Z",
+    "2026-10-06T00:00:00Z",
+    502,
+    "malformed",
+  ]) {
+    const issues = await briefIssues(
+      [briefComment, approvalComment],
+      {},
+      42,
+      "admin",
+      deletion,
+    );
+    const hold = readinessExclusion(issues[0], issues, policy);
+    assert.ok(hold);
+    assert.equal(hold.waiting, deletion === 502 || deletion === "malformed");
+  }
+  const reviewedAfterDeletion = await briefIssues(
+    [briefComment, approvalComment],
+    {},
+    42,
+    "admin",
+    "2026-10-04T00:00:00Z",
+  );
+  assert.equal(
+    readinessExclusion(reviewedAfterDeletion[0], reviewedAfterDeletion, policy),
+    null,
+  );
+});
+
+test("a deleted Brief stays held after category removal while direct contracts need no comment access", async () => {
+  const directLabels = { labels: page([{ name: labels.ready }]) };
+  const deleted = await briefIssues([approvalComment], directLabels);
+  assert.match(
+    readinessExclusion(deleted[0], deleted, policy)!.reason,
+    /current Agent Brief is missing/,
+  );
+  const direct = await briefIssues(403, directLabels, 42, "admin", 403, false);
+  assert.equal(readinessExclusion(direct[0], direct, policy), null);
+});
+
+test("editing away a replacement heading cannot restore old approval, while ordinary edits remain discussion", async () => {
+  const replacement = {
+    ...briefComment,
+    id: 12,
+    nodeId: "IC_12",
+    body: "## Notes\n\nChanged discussion.",
+    updatedAt: "2026-10-06T00:00:00Z",
+  };
+  for (const original of [
+    "## Agent Brief\n\nReplacement work.",
+    "Ordinary discussion.",
+  ]) {
+    const issues = await briefIssues(
+      [briefComment, approvalComment, replacement],
+      {},
+      42,
+      "admin",
+      null,
+      true,
+      {
+        IC_12: [replacement.body, original],
+      },
+    );
+    const hold = readinessExclusion(issues[0], issues, policy);
+    if (original.includes("Agent Brief"))
+      assert.match(hold!.reason, /heading was edited away/);
+    else assert.equal(hold, null);
+  }
+  for (const history of [
+    502,
+    null,
+    ["Incomplete history without the current revision"],
+  ]) {
+    const issues = await briefIssues(
+      [briefComment, approvalComment, replacement],
+      {},
+      42,
+      "admin",
+      null,
+      true,
+      { IC_12: history },
+    );
+    assert.equal(readinessExclusion(issues[0], issues, policy)?.waiting, true);
+  }
+});
+
+test("a replacement edited in its creation second still needs native edit evidence", async () => {
+  const comment = {
+    ...briefComment,
+    id: 12,
+    nodeId: "IC_12",
+    body: "Ordinary-looking discussion.",
+    createdAt: "2026-10-06T00:00:00Z",
+    updatedAt: "2026-10-06T00:00:00Z",
+  };
+  const comments = [briefComment, approvalComment, comment];
+  const edited = await briefIssues(comments, {}, 42, "admin", null, true, {
+    IC_12: [comment.body, "## Agent Brief\n\nReplacement work."],
+  });
+  assert.match(
+    readinessExclusion(edited[0], edited, policy)!.reason,
+    /heading was edited away/,
+  );
+  const unedited = await briefIssues(comments);
+  assert.equal(readinessExclusion(unedited[0], unedited, policy), null);
+});
 
 // A comment GitHub's REST API created on the issue.
 const created = (issue: number) => ({
@@ -207,6 +727,7 @@ test("open issues reach the core with their readiness, links and times, and with
         actor: { kind: "user", login: "owner", role: "admin" },
       },
       editedAt: "2026-10-02T00:00:00Z",
+      contractHold: null,
       nativeParent: null,
       latestLink: { ticket: null, at: "2026-10-03T00:00:00Z" },
       subIssues: [
@@ -224,6 +745,7 @@ test("open issues reach the core with their readiness, links and times, and with
         actor: { kind: "user", login: "casey", role: null },
       },
       editedAt: null,
+      contractHold: null,
       nativeParent: 1,
       latestLink: null,
       subIssues: [],
@@ -247,6 +769,7 @@ test("open issues reach the core with their readiness, links and times, and with
           ? null
           : { at: "2026-10-05T00:00:00Z", actor },
       editedAt: null,
+      contractHold: null,
       nativeParent: null,
       latestLink: null,
       subIssues: [],

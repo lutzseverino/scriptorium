@@ -4,11 +4,11 @@ import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 
 // The package's boundary with Repo Canon and the hosting platform: it imports
-// nothing from outside itself but Node.js, Sandcastle and Postern, and decides
-// readiness without reading an issue's body.
+// nothing from outside itself but Node.js, Sandcastle, Postern and the Brief's
+// Markdown parser, and decides readiness without reading an issue's body.
 const source = resolve(import.meta.dirname, "../src");
 
-test("the package's modules import only each other, Node.js, Sandcastle and Postern", () => {
+test("the package's modules import only each other and their declared runtime boundaries", () => {
   const files = readdirSync(source, { recursive: true, encoding: "utf8" })
     .filter((file) => file.endsWith(".ts"))
     .map((file) => join(source, file));
@@ -23,6 +23,8 @@ test("the package's modules import only each other, Node.js, Sandcastle and Post
           !relative(source, resolve(dirname(file), specifier)).startsWith(".."),
           where,
         );
+      else if (specifier === "marked")
+        assert.equal(relative(source, file), "contract.ts", where);
       else
         assert.match(
           specifier,
@@ -36,7 +38,9 @@ test("no module reads an issue's body; only Postern's adapter reads relationship
   for (const file of ["platform.ts", "readiness.ts", "factory.ts", "host.ts"])
     assert.doesNotMatch(
       readFileSync(join(source, file), "utf8"),
-      /\.body\b|\bbody:|\{[^}]*\bbody\b[^}]*\}\s*=/,
+      // A transport request may have a body; issue content cannot be read or
+      // destructured. Brief comment bodies are confined to contract.ts.
+      /\.body\b|\{[^}]*\bbody\b[^}]*\}\s*=/,
       file,
     );
 });
