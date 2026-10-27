@@ -2114,6 +2114,10 @@ for (const scenario of [
   "removed",
   "reverted",
   "base advanced",
+  "base advanced with deleted run branch",
+  "base advanced with local workflow",
+  "recovery workflow only",
+  "merge workflow",
 ]) {
   test(`an ended run's unpushable changes are read from real Git with remote ${scenario}`, async (t) => {
     const bare = remote(t, factoryFiles);
@@ -2136,8 +2140,11 @@ for (const scenario of [
     if (scenario === "behind") push();
     commit(
       {
-        [scenario === "ordinary" ? "README.md" : ".github/workflows/new.yml"]:
-          "changed\n",
+        [["ordinary", "recovery workflow only", "merge workflow"].includes(
+          scenario,
+        )
+          ? "README.md"
+          : ".github/workflows/new.yml"]: "changed\n",
       },
       "change",
     );
@@ -2157,8 +2164,34 @@ for (const scenario of [
       git(work, ["commit", "--quiet", "-m", "delete workflow"]);
     }
     if (scenario === "reverted") git(work, ["revert", "--no-edit", "HEAD"]);
-    if (scenario === "base advanced")
+    if (scenario.startsWith("base advanced"))
       git(work, ["push", "--quiet", "origin", "HEAD:main"]);
+    if (scenario === "base advanced with deleted run branch") {
+      push();
+      git(work, ["push", "--quiet", "origin", "--delete", "factory/issue-4"]);
+    }
+    if (scenario === "base advanced with local workflow")
+      commit(
+        { ".github/workflows/old.yml": "outgoing\n" },
+        "outgoing workflow",
+      );
+    if (scenario === "recovery workflow only") {
+      const head = git(work, ["rev-parse", "HEAD"]).trim();
+      git(work, ["checkout", "--quiet", "-b", "recovery/issue-4"]);
+      commit({ ".github/workflows/recovery.yml": "preserved\n" }, "recovery");
+      git(work, ["checkout", "--quiet", "factory/issue-4"]);
+      assert.equal(git(work, ["rev-parse", "HEAD"]).trim(), head);
+      write(work, { "staged.md": "staged\n" });
+      git(work, ["add", "staged.md"]);
+      write(work, { "README.md": "unstaged\n", "untracked.md": "untracked\n" });
+    }
+    if (scenario === "merge workflow") {
+      git(work, ["checkout", "--quiet", "-b", "side", "HEAD^"]);
+      commit({ "side.md": "side\n" }, "side change");
+      git(work, ["checkout", "--quiet", "factory/issue-4"]);
+      git(work, ["merge", "--quiet", "--no-ff", "--no-commit", "side"]);
+      commit({ ".github/workflows/old.yml": "merge edit\n" }, "merge workflow");
+    }
     if (["pushed", "contains"].includes(scenario)) push();
     if (scenario === "contains") {
       const head = git(work, ["rev-parse", "HEAD"]).trim();
@@ -2192,6 +2225,14 @@ for (const scenario of [
         "1\t1",
       );
     }
+    const recovery = () => ({
+      head: git(work, ["rev-parse", "recovery/issue-4"]).trim(),
+      staged: git(work, ["diff", "--cached"]),
+      unstaged: git(work, ["diff"]),
+      status: git(work, ["status", "--porcelain"]),
+      untracked: readFileSync(join(work, "untracked.md"), "utf8"),
+    });
+    const preserved = scenario === "recovery workflow only" ? recovery() : null;
     run.launched[0].finish();
     await settled();
     const decisions = await run.tick();
@@ -2202,16 +2243,20 @@ for (const scenario of [
       "pushed workflow with local workflow",
       "removed",
       "reverted",
-      "base advanced",
+      "base advanced with local workflow",
+      "merge workflow",
     ].includes(scenario);
     if (failing) {
-      const paths =
-        scenario === "pushed workflow with local workflow"
-          ? [".github/workflows/old.yml"]
-          : [
-              ".github/workflows/new.yml",
-              ...(scenario === "removed" ? [".github/workflows/old.yml"] : []),
-            ];
+      const paths = [
+        "pushed workflow with local workflow",
+        "base advanced with local workflow",
+        "merge workflow",
+      ].includes(scenario)
+        ? [".github/workflows/old.yml"]
+        : [
+            ".github/workflows/new.yml",
+            ...(scenario === "removed" ? [".github/workflows/old.yml"] : []),
+          ];
       assert.deepEqual(decisions[0], {
         kind: "fail",
         repository: "acme/widgets",
@@ -2238,6 +2283,7 @@ for (const scenario of [
       assert.equal(decisions[0].kind === "launch" && decisions[0].attempt, 2);
       run.launched[1].finish();
     }
+    if (preserved) assert.deepEqual(recovery(), preserved);
   });
 }
 
@@ -3311,6 +3357,36 @@ for (const override of [false, true])
         ? "2 paths:\n- .github/workflows/new.yml\n- .github/workflows/other.yml\nDeliver once."
         : "The factory run failed: the run's branch changes paths the factory's GitHub App can't push.\n\n- Unpushable: `.github/workflows/new.yml`\n- Unpushable: `.github/workflows/other.yml`\n\nA person with permission to push these paths must deliver the change.\n\nRemove `factory:failed` to let the factory pick this issue up again.",
     );
+  });
+
+for (const published of ["absent", "deleted"])
+  test(`an orphaned claim excludes work delivered to the refreshed default branch with its published branch ${published}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4, labels: [] }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const clone = run.clone("acme/widgets");
+    const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+    git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+    write(work, { ".github/workflows/delivered.yml": "delivered\n" });
+    git(work, ["add", "."]);
+    git(work, ["commit", "--quiet", "-m", "delivered workflow"]);
+    git(work, ["push", "--quiet", "origin", "HEAD:main"]);
+    if (published === "deleted") {
+      git(work, ["push", "--quiet", "origin", "HEAD:factory/issue-4"]);
+      git(work, ["push", "--quiet", "origin", "--delete", "factory/issue-4"]);
+    }
+    const issue = run.github.find("acme/widgets", 4);
+    issue.labels = ["factory:running"];
+    const [decision] = await run.restart().tick();
+    assert.equal(decision.kind, "fail");
+    assert.equal(
+      decision.kind === "fail" && decision.failure,
+      "no factory run or open pull request holds its claim, and its retry did not launch: it no longer carries ready-for-agent",
+    );
+    assert.doesNotMatch(issue.comments[0], /Unpushable|permission to push/);
+    assert.equal(run.launched.length, 0);
   });
 
 test("a failed claim without a run supplies empty run facts to its template", async (t) => {

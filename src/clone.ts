@@ -72,13 +72,13 @@ export async function updateClone(
   }
 }
 
-// The paths under `prefixes` that the run branch's commits change and the
-// remote branch lacks, from `base` on.
+// The paths under `prefixes` changed by commits on this branch that neither
+// the remote default branch nor its published run branch contains. The caller
+// refreshes origin and its default branch with updateClone before assessment.
 export async function unpushedChanges(
   git: Git,
   clone: string,
   branch: string,
-  base: string,
   prefixes: string[],
 ): Promise<string[]> {
   if (prefixes.length === 0) return [];
@@ -102,7 +102,7 @@ export async function unpushedChanges(
       "rev-list",
       head,
       "--not",
-      base,
+      "refs/remotes/origin/HEAD",
       ...(remote ? [remote] : []),
     ])
   )

@@ -341,7 +341,6 @@ export function createHost(
         const paths = await readUnpushableChanges(
           git,
           clone,
-          run.base,
           issues.find((issue) => issue.number === run.issue),
           run.ended.pullRequest,
           pass.configuration.labels.needsInput,
@@ -446,7 +445,6 @@ export function createHost(
       const paths = await readUnpushableChanges(
         git,
         clone,
-        "HEAD",
         issues.find((issue) => issue.number === number),
         claim.pullRequest,
         labels.needsInput,
@@ -470,11 +468,10 @@ export function createHost(
   }
 
   // Earlier outcome rows settle without consulting the branch. Both runs
-  // and claims use the same eligibility rule; their base commits differ.
+  // and claims assess delivery against the same refreshed remote default branch.
   async function readUnpushableChanges(
     git: Git,
     clone: string,
-    base: string,
     issue: Issue | undefined,
     pullRequest: PullRequestState,
     needsInputLabel: string,
@@ -489,7 +486,6 @@ export function createHost(
       git,
       clone,
       runBranch(issue.number),
-      base,
       configuration.unpushablePaths,
     );
   }
