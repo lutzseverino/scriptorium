@@ -160,7 +160,8 @@ adapter over a fake `fetch`, without network access. Platform and host fixtures
 cover edited, replaced, deleted and freshly reviewed Agent Briefs, stale or
 untrusted validator feedback, category removal, comment deletion history,
 unreadable comments and parent readiness. GitHub deletion facts not exposed by
-the neutral comment port use Postern's authenticated `access.request` fallback;
+the neutral comment port, and complete edit histories for potentially erased
+replacement Brief headings, use Postern's authenticated `access.request` fallback;
 the factory still makes the revision decision. The
 factory recognizes Brief headings with Marked, pinned to the validator's
 parser version, and computes the published

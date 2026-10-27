@@ -3001,15 +3001,13 @@ test("pickup and parent readiness use the current Agent Brief even while stale l
       ),
     },
   ];
-  run.github
-    .find("acme/widgets", 6)
-    .timeline.push({
-      event: "labeled",
-      label: ready,
-      actor: "owner",
-      at: "2026-10-07T00:00:00Z",
-      id: 43,
-    });
+  run.github.find("acme/widgets", 6).timeline.push({
+    event: "labeled",
+    label: ready,
+    actor: "owner",
+    at: "2026-10-07T00:00:00Z",
+    id: 43,
+  });
   await run.tick();
   assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
     "acme/widgets#1",

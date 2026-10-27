@@ -391,6 +391,10 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   Brief; this can also hold after ordinary discussion is deleted. Unreadable
   deletion history waits for access to recover. Direct contracts with no
   triage-category history need neither comment nor deletion-history access.
+  A newer comment edited after review also needs its complete edit history:
+  erasing a replacement Brief's heading cannot restore an older approval.
+  A history containing only ordinary discussion does not change the contract;
+  missing or redacted history holds pickup with a reason.
 - **Parents.** An open issue with native sub-issues in the same repository is
   a parent, and it never launches. Its sub-issue runs only while the parent's
   readiness counts, is newer than the parent's latest sub-issue link, to the

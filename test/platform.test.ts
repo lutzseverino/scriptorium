@@ -127,8 +127,48 @@ async function briefIssues(
   role = "admin",
   deletion: string | null | number = null,
   categorized = true,
+  histories: Record<string, string[] | number | null> = {},
 ) {
-  const { connection } = github((request) => {
+  const { connection } = github((request, body) => {
+    if (request === "FactoryCommentEdits") {
+      const comment =
+        typeof comments === "number"
+          ? undefined
+          : comments.find((comment) => comment.nodeId === body.variables.id);
+      assert.ok(comment);
+      const history = histories[comment.nodeId!] ?? [comment.body];
+      const offset = Number(body.variables.after ?? 0);
+      return typeof history === "number"
+        ? { status: history, data: { message: "History unavailable" } }
+        : {
+            status: 200,
+            data: {
+              data: {
+                node: {
+                  body: comment.body,
+                  updatedAt: comment.updatedAt,
+                  lastEditedAt:
+                    comment.nodeId! in histories ||
+                    comment.updatedAt !== comment.createdAt
+                      ? comment.updatedAt
+                      : null,
+                  includesCreatedEdit: histories[comment.nodeId!] !== null,
+                  userContentEdits: {
+                    // One revision per API page, so a superseding Brief in
+                    // an older edit cannot be missed after the first page.
+                    nodes: history
+                      .slice(offset, offset + 1)
+                      .map((diff) => ({ diff, deletedAt: null })),
+                    pageInfo: {
+                      hasNextPage: offset + 1 < history.length,
+                      endCursor: String(offset + 1),
+                    },
+                  },
+                },
+              },
+            },
+          };
+    }
     if (request === "FactoryCommentDeletions")
       return typeof deletion === "number"
         ? {
@@ -338,10 +378,16 @@ test("the reviewed Brief is eligible; discussion, title edits and untrusted mark
       "> ## Agent Brief",
       "<!--\n## Agent Brief\n-->",
       "<h2>Agent Brief</h2>",
-    ].map((body, index) => ({ ...discussion, id: 12 + index, body })),
+    ].map((body, index) => ({
+      ...discussion,
+      id: 12 + index,
+      nodeId: `IC_${12 + index}`,
+      body,
+    })),
     {
       ...approvalComment,
       id: 20,
+      nodeId: "IC_20",
       author: { login: "other[bot]", bot: true },
       body: "<!-- repo-canon:issue-contract-feedback -->\ninvalid",
     },
@@ -507,6 +553,73 @@ test("a deleted Brief stays held after category removal while direct contracts n
   );
   const direct = await briefIssues(403, directLabels, 42, "admin", 403, false);
   assert.equal(readinessExclusion(direct[0], direct, policy), null);
+});
+
+test("editing away a replacement heading cannot restore old approval, while ordinary edits remain discussion", async () => {
+  const replacement = {
+    ...briefComment,
+    id: 12,
+    nodeId: "IC_12",
+    body: "## Notes\n\nChanged discussion.",
+    updatedAt: "2026-10-06T00:00:00Z",
+  };
+  for (const original of [
+    "## Agent Brief\n\nReplacement work.",
+    "Ordinary discussion.",
+  ]) {
+    const issues = await briefIssues(
+      [briefComment, approvalComment, replacement],
+      {},
+      42,
+      "admin",
+      null,
+      true,
+      {
+        IC_12: [replacement.body, original],
+      },
+    );
+    const hold = readinessExclusion(issues[0], issues, policy);
+    if (original.includes("Agent Brief"))
+      assert.match(hold!.reason, /heading was edited away/);
+    else assert.equal(hold, null);
+  }
+  for (const history of [
+    502,
+    null,
+    ["Incomplete history without the current revision"],
+  ]) {
+    const issues = await briefIssues(
+      [briefComment, approvalComment, replacement],
+      {},
+      42,
+      "admin",
+      null,
+      true,
+      { IC_12: history },
+    );
+    assert.equal(readinessExclusion(issues[0], issues, policy)?.waiting, true);
+  }
+});
+
+test("a replacement edited in its creation second still needs native edit evidence", async () => {
+  const comment = {
+    ...briefComment,
+    id: 12,
+    nodeId: "IC_12",
+    body: "Ordinary-looking discussion.",
+    createdAt: "2026-10-06T00:00:00Z",
+    updatedAt: "2026-10-06T00:00:00Z",
+  };
+  const comments = [briefComment, approvalComment, comment];
+  const edited = await briefIssues(comments, {}, 42, "admin", null, true, {
+    IC_12: [comment.body, "## Agent Brief\n\nReplacement work."],
+  });
+  assert.match(
+    readinessExclusion(edited[0], edited, policy)!.reason,
+    /heading was edited away/,
+  );
+  const unedited = await briefIssues(comments);
+  assert.equal(readinessExclusion(unedited[0], unedited, policy), null);
 });
 
 // A comment GitHub's REST API created on the issue.

@@ -13,8 +13,13 @@ import type { FactoryConfiguration } from "./factory-configuration.ts";
 import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
+import { commentHistory } from "./comment-history.ts";
 import type { PullRequestState } from "./run-outcome.ts";
-import { briefReadiness, hasBriefContract } from "./contract.ts";
+import {
+  briefReadiness,
+  hasBriefContract,
+  briefHistoryCandidates,
+} from "./contract.ts";
 
 // The body sections a platform without native links reads an issue's parent
 // and blockers from. Only Postern's adapter reads them.
@@ -102,17 +107,22 @@ export function repositoryPlatform(
         connection.repository.platform === "github"
           ? await latestCommentDeletion(number)
           : null;
+      const histories: string[][] = [];
+      if (connection.repository.platform === "github")
+        for (const comment of briefHistoryCandidates(comments, ready))
+          histories.push(await commentHistory(access, comment));
       return briefReadiness(
         comments,
         ready,
         connection.repository.platform,
         deletion,
+        histories,
       );
     } catch (error) {
       if (!(error instanceof PlatformError)) throw error;
       return {
         reason:
-          "waits: the current Agent Brief, validator approval or comment deletion history could not be read this pass; restore comment access and retry",
+          "waits: the current Agent Brief, validator approval or comment history could not be read this pass; restore comment access and retry",
         waiting: true,
       };
     }

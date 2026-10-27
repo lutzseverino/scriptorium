@@ -43,8 +43,8 @@ function inlineText(tokens: Token[]): string {
     .join("");
 }
 
-function isBrief(comment: Comment): boolean {
-  return lexer(comment.body.replace(/\r\n?/g, "\n")).some(
+function isBrief(body: string): boolean {
+  return lexer(body.replace(/\r\n?/g, "\n")).some(
     (token) =>
       token.type === "heading" &&
       inlineText(token.tokens ?? [])
@@ -52,6 +52,36 @@ function isBrief(comment: Comment): boolean {
         .replace(/[ \t]+/g, " ")
         .trim()
         .toLowerCase() === "agent brief",
+  );
+}
+
+function trustedFeedback(comment: Comment): boolean {
+  return (
+    comment.author?.login.toLowerCase() === "github-actions[bot]" &&
+    comment.author.bot === true &&
+    comment.body.includes(feedbackMarker)
+  );
+}
+
+function latestBrief(comments: Comment[]): Comment | undefined {
+  return comments
+    .filter((comment) => isBrief(comment.body))
+    .sort((a, b) => b.id - a.id)[0];
+}
+
+// A newer comment edited after review could have had its Brief heading erased.
+// Its complete history distinguishes that replacement from ordinary discussion.
+export function briefHistoryCandidates(
+  comments: Comment[],
+  ready: LabelChange,
+): Comment[] {
+  const selected = latestBrief(comments);
+  if (!selected) return [];
+  return comments.filter(
+    (comment) =>
+      comment.id > selected.id &&
+      !trustedFeedback(comment) &&
+      Date.parse(comment.updatedAt) >= Date.parse(ready.time),
   );
 }
 
@@ -63,13 +93,18 @@ export function briefReadiness(
   ready: LabelChange,
   platform: string,
   latestDeletion: string | null,
+  histories: string[][],
 ): ReadinessHold | null {
   const refuse = (detail: string): ReadinessHold => ({
     reason: `is refused: ${detail}; publish and review the current Agent Brief, then remove and re-apply ${ready.label}`,
     waiting: false,
   });
-  const brief = comments.filter(isBrief).sort((a, b) => b.id - a.id)[0];
+  const brief = latestBrief(comments);
   if (!brief) return refuse("the current Agent Brief is missing");
+  if (histories.some((history) => history.some(isBrief)))
+    return refuse(
+      "a newer comment previously superseded the current Agent Brief and its heading was edited away",
+    );
   if (
     latestDeletion !== null &&
     Date.parse(ready.time) <= Date.parse(latestDeletion)
@@ -84,12 +119,7 @@ export function briefReadiness(
       "the platform cannot establish approval of the current Agent Brief",
     );
   const feedback = comments
-    .filter(
-      (comment) =>
-        comment.author?.login.toLowerCase() === "github-actions[bot]" &&
-        comment.author.bot === true &&
-        comment.body.includes(feedbackMarker),
-    )
+    .filter(trustedFeedback)
     .sort((a, b) => b.id - a.id)[0];
   let approval;
   try {
