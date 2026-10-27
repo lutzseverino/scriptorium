@@ -1,18 +1,22 @@
 // Repository data determines requests, completion and bounded review waits.
-import { reviewSkipped } from "./review-policy.mjs";
-
+import { skipsExternalReview } from "./review-policy.mjs";
 const requestComments = (comments, reviewer) =>
   comments.filter(
     (comment) => comment.body.trim() === reviewer.request.comment,
   );
 
+export const reviewRequestCount = (comments, reviewer) =>
+  Number(reviewer.request.onOpen) + requestComments(comments, reviewer).length;
+
+/** @param {{ policy?: { version: number, author: string }, author?: string }} [context] */
 export const reviewRequestedAt = (
   openedAt,
   comments,
   reviewer,
-  { author, policy } = {},
+  context = {},
 ) => {
-  if (!reviewer || reviewSkipped(author, policy)) return null;
+  const { policy, author } = context;
+  if (skipsExternalReview(policy, author) || !reviewer) return null;
   const requests = requestComments(comments, reviewer).map((comment) =>
     Date.parse(comment.createdAt),
   );
@@ -22,9 +26,10 @@ export const reviewRequestedAt = (
 
 export const reviewerState = (
   reviewer,
-  { head, requestedAt, pushedAt, comments, reviews = [], now, author, policy },
+  { head, requestedAt, pushedAt, comments, reviews = [], now, policy, author },
 ) => {
-  if (reviewSkipped(author, policy)) return "skipped";
+  if (skipsExternalReview(policy, author)) return "skipped";
+  if (!reviewer) return undefined;
   if (
     reviews.some(
       (review) =>
@@ -75,9 +80,7 @@ export const reviewerState = (
   )
     return "unavailable";
   if (pushedAt > requestedAt) {
-    const requests =
-      Number(reviewer.request.onOpen) +
-      requestComments(comments, reviewer).length;
+    const requests = reviewRequestCount(comments, reviewer);
     return requests >= reviewer.bounds.reviewRequests
       ? "request bound reached"
       : "not requested";
@@ -92,14 +95,16 @@ export const reviewerState = (
   return "pending";
 };
 
-export const reviewerPhrase = (reviewer, state) =>
-  ({
-    skipped: "No external reviewer runs on app-authored PRs.",
+export const reviewerPhrase = (reviewer, state) => {
+  if (state === "skipped")
+    return "external review skipped by app-author policy";
+  return {
     reviewed: "reviewer reviewed",
     unavailable: "reviewer unavailable",
     "not requested": "review not requested for this head",
-    "request bound reached": `review not requested for this head; review request bound reached (${reviewer?.bounds.reviewRequests})`,
-    "no response": `reviewer did not respond within ${reviewer?.bounds.responseMinutes} minutes`,
-    "not reviewing": `reviewer did not review within ${reviewer?.bounds.reviewMinutes} minutes`,
+    "request bound reached": `review not requested for this head; review request bound reached (${reviewer.bounds.reviewRequests})`,
+    "no response": `reviewer did not respond within ${reviewer.bounds.responseMinutes} minutes`,
+    "not reviewing": `reviewer did not review within ${reviewer.bounds.reviewMinutes} minutes`,
     pending: "review pending",
-  })[state];
+  }[state];
+};

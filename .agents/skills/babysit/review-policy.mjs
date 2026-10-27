@@ -1,37 +1,56 @@
-// Repository-owned exception for the factory's app-authored PRs. Kept
-// separate from the standards-owned reviewer schema; the host reads neither.
+// Repository-owned exemption, evaluated before reviewer requests and waits.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+export const policyTarget = ".github/factory-review-policy.json";
+const isAppIdentity = (login) =>
+  typeof login === "string" &&
+  /^(?:[^\s/[\]]+\[bot\]|app\/[^\s/[\]]+)$/i.test(login);
+
 export const readReviewPolicy = (root = process.cwd()) => {
-  let source;
+  let text;
   try {
-    source = readFileSync(
-      join(root, ".github/factory-review-policy.json"),
-      "utf8",
-    );
+    text = readFileSync(join(root, policyTarget), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
-  const policy = JSON.parse(source);
-  if (
-    !policy ||
-    policy.version !== 1 ||
-    typeof policy.author !== "string" ||
-    !policy.author.trim() ||
-    policy.author !== policy.author.trim() ||
-    Object.keys(policy).some((key) => !["version", "author"].includes(key))
-  )
-    throw new Error(
-      "factory-review-policy must hold version 1 and a nonempty trimmed author login.",
-    );
-  return policy;
+  return parseReviewPolicy(text);
 };
 
-// gh's GraphQL PR author uses app/<slug>; REST uses <slug>[bot].
-const login = (author) =>
-  author?.replace(/^app\/(.+)$/i, "$1[bot]").toLowerCase();
+export const parseReviewPolicy = (text) => {
+  try {
+    const policy = JSON.parse(text);
+    if (!policy || typeof policy !== "object" || Array.isArray(policy))
+      throw new Error("must be an object");
+    for (const key of Object.keys(policy))
+      if (!["version", "author"].includes(key))
+        throw new Error(`unknown field: ${key}`);
+    if (policy.version !== 1) throw new Error("version must be 1");
+    if (
+      typeof policy.author !== "string" ||
+      !policy.author.trim() ||
+      policy.author !== policy.author.trim()
+    )
+      throw new Error("author must be a nonempty, trimmed login");
+    if (!isAppIdentity(policy.author))
+      throw new Error(
+        "author must be an app identity: <slug>[bot] or app/<slug>",
+      );
+    return policy;
+  } catch (error) {
+    throw new Error(`${policyTarget}: ${error.message}`, { cause: error });
+  }
+};
 
-export const reviewSkipped = (author, policy) =>
-  Boolean(policy && login(author) === login(policy.author));
+const normalize = (login) =>
+  login.toLowerCase().replace(/^app\/(.+)$/, "$1[bot]");
+
+export const skipsExternalReview = (policy, author) =>
+  Boolean(
+    policy &&
+    isAppIdentity(policy.author) &&
+    typeof author === "string" &&
+    author &&
+    normalize(author) === normalize(policy.author),
+  );

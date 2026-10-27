@@ -10,7 +10,10 @@ by its respective authors:
   `.agents/skills/LICENSE.mattpocock-skills` in the adopting repository. The
   skill setup files `docs/agents/issue-tracker.md`,
   `docs/agents/triage-labels.md`, and `docs/agents/domain.md` are copies of the
-  collection's setup seeds under the same notice.
+  collection's setup seeds under the same notice. Repo Canon's `triage` skill
+  is a fork of the collection's `triage` skill and keeps the forked material
+  under the same notice; its `CREDITS.md` names the upstream commit and what
+  changed.
 - The `pr` skill's Summary section reproduces material from HumanLayer's
   `show-me` skill, covered by HumanLayer's
   [MIT License and copyright notice](vendor/humanlayer-skills/LICENSE).
@@ -21,5 +24,7 @@ by its respective authors:
 - The bundled parse5 8.0.1 and entities 8.0.0 sources retain the separate
   [parse5 license](vendor/parse5/LICENSE.parse5) and
   [entities license](vendor/parse5/LICENSE.entities).
+
+- Postern 1.2.0 retains its [MIT License](vendor/postern/LICENSE).
 
 These license files accompany the redistributed material and must be retained.

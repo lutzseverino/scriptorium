@@ -1,7 +1,7 @@
 {
-  "format": "repo-standards/scope-history/v5",
+  "format": "repo-standards/scope-history/v6",
   "evidence": "historical",
-  "inspection": "sha256:d6f497fae612fb6a3deb3260c3c4e5700d553c74a50bdde6dbcfb7925d64689e",
+  "inspection": "sha256:6a62323686d8944152f7b9f5f3a0c85f7d7b9f98530d05c4854d462c08e81535",
   "resolved": {
     "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
@@ -74,6 +74,10 @@
             "docs/README.md",
             "docs/adr/0001-keep-the-package-outside-repo-canon-release-inputs.md",
             "docs/adr/0002-release-scriptorium-from-its-own-repository.md",
+            "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md",
+            "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
+            "docs/adr/0005-default-the-factorys-own-comment-wording.md",
+            "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
             "docs/adr/README.md",
             "docs/development/README.md",
             "docs/development/release.md",
@@ -139,6 +143,15 @@
         "exact": ".github/ISSUE_TEMPLATE/feature-request.yml"
       },
       {
+        "id": "git-attributes",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": ".gitattributes",
+        "guidance": "guidance/git-attributes.md",
+        "rules": "rules/git-attributes.md"
+      },
+      {
         "id": "github-repository-configuration",
         "checks": [
           {
@@ -148,6 +161,24 @@
               "script": "operations/check-pull-request-reviewer.mjs",
               "resources": [
                 "operations/lib/pull-request-reviewer.mjs"
+              ],
+              "arguments": []
+            },
+            "prerequisite": {
+              "version-arguments": [
+                "--version"
+              ],
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+            },
+            "timeout-seconds": 30
+          },
+          {
+            "id": "factory-review-policy",
+            "run": {
+              "executable": "node",
+              "script": "operations/check-factory-review-policy.mjs",
+              "resources": [
+                "operations/lib/review-policy.mjs"
               ],
               "arguments": []
             },
@@ -168,6 +199,9 @@
               "script": "operations/setup-github-labels.mjs",
               "resources": [
                 "operations/lib/github-operation.mjs",
+                "vendor/postern/postern.mjs",
+                "vendor/postern/LICENSE",
+                "vendor/postern/README.md",
                 "LICENSE",
                 "THIRD_PARTY_NOTICES.md",
                 "vendor/mattpocock-skills/LICENSE",
@@ -191,7 +225,10 @@
                   "executable": "node",
                   "script": "operations/probe-github-labels.mjs",
                   "resources": [
-                    "operations/lib/github-operation.mjs"
+                    "operations/lib/github-operation.mjs",
+                    "vendor/postern/postern.mjs",
+                    "vendor/postern/LICENSE",
+                    "vendor/postern/README.md"
                   ],
                   "arguments": []
                 },
@@ -211,7 +248,10 @@
               "executable": "node",
               "script": "operations/setup-github-pr-integration.mjs",
               "resources": [
-                "operations/lib/github-operation.mjs"
+                "operations/lib/github-operation.mjs",
+                "vendor/postern/postern.mjs",
+                "vendor/postern/LICENSE",
+                "vendor/postern/README.md"
               ],
               "arguments": []
             },
@@ -228,7 +268,10 @@
                   "executable": "node",
                   "script": "operations/probe-github-pr-integration.mjs",
                   "resources": [
-                    "operations/lib/github-operation.mjs"
+                    "operations/lib/github-operation.mjs",
+                    "vendor/postern/postern.mjs",
+                    "vendor/postern/LICENSE",
+                    "vendor/postern/README.md"
                   ],
                   "arguments": []
                 },
@@ -250,6 +293,14 @@
           "paths": [],
           "directories": []
         }
+      },
+      {
+        "id": "github-validator-trigger",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": ".github/scripts/validate.mjs",
+        "exact": ".github/scripts/validate.mjs"
       },
       {
         "id": "humanlayer-skills-license",
@@ -354,6 +405,30 @@
         "kind": "file",
         "target": "vendor/parse5/README.md",
         "exact": "vendor/parse5/README.md"
+      },
+      {
+        "id": "postern-bundle",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "vendor/postern/postern.mjs",
+        "exact": "vendor/postern/postern.mjs"
+      },
+      {
+        "id": "postern-license",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "vendor/postern/LICENSE",
+        "exact": "vendor/postern/LICENSE"
+      },
+      {
+        "id": "postern-provenance",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "vendor/postern/README.md",
+        "exact": "vendor/postern/README.md"
       },
       {
         "id": "pr-metadata-validator",
@@ -544,6 +619,14 @@
         "source": "vendor/mattpocock-skills/skills/engineering/improve-codebase-architecture"
       },
       {
+        "id": "skill-orchestrate",
+        "checks": [],
+        "fixes": [],
+        "kind": "skill",
+        "name": "orchestrate",
+        "source": ".agents/skills/orchestrate"
+      },
+      {
         "id": "skill-pr",
         "checks": [],
         "fixes": [],
@@ -597,7 +680,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "triage",
-        "source": "vendor/mattpocock-skills/skills/engineering/triage"
+        "source": ".agents/skills/triage"
       },
       {
         "id": "skill-wayfinder",
@@ -624,12 +707,62 @@
         "exact": ".github/ISSUE_TEMPLATE/specification.yml"
       },
       {
+        "id": "standards-update-workflow",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": ".github/workflows/standards-update.yml",
+        "exact": ".github/workflows/standards-update.yml"
+      },
+      {
         "id": "triage-label-configuration",
         "checks": [],
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/triage-labels.md",
         "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/triage-labels.md"
+      },
+      {
+        "id": "typescript-node-stack",
+        "checks": [
+          {
+            "id": "typescript-node-stack-manifests",
+            "run": {
+              "executable": "node",
+              "script": "operations/check-typescript-node-stack.mjs",
+              "resources": [
+                "operations/lib/typescript-node-stack.mjs",
+                "operations/lib/local-markdown-links.mjs"
+              ],
+              "arguments": []
+            },
+            "prerequisite": {
+              "version-arguments": [
+                "--version"
+              ],
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+            },
+            "timeout-seconds": 30
+          }
+        ],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/typescript-node-stack.md",
+        "rules": "rules/typescript-node-stack.md",
+        "targets": {
+          "paths": [
+            "package.json"
+          ],
+          "directories": []
+        }
+      },
+      {
+        "id": "validator-command",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "scripts/validate.mjs",
+        "exact": "scripts/validate.mjs"
       }
     ]
   },
@@ -775,6 +908,15 @@
         "exact": ".github/ISSUE_TEMPLATE/feature-request.yml"
       },
       {
+        "id": "git-attributes",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": ".gitattributes",
+        "guidance": "guidance/git-attributes.md",
+        "rules": "rules/git-attributes.md"
+      },
+      {
         "id": "github-repository-configuration",
         "checks": [
           {
@@ -784,6 +926,24 @@
               "script": "operations/check-pull-request-reviewer.mjs",
               "resources": [
                 "operations/lib/pull-request-reviewer.mjs"
+              ],
+              "arguments": []
+            },
+            "prerequisite": {
+              "version-arguments": [
+                "--version"
+              ],
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+            },
+            "timeout-seconds": 30
+          },
+          {
+            "id": "factory-review-policy",
+            "run": {
+              "executable": "node",
+              "script": "operations/check-factory-review-policy.mjs",
+              "resources": [
+                "operations/lib/review-policy.mjs"
               ],
               "arguments": []
             },
@@ -804,6 +964,9 @@
               "script": "operations/setup-github-labels.mjs",
               "resources": [
                 "operations/lib/github-operation.mjs",
+                "vendor/postern/postern.mjs",
+                "vendor/postern/LICENSE",
+                "vendor/postern/README.md",
                 "LICENSE",
                 "THIRD_PARTY_NOTICES.md",
                 "vendor/mattpocock-skills/LICENSE",
@@ -827,7 +990,10 @@
                   "executable": "node",
                   "script": "operations/probe-github-labels.mjs",
                   "resources": [
-                    "operations/lib/github-operation.mjs"
+                    "operations/lib/github-operation.mjs",
+                    "vendor/postern/postern.mjs",
+                    "vendor/postern/LICENSE",
+                    "vendor/postern/README.md"
                   ],
                   "arguments": []
                 },
@@ -847,7 +1013,10 @@
               "executable": "node",
               "script": "operations/setup-github-pr-integration.mjs",
               "resources": [
-                "operations/lib/github-operation.mjs"
+                "operations/lib/github-operation.mjs",
+                "vendor/postern/postern.mjs",
+                "vendor/postern/LICENSE",
+                "vendor/postern/README.md"
               ],
               "arguments": []
             },
@@ -864,7 +1033,10 @@
                   "executable": "node",
                   "script": "operations/probe-github-pr-integration.mjs",
                   "resources": [
-                    "operations/lib/github-operation.mjs"
+                    "operations/lib/github-operation.mjs",
+                    "vendor/postern/postern.mjs",
+                    "vendor/postern/LICENSE",
+                    "vendor/postern/README.md"
                   ],
                   "arguments": []
                 },
@@ -883,6 +1055,14 @@
         "guidance": "guidance/github-repository-configuration.md",
         "rules": "rules/github-repository-configuration.md",
         "discovery": "discovery/github-repository-configuration.md"
+      },
+      {
+        "id": "github-validator-trigger",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": ".github/scripts/validate.mjs",
+        "exact": ".github/scripts/validate.mjs"
       },
       {
         "id": "humanlayer-skills-license",
@@ -987,6 +1167,30 @@
         "kind": "file",
         "target": "vendor/parse5/README.md",
         "exact": "vendor/parse5/README.md"
+      },
+      {
+        "id": "postern-bundle",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "vendor/postern/postern.mjs",
+        "exact": "vendor/postern/postern.mjs"
+      },
+      {
+        "id": "postern-license",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "vendor/postern/LICENSE",
+        "exact": "vendor/postern/LICENSE"
+      },
+      {
+        "id": "postern-provenance",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "vendor/postern/README.md",
+        "exact": "vendor/postern/README.md"
       },
       {
         "id": "pr-metadata-validator",
@@ -1174,6 +1378,14 @@
         "source": "vendor/mattpocock-skills/skills/engineering/improve-codebase-architecture"
       },
       {
+        "id": "skill-orchestrate",
+        "checks": [],
+        "fixes": [],
+        "kind": "skill",
+        "name": "orchestrate",
+        "source": ".agents/skills/orchestrate"
+      },
+      {
         "id": "skill-pr",
         "checks": [],
         "fixes": [],
@@ -1227,7 +1439,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "triage",
-        "source": "vendor/mattpocock-skills/skills/engineering/triage"
+        "source": ".agents/skills/triage"
       },
       {
         "id": "skill-wayfinder",
@@ -1254,23 +1466,87 @@
         "exact": ".github/ISSUE_TEMPLATE/specification.yml"
       },
       {
+        "id": "standards-update-workflow",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": ".github/workflows/standards-update.yml",
+        "exact": ".github/workflows/standards-update.yml"
+      },
+      {
         "id": "triage-label-configuration",
         "checks": [],
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/triage-labels.md",
         "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/triage-labels.md"
+      },
+      {
+        "id": "typescript-node-stack",
+        "checks": [
+          {
+            "id": "typescript-node-stack-manifests",
+            "run": {
+              "executable": "node",
+              "script": "operations/check-typescript-node-stack.mjs",
+              "resources": [
+                "operations/lib/typescript-node-stack.mjs",
+                "operations/lib/local-markdown-links.mjs"
+              ],
+              "arguments": []
+            },
+            "prerequisite": {
+              "version-arguments": [
+                "--version"
+              ],
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+            },
+            "timeout-seconds": 30
+          }
+        ],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/typescript-node-stack.md",
+        "rules": "rules/typescript-node-stack.md",
+        "discovery": "discovery/typescript-node-stack.md",
+        "discovery-script": {
+          "run": {
+            "executable": "node",
+            "script": "discovery/draft-typescript-node-stack-scope.mjs",
+            "resources": [
+              "operations/lib/typescript-node-stack.mjs",
+              "operations/lib/local-markdown-links.mjs"
+            ],
+            "arguments": []
+          },
+          "prerequisite": {
+            "version-arguments": [
+              "--version"
+            ],
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+          },
+          "timeout-seconds": 60
+        },
+        "optional": true
+      },
+      {
+        "id": "validator-command",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "scripts/validate.mjs",
+        "exact": "scripts/validate.mjs"
       }
     ]
   },
   "discovery": {
-    "identity": "sha256:06107139d674312de0f333ec2701d3607ea7c96dc2e129aec0056c7eb73e3202",
+    "identity": "sha256:259bd0af8e650eba31894e82133a4f07677c93a8c07895e5dde10a05664dc861",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
         {
           "id": "documentation",
-          "coverage": "Drafted from the repository tree by `discovery/draft-documentation-scope.mjs`: every file Git keeps under the documentation root `docs`, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each README.md outside the documentation roots. Link-repair files and move destinations enter when the work needs them.",
+          "coverage": "Drafted from the repository tree by `discovery/draft-documentation-scope.mjs`: every file Git keeps under the documentation root `docs`, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each README.md outside the documentation roots. Link-repair files and move destinations enter when the work needs them. Prior confirmed documentation decisions are retained. Added ADRs 0003 through 0006 belong to the maintained docs/adr root. Excluded copied source inputs (.repo-standards/), vendor/, installed .agents/skills/ and .claude/skills/, and test/fixtures/ as non-documentation; exact and separately owned agent docs remain excluded.",
           "candidates": [
             {
               "path": "GLOSSARY.md",
@@ -1305,6 +1581,38 @@
               ]
             },
             {
+              "path": "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0005-default-the-factorys-own-comment-wording.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0005-default-the-factorys-own-comment-wording.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0006-reach-the-hosting-platform-through-postern.md"
+              ]
+            },
+            {
               "path": "docs/adr/README.md",
               "decision": "include",
               "reason": "A file under the documentation root `docs`.",
@@ -1334,6 +1642,14 @@
               "reason": "Owned by the `issue-tracker-configuration` declaration.",
               "evidence": [
                 "docs/agents/issue-tracker.md"
+              ]
+            },
+            {
+              "path": "docs/agents/project.md",
+              "decision": "exclude",
+              "reason": "Owned by the `project-agent-guidance` declaration.",
+              "evidence": [
+                "docs/agents/project.md"
               ]
             },
             {
@@ -1412,6 +1728,22 @@
           "coverage": "Intentionally empty: the repository holds one package, `@lutzseverino/scriptorium`, whose only manifest is the root package.json, with src/ and test/ at the root and no workspace or build configuration naming another component. The package is the repository itself, so its README is the root README.md, which the repository-readme declaration owns; there is no non-root Project and so no non-root README to propose. The README.md files under docs/ are documentation indexes owned by the documentation scope.",
           "candidates": [],
           "unresolved": []
+        },
+        {
+          "id": "typescript-node-stack",
+          "coverage": "The sole root package @lutzseverino/scriptorium is the repository Project: package.json names start, typecheck and tests over src/ and test/, and there are no workspace members. Toolchain PR #56 is merged. The manifest and pnpm-lock.yaml match pnpm 11, Node 24/26, oxlint 1, Prettier 3 and validate. TypeScript 7.0.2, node --test, required CI Test aggregating both Node jobs running pnpm validate, and docs/development/README.md Setup and validation establish the contextual stack rules. Copied source inputs and fixture packages are not Projects.",
+          "candidates": [
+            {
+              "path": "package.json",
+              "decision": "include",
+              "reason": "The Project of `package.json` matches the typescript-node stack's manifest facts: pnpm 11, its lockfile, Node.js 24 or 26, oxlint 1, Prettier 3 and a validate script.",
+              "evidence": [
+                "package.json",
+                "pnpm-lock.yaml"
+              ]
+            }
+          ],
+          "unresolved": []
         }
       ]
     },
@@ -1420,7 +1752,7 @@
       "targets": {
         "GLOSSARY.md": {
           "type": "file",
-          "sha256": "459bd62b949e54b5c2bfa96fb3d5f5995230e1439db01c39d25f47d2c98df920",
+          "sha256": "4c126c920cbbaec2fa9f6ea7ad43e2d38cde440163ae5dc03755c630104af5c4",
           "executable": false
         },
         "docs/README.md": {
@@ -1438,48 +1770,258 @@
           "sha256": "1444b6aee5aed24984db77de30a56e1c99ad18a761d44fc4209e231b1de2e78a",
           "executable": false
         },
+        "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md": {
+          "type": "file",
+          "sha256": "a2130c062b53e85dbde11825a9fc4edcd1e933fafac5412b89f147d34c85ea4b",
+          "executable": false
+        },
+        "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md": {
+          "type": "file",
+          "sha256": "7e625dbdba9afa555f93c0479935a055ce0ac5c3ddc4dd4157288a71c8e03cb3",
+          "executable": false
+        },
+        "docs/adr/0005-default-the-factorys-own-comment-wording.md": {
+          "type": "file",
+          "sha256": "6d74ca12e215ecbbcc13aa19086dea42c58ca1db4b7ffb63486118f4edaccba9",
+          "executable": false
+        },
+        "docs/adr/0006-reach-the-hosting-platform-through-postern.md": {
+          "type": "file",
+          "sha256": "05fc9433a09405f6cfcc15cfb0d9a3633aec4950d12901ca38b1896762f25fe2",
+          "executable": false
+        },
         "docs/adr/README.md": {
           "type": "file",
-          "sha256": "2ffe2718d53cfafed397b2a69c424fb40c8a30743b084321eba6ad3b20d0b9ca",
+          "sha256": "6f191deb7f2c0f3b7eb851721e440a66dde9df890d4c063c9ef90fdcf98afba9",
           "executable": false
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "6b4b1a05d6eab56b2626dd296cf05ade69487791f91db95fd09dc5b1d920247c",
+          "sha256": "46a52bf531ec91df7921468f8c88073de1f15e7a3159eb64d8e4537734f272b0",
           "executable": false
         },
         "docs/development/release.md": {
           "type": "file",
-          "sha256": "619c809a4ab3f66996e8da5021113c10c8ecc2ee6b47ae3ff06fbbc777dfaf44",
+          "sha256": "2e15a846140ca8df8dfd791c06d4abafbe096af045d48e5585541879d57f0576",
           "executable": false
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "cfd4e0ce16fe502c403b9718ad72cf2daf684469d7517d185535c8acc3416da5",
+          "sha256": "a6946710128007d80d6dc2532f2dc9dd8021c903282431afc31d0933d468eac0",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "111e9177a3ebc3d6d22d3c997eb9c19b8c63d0d16f1849265cc9123c3bd6bab6",
+          "sha256": "a49cd3873662a603ed76c39c14113fb83fc365952ff0018eeb6d7adb1524152c",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "25254c67bd890b905da3b90d56d12728861de45f63406cc2ea14952a39f9bd88",
+          "sha256": "bed29bd8ddcd27ed1c09d0c1edf3ee10972cbbad089fd4eddc91b3287025ac32",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "1296c2e6bb8fc460f89471313764400b6ed6f091217aed371e3eb22e706542f4",
+          "sha256": "796044a59fb306903a9f874c2551c5436acecf19035d536e8faa1dc8715f337c",
+          "executable": false
+        },
+        "package.json": {
+          "type": "file",
+          "sha256": "8c45d271d5731e8691e706513be37b632c491578bedff331cb274eab7bd03014",
           "executable": false
         }
       }
     },
+    "drafts": [
+      {
+        "id": "documentation",
+        "coverage": "Drafted from the repository tree by `discovery/draft-documentation-scope.mjs`: every file Git keeps under the documentation root `docs`, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each README.md outside the documentation roots. Link-repair files and move destinations enter when the work needs them.",
+        "candidates": [
+          {
+            "path": "GLOSSARY.md",
+            "decision": "include",
+            "reason": "The domain glossary at the repository root.",
+            "evidence": [
+              "GLOSSARY.md"
+            ]
+          },
+          {
+            "path": "docs/README.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/README.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0001-keep-the-package-outside-repo-canon-release-inputs.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0001-keep-the-package-outside-repo-canon-release-inputs.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0002-release-scriptorium-from-its-own-repository.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0002-release-scriptorium-from-its-own-repository.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0005-default-the-factorys-own-comment-wording.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0005-default-the-factorys-own-comment-wording.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0006-reach-the-hosting-platform-through-postern.md"
+            ]
+          },
+          {
+            "path": "docs/adr/README.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/README.md"
+            ]
+          },
+          {
+            "path": "docs/agents/README.md",
+            "decision": "exclude",
+            "reason": "Owned by the `agent-configuration-index` declaration.",
+            "evidence": [
+              "docs/agents/README.md"
+            ]
+          },
+          {
+            "path": "docs/agents/domain.md",
+            "decision": "exclude",
+            "reason": "Owned by the `domain-configuration` declaration.",
+            "evidence": [
+              "docs/agents/domain.md"
+            ]
+          },
+          {
+            "path": "docs/agents/issue-tracker.md",
+            "decision": "exclude",
+            "reason": "Owned by the `issue-tracker-configuration` declaration.",
+            "evidence": [
+              "docs/agents/issue-tracker.md"
+            ]
+          },
+          {
+            "path": "docs/agents/project.md",
+            "decision": "exclude",
+            "reason": "Owned by the `project-agent-guidance` declaration.",
+            "evidence": [
+              "docs/agents/project.md"
+            ]
+          },
+          {
+            "path": "docs/agents/triage-labels.md",
+            "decision": "exclude",
+            "reason": "Owned by the `triage-label-configuration` declaration.",
+            "evidence": [
+              "docs/agents/triage-labels.md"
+            ]
+          },
+          {
+            "path": "docs/development/README.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/development/README.md"
+            ]
+          },
+          {
+            "path": "docs/development/release.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/development/release.md"
+            ]
+          },
+          {
+            "path": "docs/usage/README.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/usage/README.md"
+            ]
+          },
+          {
+            "path": "docs/usage/factory-configuration.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/usage/factory-configuration.md"
+            ]
+          },
+          {
+            "path": "docs/usage/host.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/usage/host.md"
+            ]
+          },
+          {
+            "path": "docs/usage/sandbox-image.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/usage/sandbox-image.md"
+            ]
+          }
+        ],
+        "unresolved": []
+      },
+      {
+        "id": "typescript-node-stack",
+        "coverage": "Drafted from manifests and workspace configuration by `discovery/draft-typescript-node-stack-scope.mjs`: one `package.json` per Project, included when it matches the stack's manifest facts and excluded naming its differences otherwise. A maintained workspace root package is a Project alongside its members; a shared-only root is not. Uncertain root membership stays unresolved. A root package without workspace members is a Project.",
+        "candidates": [
+          {
+            "path": "package.json",
+            "decision": "include",
+            "reason": "The Project of `package.json` matches the typescript-node stack's manifest facts: pnpm 11, its lockfile, Node.js 24 or 26, oxlint 1, Prettier 3 and a validate script.",
+            "evidence": [
+              "package.json",
+              "pnpm-lock.yaml"
+            ]
+          }
+        ],
+        "unresolved": []
+      }
+    ],
     "declarations": [
       {
         "id": "documentation",
         "source": "discovery/documentation.md",
-        "sha256": "0e84c6f5a53f8799568bef21f593c9544a7177428bbda6c8d5be0c594af1f9f7",
+        "sha256": "6ddffc023dfc46f7d11f292a245f8b9ffeffb77dff2f102baa20256af1dc8bfc",
         "executable": false
       },
       {
@@ -1499,6 +2041,12 @@
         "source": "discovery/project-readmes.md",
         "sha256": "a2cf9e7206712b7b169ebcf901d40ded7fa655100b3afbcf825296e46291b47a",
         "executable": false
+      },
+      {
+        "id": "typescript-node-stack",
+        "source": "discovery/typescript-node-stack.md",
+        "sha256": "0ac8fb30073e6b656d8456e1f0c7cd21a5e17668494402d39ee103270824e3f9",
+        "executable": false
       }
     ],
     "observation": {
@@ -1515,7 +2063,7 @@
         },
         ".agents/skills/babysit/SKILL.md": {
           "type": "file",
-          "sha256": "f17de7f5068281d3ef188e08861d106d9ef3aff377f76e62f792284d9c89feca",
+          "sha256": "c0e95630ca3cf56e272ebb9a6bcb59af796dd46f9b4d1c047acde1e99bd0289e",
           "executable": false
         },
         ".agents/skills/babysit/merge.mjs": {
@@ -1528,14 +2076,24 @@
           "sha256": "661a5832f8386352d9f9f7e4f58c6f467a63b56b6b49edb41514266a4ed858d1",
           "executable": false
         },
+        ".agents/skills/babysit/request.mjs": {
+          "type": "file",
+          "sha256": "14ae38b27f0f4030f174eb4ff6525d6034d6d9e6a8e4683cef5b42067c4bf9c8",
+          "executable": false
+        },
+        ".agents/skills/babysit/review-policy.mjs": {
+          "type": "file",
+          "sha256": "774b4fbb32b4f0ffc862ddb54547631c372b2dd57ba2378cdf04e00379e0d501",
+          "executable": false
+        },
         ".agents/skills/babysit/reviewer.mjs": {
           "type": "file",
-          "sha256": "bda1879ccbf256b0da6ab17857e158555068bde14f4f277307ba3d99a110275d",
+          "sha256": "83e7309f0d620c9adaa178529f82e7123f55b5f79fba54c65e50ab7a6aeeb637",
           "executable": false
         },
         ".agents/skills/babysit/wait.mjs": {
           "type": "file",
-          "sha256": "93e4f0658510fb799009bf7681ff1844679ed496db648fb6fd8fe90ec9d72124",
+          "sha256": "d2155fa53367854db29ccad92cd8ec41f9f58fec6bffc751089778fa317c40c6",
           "executable": false
         },
         ".agents/skills/code-review/SKILL.md": {
@@ -1866,12 +2424,12 @@
         },
         ".factory/Dockerfile": {
           "type": "file",
-          "sha256": "ba417eb7a1a326e1f07f40aca9e712ce48986c033cda97609346282ad137ae17",
+          "sha256": "e605c211d99ec6175fdebad1e1e92b72a1c6f87c4c558b3a09197c3c40bd1725",
           "executable": false
         },
         ".factory/config.json": {
           "type": "file",
-          "sha256": "9de48af731c45f963a613a6b77668ce9727834ae5a2d9b92af1c5ffcb18a1c07",
+          "sha256": "7af6340b5b2f19263ff7d3b61c9e218800b19513ec4bf257e05f106639b0a898",
           "executable": false
         },
         ".github/ISSUE_TEMPLATE/bug-report.yml": {
@@ -1899,9 +2457,14 @@
           "sha256": "7dcc5881eef1c342a08519750b9beae700f4620d1fdf23c2eb0d9b2dfaec5fd0",
           "executable": false
         },
+        ".github/factory-review-policy.json": {
+          "type": "file",
+          "sha256": "dac1d695b3b0c615e3209daa0f9fd83bb12180c4dc218711984478857355bc52",
+          "executable": false
+        },
         ".github/pull-request-reviewer.json": {
           "type": "file",
-          "sha256": "78c1125ebb681ef048b189b4419f2d56f12a4bccd251d6491b58626d6539021f",
+          "sha256": "23871284e178d7da40b87e9b42c4fbc292aac47a781c95543375a084f133a428",
           "executable": false
         },
         ".github/scripts/validate-pr-metadata.mjs": {
@@ -1911,7 +2474,7 @@
         },
         ".github/workflows/ci.yml": {
           "type": "file",
-          "sha256": "319c5ca7618ac6c31799e55b4df18080ee88447c6a8f6c9f42bdaba2fc339204",
+          "sha256": "6c54f040ee95573ba586390721d85be443ebc02aa94a7f0dc5c0e919afd746d8",
           "executable": false
         },
         ".github/workflows/issue-contracts.yml": {
@@ -1931,7 +2494,17 @@
         },
         ".gitignore": {
           "type": "file",
-          "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+          "sha256": "c2a05e9e5d4fef96356a9f1205847727da92ad32b9233a4231a9bae104139118",
+          "executable": false
+        },
+        ".oxlintrc.json": {
+          "type": "file",
+          "sha256": "c78a28132c89735ee6727f29f79ba5211022133b016bbef038943036e159a2d4",
+          "executable": false
+        },
+        ".prettierignore": {
+          "type": "file",
+          "sha256": "731e2e51fd3cf05f00c6d04953403baa705a999cc6a98f7092e3768477f68769",
           "executable": false
         },
         "AGENTS.md": {
@@ -1941,12 +2514,12 @@
         },
         "CONTRIBUTING.md": {
           "type": "file",
-          "sha256": "a1e6d09d5957e84812609c295f5a0fdbf9777ac9e005338758b74940c4bec7cc",
+          "sha256": "4ed2b1336f77e4af7bc8c86b9497d6696c14a38b5d7a98f5a97df4d0c71aedd2",
           "executable": false
         },
         "GLOSSARY.md": {
           "type": "file",
-          "sha256": "459bd62b949e54b5c2bfa96fb3d5f5995230e1439db01c39d25f47d2c98df920",
+          "sha256": "4c126c920cbbaec2fa9f6ea7ad43e2d38cde440163ae5dc03755c630104af5c4",
           "executable": false
         },
         "LICENSE": {
@@ -1956,7 +2529,7 @@
         },
         "README.md": {
           "type": "file",
-          "sha256": "4862bd1558d6b917001bb7cdbf58affcb1a882777c067ba1e4d8df32378a4e6f",
+          "sha256": "c510dc91cdc33fc29c0f45e3a0ec5e3fcc0d603fbca7f35fdc871b69dd64a795",
           "executable": false
         },
         "docs/README.md": {
@@ -1974,9 +2547,29 @@
           "sha256": "1444b6aee5aed24984db77de30a56e1c99ad18a761d44fc4209e231b1de2e78a",
           "executable": false
         },
+        "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md": {
+          "type": "file",
+          "sha256": "a2130c062b53e85dbde11825a9fc4edcd1e933fafac5412b89f147d34c85ea4b",
+          "executable": false
+        },
+        "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md": {
+          "type": "file",
+          "sha256": "7e625dbdba9afa555f93c0479935a055ce0ac5c3ddc4dd4157288a71c8e03cb3",
+          "executable": false
+        },
+        "docs/adr/0005-default-the-factorys-own-comment-wording.md": {
+          "type": "file",
+          "sha256": "6d74ca12e215ecbbcc13aa19086dea42c58ca1db4b7ffb63486118f4edaccba9",
+          "executable": false
+        },
+        "docs/adr/0006-reach-the-hosting-platform-through-postern.md": {
+          "type": "file",
+          "sha256": "05fc9433a09405f6cfcc15cfb0d9a3633aec4950d12901ca38b1896762f25fe2",
+          "executable": false
+        },
         "docs/adr/README.md": {
           "type": "file",
-          "sha256": "2ffe2718d53cfafed397b2a69c424fb40c8a30743b084321eba6ad3b20d0b9ca",
+          "sha256": "6f191deb7f2c0f3b7eb851721e440a66dde9df890d4c063c9ef90fdcf98afba9",
           "executable": false
         },
         "docs/agents/README.md": {
@@ -1994,6 +2587,11 @@
           "sha256": "afd6852a80185217bd28aa5cbe456bef1e85be25be7bd1fba382d5b8ee428325",
           "executable": false
         },
+        "docs/agents/project.md": {
+          "type": "file",
+          "sha256": "f7c4346a54a2ca4aca95841afd1652d241b1c81712b8ee202bc361371b9f73d6",
+          "executable": false
+        },
         "docs/agents/triage-labels.md": {
           "type": "file",
           "sha256": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d",
@@ -2001,32 +2599,32 @@
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "6b4b1a05d6eab56b2626dd296cf05ade69487791f91db95fd09dc5b1d920247c",
+          "sha256": "46a52bf531ec91df7921468f8c88073de1f15e7a3159eb64d8e4537734f272b0",
           "executable": false
         },
         "docs/development/release.md": {
           "type": "file",
-          "sha256": "619c809a4ab3f66996e8da5021113c10c8ecc2ee6b47ae3ff06fbbc777dfaf44",
+          "sha256": "2e15a846140ca8df8dfd791c06d4abafbe096af045d48e5585541879d57f0576",
           "executable": false
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "cfd4e0ce16fe502c403b9718ad72cf2daf684469d7517d185535c8acc3416da5",
+          "sha256": "a6946710128007d80d6dc2532f2dc9dd8021c903282431afc31d0933d468eac0",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "111e9177a3ebc3d6d22d3c997eb9c19b8c63d0d16f1849265cc9123c3bd6bab6",
+          "sha256": "a49cd3873662a603ed76c39c14113fb83fc365952ff0018eeb6d7adb1524152c",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "25254c67bd890b905da3b90d56d12728861de45f63406cc2ea14952a39f9bd88",
+          "sha256": "bed29bd8ddcd27ed1c09d0c1edf3ee10972cbbad089fd4eddc91b3287025ac32",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "1296c2e6bb8fc460f89471313764400b6ed6f091217aed371e3eb22e706542f4",
+          "sha256": "796044a59fb306903a9f874c2551c5436acecf19035d536e8faa1dc8715f337c",
           "executable": false
         },
         "operations/lib/rendered-markdown.mjs": {
@@ -2034,14 +2632,14 @@
           "sha256": "b885d1cd1650e61c616b6f2917b4074bc752282626b4d5eee01df4d5a923b267",
           "executable": false
         },
-        "package-lock.json": {
-          "type": "file",
-          "sha256": "87252b60bbbff6de54e381ef26feb24e0dfcba08223a05a1dd37703567895df0",
-          "executable": false
-        },
         "package.json": {
           "type": "file",
-          "sha256": "19687ef6f20b6958c47d4d69668e6569c7269a8d9d614c3de744671f945c32c3",
+          "sha256": "8c45d271d5731e8691e706513be37b632c491578bedff331cb274eab7bd03014",
+          "executable": false
+        },
+        "pnpm-lock.yaml": {
+          "type": "file",
+          "sha256": "8c4943ff06e48f332e04f2db7bced6ee600e6be2e46e22bd285237622125a96b",
           "executable": false
         },
         "scripts/validate-issue-contract.mjs": {
@@ -2056,17 +2654,27 @@
         },
         "src/clone.ts": {
           "type": "file",
-          "sha256": "e23410d2fc80b08b583e8490476f897f6ddb8e42e2493a0dee5b85f596227f8b",
+          "sha256": "52492c16b20cb787ad33026d3437a1df6ed6582fce066181c920c06a55eccd7b",
+          "executable": false
+        },
+        "src/comment-template.ts": {
+          "type": "file",
+          "sha256": "1a7300a047926ecc1686827b739ff56db337309452e43a5bf9115cc67edb893f",
+          "executable": false
+        },
+        "src/events.ts": {
+          "type": "file",
+          "sha256": "10cde50f9f298e8d801861f5d6ac1e1d6f629dbb93542ea79ea5afd7d8b9dc4a",
           "executable": false
         },
         "src/factory-configuration.ts": {
           "type": "file",
-          "sha256": "571e61793c88c62ec9399352d76fc71df99b8097d8c85ea733a98f06606a3b9e",
+          "sha256": "4bd02e3a568762b99eeef27f58781ee8d22180d5a03fb78fbf8f5e8c4bd28479",
           "executable": false
         },
         "src/factory.ts": {
           "type": "file",
-          "sha256": "54bdd84b69197ca18aff31485f8dde74f02d8c11442103be32c79bb453de8038",
+          "sha256": "cce709d12b7a1dae7f510e17350bbd194f65ab955609834fd6c5f66048d0d4e0",
           "executable": false
         },
         "src/github-token.ts": {
@@ -2074,49 +2682,59 @@
           "sha256": "817a9d75d15fe50344c8264429788e4bc916f7fba48c6da0da5741ccf88ef98b",
           "executable": false
         },
-        "src/github.ts": {
-          "type": "file",
-          "sha256": "793ee0a677ad4c1e0d457b1566829abbe0ff7c51c50c730337df5487ab34481d",
-          "executable": false
-        },
         "src/host-configuration.ts": {
           "type": "file",
-          "sha256": "27f7242d3258e71e2faeeb00b1600c8a0b373a7ca1b4c5ca2949a0017c8254a3",
+          "sha256": "a283e8f73f080bfafb8340018cded4fd871fff30ea1c84822da4e58ab9bba000",
           "executable": false
         },
         "src/host.ts": {
           "type": "file",
-          "sha256": "3775bd28bf23a85a85f3d40fe6a651ce06f3eacf8d7765a1f1b4ba2c8dbc3d7e",
+          "sha256": "2ad50ad14eeb5260d4444be43e18f3447a772c073b1f2b3ca83e8cb630bc11be",
+          "executable": false
+        },
+        "src/image-retention.ts": {
+          "type": "file",
+          "sha256": "0a2a2873b7362b5a294281bece1efaab25dccc991865cf15e5253fbbeae675e3",
           "executable": false
         },
         "src/main.ts": {
           "type": "file",
-          "sha256": "90fc67f1c5372749c80085b91cba52a628ba42cd3fbab91d18746c00cd97b3fd",
+          "sha256": "fa966daf76d4cbdb56d3ef434ef09c2f4edbe862d5b5a2fb61a74909725ce985",
+          "executable": false
+        },
+        "src/owner.ts": {
+          "type": "file",
+          "sha256": "edc5a7dfbb6df51dea04ea4f38e369f88737dc6cb70b79563072690981a41cb4",
           "executable": false
         },
         "src/pause.ts": {
           "type": "file",
-          "sha256": "9725e5259e8772e83a29b5e71bc586567f0ea3f06821f3148813d8b97fa3b745",
+          "sha256": "34f772cbd636ca39e45224d486c0f0b93ac4a16b3057f529885122a43b58f96d",
+          "executable": false
+        },
+        "src/platform.ts": {
+          "type": "file",
+          "sha256": "562ca18c852a6afe8aed5eaeba549c1e0918406490123517c92889ee427238de",
           "executable": false
         },
         "src/providers.ts": {
           "type": "file",
-          "sha256": "4b445eb143d49e399a5bf0c58481fbeae0bb83df45b0927546d957908109e7e9",
+          "sha256": "422d3d708d39703b49227745e521642d4a441aae6312b27ed9e5ba34f4152220",
           "executable": false
         },
         "src/providers/claude-code.ts": {
           "type": "file",
-          "sha256": "3d220de9f17d38e083a6c74f6f06f002ddb1244318c0664fc88151bb9d140779",
+          "sha256": "330a05398c9289803116917c03e5a01eefe5646fb57f2cf5be0f5319221910a1",
           "executable": false
         },
         "src/providers/codex.ts": {
           "type": "file",
-          "sha256": "237ae1e285d519338d949f8499be1bebf5d80fe2115265c1ccf46de010f81464",
+          "sha256": "c5df8eecacc43b8ac43044705df9b084b4d96a130a66cf0edc87017b2597802b",
           "executable": false
         },
         "src/providers/launch.ts": {
           "type": "file",
-          "sha256": "f58c0e5f7d222af6c5914ca2ca139600d041c79274527bc4c8be34611644770c",
+          "sha256": "cdb3c81e0ac275cede8c2c34bb1ec48e10aba9211db14a57e47c3cf1195cc434",
           "executable": false
         },
         "src/providers/limit.ts": {
@@ -2126,17 +2744,22 @@
         },
         "src/providers/usage.ts": {
           "type": "file",
-          "sha256": "4a2a4b5de270e7371bdc90889f64597ddbc4b03bc978ed800d97f5b5d32fa7b0",
+          "sha256": "4565edd44ab97fdcfc5da02c18cd54f690f6459b45ecee8a0a2dd88c311799fc",
           "executable": false
         },
         "src/readiness.ts": {
           "type": "file",
-          "sha256": "31f3bf5cfae040fec82025b8f945ea450bada24f4f572e31acb692145e3acb1f",
+          "sha256": "f23abeb069c1f04e2ba7bbe32e1b38921b3147890ab946135bc7c14e5952a03c",
           "executable": false
         },
         "src/redaction.ts": {
           "type": "file",
           "sha256": "afebdb2416b05c38cf5362bedc77b763311db2e67703732ef5b24cebf4a65632",
+          "executable": false
+        },
+        "src/resume.ts": {
+          "type": "file",
+          "sha256": "ee496dc5dae07838c4d43569d7690cac9aef1bea30868985547858e649dfb75f",
           "executable": false
         },
         "src/run-log.ts": {
@@ -2151,17 +2774,17 @@
         },
         "src/sandbox-image.ts": {
           "type": "file",
-          "sha256": "0665f2241a42e432708dcdb9dfe27a049bd6a4954ef3e29e23bf8f04f6e9f46b",
+          "sha256": "8619a2405bb2444f629711884417eefabe3d5223634b695445763c88ea510867",
           "executable": false
         },
         "src/status.ts": {
           "type": "file",
-          "sha256": "1264f2ad195dfe6af34998368ecd6d6f8bca61a0463942909017ff5a2e65968d",
+          "sha256": "0ff78ee5f222a5ea5219cf98da49de97b7b839bd223af1f4f15f98436899dfc1",
           "executable": false
         },
         "src/usage.ts": {
           "type": "file",
-          "sha256": "6c54d4852be5d5e4c6553e62f2ddaec8224d48d7915225bcdee6b07e5dd2e821",
+          "sha256": "456b4108e82996bfbf07a4f789178c9f4bd4178d094b2bad859fd2f447bfc0a0",
           "executable": false
         },
         "test/agent-layer-fixture.ts": {
@@ -2181,32 +2804,47 @@
         },
         "test/boundary.test.ts": {
           "type": "file",
-          "sha256": "22ffcb730d81aa91d4ec6c9296b5157ccc9215eeee0b855d5d9e7d6a5fb395b0",
+          "sha256": "0439d471b76d6542b9a2612968796caf5b13ddf1f83aa686d81b112a71b25cc4",
           "executable": false
         },
         "test/claude-code.test.ts": {
           "type": "file",
-          "sha256": "5a2a8d9c2da0a7d4abe77087f921ed2875daf8e4b7c9935e6b2e69f3be043675",
+          "sha256": "caec536d32aa08f9ccc239bc5e9cc08ce2079cfecd7adf8a11f936512027cdae",
+          "executable": false
+        },
+        "test/claude-foreground.test.ts": {
+          "type": "file",
+          "sha256": "83f7dfc6a38a136ffdd0437ec61a1db3a326b60e24aec1d9900623d5eacddf37",
           "executable": false
         },
         "test/codex.test.ts": {
           "type": "file",
-          "sha256": "a2263833d574be43afbcd2664d6f8343fc349566636d3c01867f03cc94d0e792",
+          "sha256": "828738b5e5cdef0131004bcdde534e9a6e2b016a04541a06b58285e402822288",
+          "executable": false
+        },
+        "test/comment-template.test.ts": {
+          "type": "file",
+          "sha256": "a2a95daf4a5a235600174a2ad00fdad7de00c3736ccdb73012bb3cf830e7038f",
           "executable": false
         },
         "test/factory-configuration.test.ts": {
           "type": "file",
-          "sha256": "c36bc55644060102516bfda27aca4624a57172a8e5585d42845220b21f8a71ad",
+          "sha256": "8f2c3dbbdab11188d08b4d009a6168a912692fd048ab31d6f6fd446498dc806d",
           "executable": false
         },
         "test/factory.test.ts": {
           "type": "file",
-          "sha256": "5bc5d9bd12d2b58fd8e5ffbc647e9ff18cbd0bb3b6ca66005f77b7812c47e6ce",
+          "sha256": "12c806394cef35c4f773c158dc32d2e0d4ee4ef09765f3d9c9307621ad789e3a",
           "executable": false
         },
         "test/fakes.ts": {
           "type": "file",
-          "sha256": "2e2262c7e95a9aa74be9ff19b8260ec40d26397b06a92bd037574353237c1a49",
+          "sha256": "9f2e4c9febdc643ca88449d38aaeb5d5cff930922af170680b6f39a51cce97ea",
+          "executable": false
+        },
+        "test/fixtures/babysit-github.mjs": {
+          "type": "file",
+          "sha256": "8cba674928209ba076b01296f87c4ef075f88495572d8526c050bc41f88ac351",
           "executable": false
         },
         "test/fixtures/claude-usage.json": {
@@ -2264,29 +2902,59 @@
           "sha256": "1e504e3d04787e11ca808deea0994dc10d8f12c2fff2726c68dabd85b7425133",
           "executable": false
         },
+        "test/fixtures/host-configuration/github-shorthand.json": {
+          "type": "file",
+          "sha256": "dce70c0cb9b01d7b24c33055394c5e9c04805fa2b4b19e7145ce27184eeadd62",
+          "executable": false
+        },
+        "test/fixtures/host-configuration/legacy-and-usage.json": {
+          "type": "file",
+          "sha256": "dd66a18c83277d5edbc874adba84e042be13bc060d72851d5c1aac157253a58a",
+          "executable": false
+        },
+        "test/fixtures/host-configuration/legacy.json": {
+          "type": "file",
+          "sha256": "d4171ddadedc2bd27f4d1ed34bb6a4bdb471631b72106ee174023b3f12fa9a4f",
+          "executable": false
+        },
         "test/fixtures/host-configuration/malformed.json": {
           "type": "file",
-          "sha256": "0baf0102afb969cc73946b3cfe0f0b2944bf524d6e203efab920fbe8fa52ef67",
+          "sha256": "d4a629604c3174a8890aa7ec46e353d80b1fe89e9d0b730457ba674fa0ffdcab",
           "executable": false
         },
         "test/fixtures/host-configuration/missing.json": {
           "type": "file",
-          "sha256": "0d361b2f85f8fa7ab71a62df3aea15e83149e1552f3dba1dcd6b28141dedc43d",
+          "sha256": "6275bfe1771e6003ae08e9d4a8b8018c767b0ea57c6cf8bcaf567913b8482dae",
+          "executable": false
+        },
+        "test/fixtures/host-configuration/platforms-malformed.json": {
+          "type": "file",
+          "sha256": "674d58b46203e46c98e66a8942d65513cb23f215255f29bbb9c264e894db895d",
           "executable": false
         },
         "test/fixtures/host-configuration/unknown.json": {
           "type": "file",
-          "sha256": "d5977171357a811ccb0aa422f0d73f9d991213242f86b41075e9ff6f512d2185",
+          "sha256": "9bf983729428f27a6e7af5776028130668fc0bd9b006641cda82a749a43b47bc",
           "executable": false
         },
         "test/fixtures/host-configuration/unresolvable-models.json": {
           "type": "file",
-          "sha256": "5a316d50aeb781d9753a45c69aacd8d96918d89b71de6c1ef69a9f4396562b9a",
+          "sha256": "ad560222add6c3a0ea853583d2a392839eda25c2642f9e17f389bfe77a6c2d60",
+          "executable": false
+        },
+        "test/fixtures/host-configuration/usage-defaults.json": {
+          "type": "file",
+          "sha256": "82d92198bde4e341a4fea51b104ad386a8fdf5b37e9d19004d90d8bb40e964ef",
+          "executable": false
+        },
+        "test/fixtures/host-configuration/usage-misordered.json": {
+          "type": "file",
+          "sha256": "fb032c1942a0b01d26f106678adb7052a8579488743fa31a136837a0497d5582",
           "executable": false
         },
         "test/fixtures/host-configuration/valid.json": {
           "type": "file",
-          "sha256": "d4171ddadedc2bd27f4d1ed34bb6a4bdb471631b72106ee174023b3f12fa9a4f",
+          "sha256": "ef1f06d6256d1ab618e244f1185b85b6aa9b5dcffdefd339e0e51a5fd842e7e7",
           "executable": false
         },
         "test/github-token.test.ts": {
@@ -2294,19 +2962,39 @@
           "sha256": "0e05ea26367884ce0e00bbca32a1375bd55f392637aab1c7358b223956a17551",
           "executable": false
         },
+        "test/host-cleanup.test.ts": {
+          "type": "file",
+          "sha256": "035cecf0b6130bbf97c327cb328f976b680a30449898ea48f710545b60a0204d",
+          "executable": false
+        },
         "test/host-configuration.test.ts": {
           "type": "file",
-          "sha256": "9df769e390eaa19587756b02f66ad998c5e1752640078d71f5346f87406d2340",
+          "sha256": "0995f8c04d11536cb1408ab5291b5947dc130af080813cb5ae40bff964381f91",
           "executable": false
         },
         "test/host.test.ts": {
           "type": "file",
-          "sha256": "918bf2142531748f0f2e5f1060236c06f093a50661052bd4f79e5b6e7b6882c8",
+          "sha256": "d273c50f56a53e48f8919f2ed261daf01ce5c69d68109e2701be3f2e7cf0e190",
+          "executable": false
+        },
+        "test/image-retention.test.ts": {
+          "type": "file",
+          "sha256": "7418bb827cdbf83bf5da758de3533412cc79d08ce87c9efb30e0253dd0ba5b89",
+          "executable": false
+        },
+        "test/owner.test.ts": {
+          "type": "file",
+          "sha256": "1c16b63425e67204dc56030b18c58555c472b22cd4ac55733810db00d70ab986",
           "executable": false
         },
         "test/pause.test.ts": {
           "type": "file",
-          "sha256": "5b60db0ffa2bb43c0c800b4f369a0d7e5449c8d57b4055f188e73642ecfa986f",
+          "sha256": "ec8377b460f62df6229031f2277b65e7378db91778f798fb2f145de1a931c59e",
+          "executable": false
+        },
+        "test/platform.test.ts": {
+          "type": "file",
+          "sha256": "c205788f216b436dfaa2f4e00715d64bcd178d2393495e71f1a20b729b63bee5",
           "executable": false
         },
         "test/providers.test.ts": {
@@ -2314,9 +3002,19 @@
           "sha256": "08431bfa04d7de8a5b4e1b75ac833978ba1734d1050a2157ec5a5550f2ba0d9c",
           "executable": false
         },
+        "test/pull-request-reviewer.test.ts": {
+          "type": "file",
+          "sha256": "16e7168857c95f411a4ab386c9ad928c44c279efbded84640639b3d1124c5bf6",
+          "executable": false
+        },
         "test/redaction.test.ts": {
           "type": "file",
           "sha256": "59e322e565d1ec21e8f46cc0a838ef52f751c52ee5af860fe8217875befe1e3e",
+          "executable": false
+        },
+        "test/resume.test.ts": {
+          "type": "file",
+          "sha256": "b8bc83e28392e26ff821560d68a710a51f5e40ef2ce3f52620e8eec754573f2a",
           "executable": false
         },
         "test/run-log.test.ts": {
@@ -2326,22 +3024,27 @@
         },
         "test/sandbox-image-build.test.ts": {
           "type": "file",
-          "sha256": "5e2d0ec737d1438bdc33f7f0454fa380ef67f0f2bba5c0d90e7a046415ac544c",
+          "sha256": "3f7402d82f163a96d23b64f860f55fb1a14d7cacdfbfd28d51e409e4bca22e53",
           "executable": false
         },
         "test/sandbox-image.test.ts": {
           "type": "file",
-          "sha256": "96eae74cf590375740098d23c85305427bc785414a455bfb9508bde55046ce1a",
+          "sha256": "e35b10734387ee6806d637c39e869a05b7f0ba992509fe51aa2c0370f6f2f669",
           "executable": false
         },
         "test/sandcastle.test.ts": {
           "type": "file",
-          "sha256": "f7dbc43f098e0a73b99f9f85b8e35e1e1b6a0ae787903f012033dc86569f4abc",
+          "sha256": "14a283784d3ba751913fa88958fe052d737cff3563cda4cbe9e221f90f9fd0e4",
+          "executable": false
+        },
+        "test/status.test.ts": {
+          "type": "file",
+          "sha256": "ca61309e974da99c3be7450393556e0b490a5836e01be6a41769f58d5a1ea509",
           "executable": false
         },
         "test/usage.test.ts": {
           "type": "file",
-          "sha256": "8d737ceee670c6c17eb19a533401cdbbe6a4104d17b5b2ec96a732e726c68af2",
+          "sha256": "f404cd175a8634d90c085c3e6322380be24575b8211697e0602f83d757e7032a",
           "executable": false
         },
         "tsconfig.json": {
@@ -2392,6 +3095,8 @@
           ".factory",
           ".github",
           ".gitignore",
+          ".oxlintrc.json",
+          ".prettierignore",
           "AGENTS.md",
           "CONTRIBUTING.md",
           "GLOSSARY.md",
@@ -2399,8 +3104,8 @@
           "README.md",
           "docs",
           "operations",
-          "package-lock.json",
           "package.json",
+          "pnpm-lock.yaml",
           "scripts",
           "src",
           "test",
@@ -2437,6 +3142,8 @@
           ".agents/skills/babysit/SKILL.md",
           ".agents/skills/babysit/merge.mjs",
           ".agents/skills/babysit/pull-request-reviewer.mjs",
+          ".agents/skills/babysit/request.mjs",
+          ".agents/skills/babysit/review-policy.mjs",
           ".agents/skills/babysit/reviewer.mjs",
           ".agents/skills/babysit/wait.mjs"
         ],
@@ -2614,6 +3321,7 @@
         ".github": [
           ".github/ISSUE_TEMPLATE",
           ".github/PULL_REQUEST_TEMPLATE.md",
+          ".github/factory-review-policy.json",
           ".github/pull-request-reviewer.json",
           ".github/scripts",
           ".github/workflows"
@@ -2643,12 +3351,17 @@
         "docs/adr": [
           "docs/adr/0001-keep-the-package-outside-repo-canon-release-inputs.md",
           "docs/adr/0002-release-scriptorium-from-its-own-repository.md",
+          "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md",
+          "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
+          "docs/adr/0005-default-the-factorys-own-comment-wording.md",
+          "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
           "docs/adr/README.md"
         ],
         "docs/agents": [
           "docs/agents/README.md",
           "docs/agents/domain.md",
           "docs/agents/issue-tracker.md",
+          "docs/agents/project.md",
           "docs/agents/triage-labels.md"
         ],
         "docs/development": [
@@ -2673,18 +3386,23 @@
         "src": [
           "src/agent-layer.Dockerfile",
           "src/clone.ts",
+          "src/comment-template.ts",
+          "src/events.ts",
           "src/factory-configuration.ts",
           "src/factory.ts",
           "src/github-token.ts",
-          "src/github.ts",
           "src/host-configuration.ts",
           "src/host.ts",
+          "src/image-retention.ts",
           "src/main.ts",
+          "src/owner.ts",
           "src/pause.ts",
+          "src/platform.ts",
           "src/providers",
           "src/providers.ts",
           "src/readiness.ts",
           "src/redaction.ts",
+          "src/resume.ts",
           "src/run-log.ts",
           "src/run-outcome.ts",
           "src/sandbox-image.ts",
@@ -2704,24 +3422,34 @@
           "test/agent-layer.test.ts",
           "test/boundary.test.ts",
           "test/claude-code.test.ts",
+          "test/claude-foreground.test.ts",
           "test/codex.test.ts",
+          "test/comment-template.test.ts",
           "test/factory-configuration.test.ts",
           "test/factory.test.ts",
           "test/fakes.ts",
           "test/fixtures",
           "test/github-token.test.ts",
+          "test/host-cleanup.test.ts",
           "test/host-configuration.test.ts",
           "test/host.test.ts",
+          "test/image-retention.test.ts",
+          "test/owner.test.ts",
           "test/pause.test.ts",
+          "test/platform.test.ts",
           "test/providers.test.ts",
+          "test/pull-request-reviewer.test.ts",
           "test/redaction.test.ts",
+          "test/resume.test.ts",
           "test/run-log.test.ts",
           "test/sandbox-image-build.test.ts",
           "test/sandbox-image.test.ts",
           "test/sandcastle.test.ts",
+          "test/status.test.ts",
           "test/usage.test.ts"
         ],
         "test/fixtures": [
+          "test/fixtures/babysit-github.mjs",
           "test/fixtures/claude-usage.json",
           "test/fixtures/factory-configuration",
           "test/fixtures/host-configuration"
@@ -2739,10 +3467,16 @@
           "test/fixtures/factory-configuration/valid.json"
         ],
         "test/fixtures/host-configuration": [
+          "test/fixtures/host-configuration/github-shorthand.json",
+          "test/fixtures/host-configuration/legacy-and-usage.json",
+          "test/fixtures/host-configuration/legacy.json",
           "test/fixtures/host-configuration/malformed.json",
           "test/fixtures/host-configuration/missing.json",
+          "test/fixtures/host-configuration/platforms-malformed.json",
           "test/fixtures/host-configuration/unknown.json",
           "test/fixtures/host-configuration/unresolvable-models.json",
+          "test/fixtures/host-configuration/usage-defaults.json",
+          "test/fixtures/host-configuration/usage-misordered.json",
           "test/fixtures/host-configuration/valid.json"
         ],
         "vendor": [
@@ -2975,7 +3709,7 @@
         },
         ".gitignore": {
           "type": "file",
-          "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+          "sha256": "c2a05e9e5d4fef96356a9f1205847727da92ad32b9233a4231a9bae104139118",
           "executable": false
         },
         ".agents/.gitignore": {
@@ -3179,5 +3913,23 @@
       }
     }
   },
-  "scopeChanges": []
+  "scopeChanges": [
+    {
+      "id": "documentation",
+      "additions": [
+        "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md",
+        "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
+        "docs/adr/0005-default-the-factorys-own-comment-wording.md",
+        "docs/adr/0006-reach-the-hosting-platform-through-postern.md"
+      ],
+      "removals": []
+    },
+    {
+      "id": "typescript-node-stack",
+      "additions": [
+        "package.json"
+      ],
+      "removals": []
+    }
+  ]
 }

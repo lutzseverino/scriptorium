@@ -2,11 +2,12 @@
   "version": 1,
   "labels": {
     "ready": "ready-for-agent",
+    "skip": "factory:skip",
     "running": "factory:running",
     "failed": "factory:failed",
     "needsInput": "factory:needs-input",
     "paused": "factory:paused"
   },
   "modelLabelPrefix": "model:",
-  "prompt": "{skillPrefix}implement #{issue}\n\nApply the repository's app-author review policy in docs/agents/project.md."
+  "prompt": "{skillPrefix}implement #{issue}"
 }

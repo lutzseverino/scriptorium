@@ -1,6 +1,6 @@
 # Writing Agent Briefs
 
-An agent brief is a structured comment posted on a GitHub issue or PR when it moves to `ready-for-agent`. It is the authoritative specification that an AFK agent will work from. The original body and discussion are context: the agent brief is the contract.
+An agent brief is a structured comment posted on a GitHub issue or PR before it moves to `ready-for-agent`; readiness follows a review by someone who did not write it, as [SKILL.md](SKILL.md) describes. It is the authoritative specification that an AFK agent will work from. The original body and discussion are context: the agent brief is the contract.
 
 The brief states **what the agent should do**, which stretches to both surfaces: for an issue, that's building the change from nothing; for a PR, it's what's left to do *to the existing diff*: finish it, close gaps, address review points. Same principles either way; the PR example below shows the difference.
 
@@ -35,6 +35,32 @@ The agent needs to know when it's done. Every agent brief must have concrete, te
 ### Explicit scope boundaries
 
 State what is out of scope. This prevents the agent from gold-plating or making assumptions about adjacent features.
+
+### Decisions, not options
+
+The implementing agent can't ask the owner anything, so a brief settles every question of intent before it is accepted. State each owner decision as behavior. A brief that needs one of these is not finished; its question goes to the orchestrating agent, which infers the answer under the inference test or takes it to the owner:
+
+- **Bad:** "Retry for a reasonable period (agent's choice)"
+- **Bad:** "Either drop the row or fail the export"
+- **Bad:** "Fall back to 60 minutes when no window is configured", when nobody chose 60 minutes
+- **Bad:** "Open question: should admins be exempt?"
+- **Good:** "Retry for 30 minutes after the first failure, then mark the Parcel failed", with the owner's decision linked from the triage notes
+
+When the owner has reserved review before merge, state that designation as contract behavior and retain its dated decision source in the triage notes for the worker's PR handoff. Use the recorded reservation, not a routing label, as its source. Follow applicable installed rules for routing and delivery.
+
+Implementation choices that don't change what users or operators see stay with the agent; leave them out.
+
+## Triage notes
+
+The triage notes that accompany a brief follow it in the same comment, never between the disclaimer and the `## Agent Brief` heading. Fact-finding and owner decisions posted before the brief exists are separate triage notes comments. A brief's notes cover:
+
+- **Path**: code-bound or intent-bound, with a one-line reason.
+- **Verification**: what was checked and how (reproduction, code path, tests run), and where the redundancy search looked.
+- **Owner decisions**: each decision the brief relies on, including any owner-review reservation, with its date and a link to where the owner gave it; for a grill's brief, pasted from the grill record.
+- **Inferred intent**: each answer the orchestrating agent inferred under the inference test, which the brief states as behavior, with its citation: the owner's approved goal, recorded decision or wish, or quoted words, with its date and where it was given.
+- **Dependencies**: issues that must land first, for the reviewer to record as blockers.
+- **Model**: when the installed rules ask for it, one suggested `model:` label with a one-line reason, for the reviewer to apply or replace.
+- **Owner questions**: none, for a brief ready for review.
 
 ## Template
 
