@@ -384,12 +384,21 @@ test("a run's pull request is its repository's own, opened since its first attem
   );
 });
 
-test("the closed claims are read across every page of both state labels", async () => {
+test("closed claims include needs-input-only issues across every page with configured labels", async () => {
+  const configured = {
+    ...labels,
+    running: "worker:active",
+    paused: "worker:paused",
+    needsInput: "worker:question",
+  };
   const { connection } = github((request, body) => {
     assert.equal(request, "PosternIssues");
     assert.deepEqual(body.variables.states, ["CLOSED"]);
-    const numbers =
-      body.variables.labels[0] === labels.running ? [3, 4] : [4, 5];
+    const numbers = {
+      [configured.running]: [3, 4],
+      [configured.paused]: [4, 5],
+      [configured.needsInput]: [6, 7],
+    }[body.variables.labels[0] as string]!;
     const nodes = numbers.map((number) =>
       issueNode(number, { state: "CLOSED" }),
     );
@@ -412,8 +421,8 @@ test("the closed claims are read across every page of both state labels", async 
     };
   });
   assert.deepEqual(
-    await repositoryPlatform(connection, labels).readClosedClaims(),
-    [3, 4, 5],
+    await repositoryPlatform(connection, configured).readClosedClaims(),
+    [3, 4, 5, 6, 7],
   );
 });
 
@@ -480,5 +489,35 @@ test("a state transition that fails part way leaves its claimed issue a state la
     const issueLabels = [labels.ready, ...before];
     await failing(issueLabels, Infinity).platform[transition](4, "comment");
     assert.deepEqual(issueLabels, [labels.ready, ...after], transition);
+  }
+});
+
+test("closed-issue cleanup preserves unrelated labels and can resume after any failed removal", async () => {
+  const unrelated = [
+    labels.ready,
+    labels.failed,
+    "model:gpt-6.1-sol",
+    "factory:skip",
+  ];
+  for (const active of [
+    [labels.running],
+    [labels.needsInput],
+    [labels.running, labels.needsInput, labels.paused],
+    [labels.paused],
+    [],
+  ]) {
+    for (let failAt = 0; failAt < 3; failAt++) {
+      const issueLabels = [...unrelated, ...active];
+      await assert.rejects(
+        failing(issueLabels, failAt).platform.releaseClosed(4),
+        {
+          reason: "unavailable",
+        },
+      );
+      const recovered = failing(issueLabels, Infinity).platform;
+      await recovered.releaseClosed(4);
+      await recovered.releaseClosed(4);
+      assert.deepEqual(issueLabels, unrelated);
+    }
   }
 });
