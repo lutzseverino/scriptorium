@@ -2,6 +2,7 @@
 // repository the host configuration lists until it is stopped, and
 // `node src/main.ts resume <host configuration> <provider>` queues the owner's
 // resume request for it.
+import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -9,6 +10,7 @@ import { connect, detectPlatform } from "@lutzseverino/postern";
 import { tokenCommand } from "./github-token.ts";
 import { createHost } from "./host.ts";
 import { readHostConfiguration } from "./host-configuration.ts";
+import { createImageStorage, observeImageStorage } from "./image-storage.ts";
 import { createRegistry } from "./providers.ts";
 import { pruneSandboxCache, retainSandboxImages } from "./image-retention.ts";
 import { resume, resumeUsage } from "./resume.ts";
@@ -59,6 +61,25 @@ const registry = createRegistry(configuration.providers);
 const remoteUrl = (repository: string) =>
   `https://github.com/${repository}.git`;
 
+const storage = createImageStorage(configuration.imageStorage, {
+  observe: (paths) =>
+    observeImageStorage(paths, { builder: configuration.imageBuilder }),
+  reclaim: (pressure) =>
+    pruneSandboxCache(docker, {
+      builder: configuration.imageBuilder,
+      hours: configuration.imageRetention.cacheMinimumAgeHours,
+      maximumBytes: configuration.imageRetention.cacheMaximumBytes,
+      minimumFreeBytes: pressure
+        ? configuration.imageStorage?.resumeBytes
+        : undefined,
+    }),
+  now: () => new Date(),
+  statePath: join(configuration.stateDirectory, "image-storage.json"),
+  checkCache:
+    configuration.imageBuilder === "factory" &&
+    configuration.imageRetention.cacheMaximumBytes !== undefined,
+});
+
 const host = createHost(configuration, registry, {
   connect,
   async git(token, cwd, args) {
@@ -92,7 +113,9 @@ const host = createHost(configuration, registry, {
       uid: process.getuid?.() ?? 1000,
       gid: process.getgid?.() ?? 1000,
       builder: configuration.imageBuilder,
+      storage,
     }),
+  imageStorageStatus: storage.status,
   retainImages: (current, running) =>
     retainSandboxImages((args) => docker(args), {
       repositories: configuration.repositories,
@@ -100,11 +123,7 @@ const host = createHost(configuration, registry, {
       running,
       obsoletePairs: configuration.imageRetention.obsoletePairs,
     }),
-  pruneBuildCache: () =>
-    pruneSandboxCache((args) => docker(args), {
-      builder: configuration.imageBuilder,
-      hours: configuration.imageRetention.cacheMinimumAgeHours,
-    }),
+  pruneBuildCache: storage.maintain,
   readUsage: (provider) => registry.providers.get(provider)!.readUsage(),
   launch: (provider, request) =>
     registry.providers.get(provider)!.launch(request),

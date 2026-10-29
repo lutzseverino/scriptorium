@@ -42,6 +42,13 @@ v0.34.0, pinned by its image index digest in `src/sandbox-image.ts`. That
 builder pulls the toolchain's base image itself, without the daemon's images
 or registry mirrors.
 
+The host supplies a shared storage admission controller when configured. It
+serializes image preparation and cache maintenance and rechecks immediately
+before each expanding Docker operation. `ImageStorageHold` is a reasoned wait,
+separate from a build failure; a matching existing image bypasses building and
+needs no admission. See [storage admission](host.md#image-build-storage-admission)
+for store mapping, thresholds and diagnostics.
+
 Neither builder gives either build a context. The host runner builds each
 repository's image from its `.factory/Dockerfile` on every pass.
 

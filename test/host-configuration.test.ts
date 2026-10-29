@@ -416,3 +416,63 @@ test("an invalid host configuration stops the process with its reason", () => {
     "Usage: node src/main.ts <host configuration>\n   or: node src/main.ts resume <host configuration> <provider> [--drain-threshold N]\n",
   );
 });
+
+test("storage admission and dedicated cache targets are opt-in and validated in bytes", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const imageStorage = {
+    storePaths: ["/var/lib/containerd", "/var/lib/docker"],
+    cachePath: "/var/lib/docker/volumes/factory-sandbox/_data",
+    reserveBytes: 16106127360,
+    resumeBytes: 18253611008,
+  };
+  for (const imageBuilder of ["daemon", "factory"]) {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...base,
+        imageBuilder,
+        imageStorage,
+        imageRetention: { cacheMaximumBytes: 8000000000 },
+      }),
+    );
+    const loaded = read(path).configuration;
+    assert.deepEqual(loaded.imageStorage, imageStorage);
+    assert.equal(loaded.imageRetention.cacheMaximumBytes, 8000000000);
+    assert.equal(loaded.imageBuilder, imageBuilder);
+  }
+  for (const change of [
+    { reserveBytes: 0 },
+    { resumeBytes: -1 },
+    { reserveBytes: 1.5 },
+    { resumeBytes: imageStorage.reserveBytes },
+    { resumeBytes: 1 },
+    { storePaths: [] },
+    { storePaths: ["relative"] },
+    { storePaths: ["/store/../wrong"] },
+    { cachePath: "relative" },
+    { storePaths: ["/store\u0000bad"] },
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, imageStorage: { ...imageStorage, ...change } }),
+    );
+    assert.throws(() => read(path), /imageStorage/);
+  }
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ...base,
+      imageBuilder: "factory",
+      imageStorage: { ...imageStorage, cachePath: undefined },
+    }),
+  );
+  assert.throws(() => read(path), /imageStorage.cachePath/);
+  for (const cacheMaximumBytes of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, imageRetention: { cacheMaximumBytes } }),
+    );
+    assert.throws(() => read(path), /cacheMaximumBytes/);
+  }
+});

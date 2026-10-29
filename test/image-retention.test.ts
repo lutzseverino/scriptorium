@@ -445,3 +445,89 @@ test("a host building with the daemon's own builder prunes no build cache, even 
     assert.deepEqual(daemon.calls, []);
   }
 });
+
+test("factory cache applies age then a size target, reclaiming recent unused cache under pressure", async () => {
+  const records = [
+    { Size: "6GB", Reclaimable: true, recent: true },
+    { Size: "2GB", Reclaimable: false, recent: true },
+    { Size: "1GB", Reclaimable: true, recent: false },
+  ];
+  const calls: string[][] = [];
+  const docker: Docker = async (args) => {
+    calls.push(args);
+    assert.equal(args.includes("factory-sandbox"), true);
+    if (args[1] === "prune") {
+      const age = args.includes("until=24h");
+      for (let i = records.length - 1; i >= 0; i--)
+        if (records[i].Reclaimable && (!age || !records[i].recent))
+          records.splice(i, 1);
+      return "Total: 1GB";
+    }
+    if (args[1] === "du")
+      return records.map((r) => JSON.stringify(r)).join("\n");
+    assert.equal(args[1], "inspect");
+    return "present";
+  };
+  await pruneSandboxCache(docker, {
+    builder: "factory",
+    hours: 24,
+    maximumBytes: 3000000000,
+    minimumFreeBytes: 18253611008,
+  });
+  assert.deepEqual(records, [
+    { Size: "2GB", Reclaimable: false, recent: true },
+  ]);
+  const prunes = calls.filter((args) => args[1] === "prune");
+  assert.equal(prunes.length, 2);
+  assert.ok(prunes[0].includes("until=24h"));
+  assert.deepEqual(prunes[1], [
+    "buildx",
+    "prune",
+    "--builder",
+    "factory-sandbox",
+    "--all",
+    "--force",
+    "--max-used-space",
+    "3000000000",
+    "--min-free-space",
+    "18253611008",
+    "--reserved-space",
+    "0",
+  ]);
+  await assert.rejects(
+    pruneSandboxCache(docker, {
+      builder: "factory",
+      hours: 24,
+      maximumBytes: 1000000000,
+    }),
+    /cache.*target/,
+  );
+});
+
+test("enabled cache targets never prune daemon cache or a leftover builder and tolerate an absent factory builder", async () => {
+  for (const builder of ["daemon", "factory"] as const) {
+    const daemon = fakeDocker({ images: [] });
+    assert.equal(
+      await pruneSandboxCache(daemon.docker, {
+        builder,
+        hours: 24,
+        maximumBytes: 8000000000,
+        minimumFreeBytes: 18253611008,
+      }),
+      null,
+    );
+    assert.deepEqual(
+      daemon.calls,
+      builder === "daemon" ? [] : [["buildx", "inspect", "factory-sandbox"]],
+    );
+  }
+  await assert.rejects(
+    pruneSandboxCache(
+      async () => {
+        throw new Error("Docker unavailable");
+      },
+      { builder: "factory", hours: 24 },
+    ),
+    /Docker unavailable/,
+  );
+});

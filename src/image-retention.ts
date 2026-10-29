@@ -111,17 +111,28 @@ export async function retainSandboxImages(
 // space freed, as Docker reports it, or null when nothing was.
 export async function pruneSandboxCache(
   docker: Docker,
-  { builder, hours }: { builder: ImageBuilder; hours: number },
+  {
+    builder,
+    hours,
+    maximumBytes,
+    minimumFreeBytes,
+  }: {
+    builder: ImageBuilder;
+    hours: number;
+    maximumBytes?: number;
+    minimumFreeBytes?: number;
+  },
 ): Promise<string | null> {
   if (builder !== "factory") return null;
   try {
     await docker(["buildx", "inspect", sandboxBuilder]);
-  } catch {
-    return null;
+  } catch (error) {
+    if (/no builder .* found/i.test(String(error))) return null;
+    throw error;
   }
   // A builder stopped since the host restarted starts before it prunes.
   await docker(["buildx", "inspect", "--bootstrap", sandboxBuilder]);
-  const output = await docker([
+  let output = await docker([
     "buildx",
     "prune",
     "--builder",
@@ -131,8 +142,66 @@ export async function pruneSandboxCache(
     "--filter",
     `until=${hours}h`,
   ]);
-  const total = /^Total:\s*(\S+)/m.exec(output)?.[1] ?? null;
-  return total && !/^0(\.0+)?B$/.test(total) ? total : null;
+  if (maximumBytes !== undefined || minimumFreeBytes !== undefined) {
+    // This second pass may reclaim recent unused records. The age policy is
+    // still applied independently above; ANDing it with the size filter would
+    // leave recent cache unbounded.
+    output +=
+      "\n" +
+      (await docker([
+        "buildx",
+        "prune",
+        "--builder",
+        sandboxBuilder,
+        "--all",
+        "--force",
+        ...(maximumBytes !== undefined
+          ? ["--max-used-space", String(maximumBytes)]
+          : []),
+        ...(minimumFreeBytes !== undefined
+          ? ["--min-free-space", String(minimumFreeBytes)]
+          : []),
+        "--reserved-space",
+        "0",
+      ]));
+  }
+  if (maximumBytes !== undefined) {
+    const records = await docker([
+      "buildx",
+      "du",
+      "--builder",
+      sandboxBuilder,
+      "--format",
+      "json",
+    ]);
+    const used = records
+      .split("\n")
+      .filter(Boolean)
+      .reduce((total, line) => {
+        const record = JSON.parse(line) as { Size: string };
+        // Buildx exposes Size as a decimal, human-readable string, including in
+        // JSON. Fail closed on unknown output instead of trusting prune success.
+        const match = /^(\d+(?:\.\d+)?)\s*(B|kB|MB|GB|TB|PB)$/.exec(
+          record.Size,
+        );
+        if (!match) throw new Error("factory cache usage is unreadable");
+        return (
+          total +
+          Number(match[1]) *
+            1000 ** ["B", "kB", "MB", "GB", "TB", "PB"].indexOf(match[2])
+        );
+      }, 0);
+    if (!Number.isFinite(used) || used > maximumBytes)
+      throw new Error(
+        `factory cache remains at ${used} reported bytes above its target ${maximumBytes}; in-use or protected cache stays`,
+      );
+  }
+  const totals = [...output.matchAll(/^Total:\s*(\S+)/gm)].map(
+    (match) => match[1],
+  );
+  const total =
+    totals.filter((total) => !/^0(\.0+)?B$/.test(total)).join(" + ") || null;
+  return total;
 }
 
 // The factory's tagged images: current-format pairs and the served

@@ -194,3 +194,82 @@ test("either builder reuses an image built for the host's identity and rebuilds 
       /UID and GID must be positive integers/,
     );
 });
+
+test("storage admission gates every expanding build and still permits existing-image reuse", async () => {
+  const { createImageStorage, ImageStorageHold } =
+    await import("../src/image-storage.ts");
+  for (const builder of ["daemon", "factory"] as const) {
+    for (const existing of [false, true]) {
+      let availableBytes = 14;
+      const builds: string[] = [];
+      const storage = createImageStorage(
+        { storePaths: ["/store"], reserveBytes: 15, resumeBytes: 17 },
+        {
+          observe: async () => [
+            { paths: ["/store"], filesystem: "dev:1", availableBytes },
+          ],
+          reclaim: async () => null,
+          now: () => new Date(),
+        },
+      );
+      const run: DockerRun = async (args) => {
+        if (args[0] === "image") return existing ? "1000:1000" : "";
+        if (args[0] === "build" || args[1] === "bake") {
+          builds.push(args[0]);
+          availableBytes = 14;
+        }
+        return "";
+      };
+      const build = () =>
+        buildSandboxImage(
+          { dockerfile: "FROM base", uid: 1000, gid: 1000, builder, storage },
+          run,
+        );
+      if (existing) await build();
+      else await assert.rejects(build(), ImageStorageHold);
+      assert.deepEqual(builds, []);
+      availableBytes = 17;
+      if (existing || builder === "factory") await build();
+      else await assert.rejects(build(), ImageStorageHold); // toolchain consumed reserve; agent must wait
+      assert.equal(builds.length, existing ? 0 : 1);
+    }
+  }
+});
+
+test("factory builds recheck pressure after builder setup and before bake starts", async () => {
+  const { createImageStorage, ImageStorageHold } =
+    await import("../src/image-storage.ts");
+  let availableBytes = 18;
+  const storage = createImageStorage(
+    { storePaths: ["/store"], reserveBytes: 15, resumeBytes: 17 },
+    {
+      observe: async () => [
+        { paths: ["/store"], filesystem: "dev:1", availableBytes },
+      ],
+      reclaim: async () => null,
+      now: () => new Date(),
+    },
+  );
+  const calls: string[][] = [];
+  await assert.rejects(
+    buildSandboxImage(
+      {
+        dockerfile: "FROM base",
+        uid: 1000,
+        gid: 1000,
+        builder: "factory",
+        storage,
+      },
+      async (args) => {
+        calls.push(args);
+        if (args[1] === "inspect" && args[0] === "buildx") availableBytes = 14;
+        return "";
+      },
+    ),
+    ImageStorageHold,
+  );
+  assert.equal(
+    calls.some((args) => args[1] === "bake"),
+    false,
+  );
+});

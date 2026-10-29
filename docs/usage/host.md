@@ -61,7 +61,7 @@ host configuration itself.
 ## Host configuration
 
 The host configuration is one JSON file. Every field is required except
-`providers.claude-code.usageCredential`, `imageBuilder`, `imageRetention` and
+`providers.claude-code.usageCredential`, `imageBuilder`, `imageRetention`, `imageStorage` and
 the fields whose default the table below gives. Unknown fields are refused,
 and nothing comes from environment variables.
 
@@ -126,6 +126,12 @@ and nothing comes from environment variables.
 | `imageBuilder`                          | Where sandbox images build: `daemon`, the Docker daemon's own builder, or `factory`, the [factory builder](#the-factory-builder), whose old cache the factory then prunes. Optional; the default is `daemon`.           |
 | `imageRetention.obsoletePairs`          | The whole number of obsolete sandbox image pairs kept across every repository, newest first; pairs in use stay beyond it. Optional; the default is 3. See [image retention](#sandbox-image-retention).                  |
 | `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned, when `imageBuilder` is `factory`. Optional; the default is 24.                                                 |
+| `imageRetention.cacheMaximumBytes`      | Optional positive whole-byte target for the factory builder's cache, independently of age. No default. Ignored in daemon mode.                                                                                          |
+| `imageStorage`                          | Optional storage admission policy; omitted means no filesystem reserve. See [storage admission](#image-build-storage-admission).                                                                                        |
+| `imageStorage.storePaths`               | Nonempty list of absolute existing directories identifying every local Docker content/snapshot store's filesystem.                                                                                                      |
+| `imageStorage.cachePath`                | Absolute existing directory on the filesystem backing the factory builder's cache; required when storage admission and the factory builder are selected.                                                                |
+| `imageStorage.reserveBytes`             | Positive whole-byte minimum available space required before starting each new build.                                                                                                                                    |
+| `imageStorage.resumeBytes`              | Positive whole-byte recovery threshold, strictly greater than the reserve; required to release a storage hold.                                                                                                          |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -950,7 +956,7 @@ With `"imageBuilder": "factory"`, the factory builds every sandbox image in its
 own Buildx builder, `factory-sandbox`, which its first build creates with the
 `docker-container` driver from the pinned `moby/buildkit` image. That needs
 Docker's Buildx plugin. The builder's cache holds only the factory's builds,
-so the factory prunes it by age after each pass. Base images in a
+so the factory prunes it by age after each pass and, when configured, toward its byte-size target. Base images in a
 `.factory/Dockerfile` are pulled by that builder, with the host user's Docker
 login but without the daemon's registry mirrors, so a base image that exists
 only in the local daemon does not build there. While its cache lasts, the
@@ -973,6 +979,94 @@ beyond the allowance. Build cache stays in the Docker daemon's own builder,
 mixed with other builds on the host, so the factory leaves it alone; whether
 to prune it is the operator's choice.
 
+## Image-build storage admission
+
+Existing configurations keep their builder and need no migration. To enable
+admission, identify the actual native local Docker content and snapshot stores,
+including a separate containerd store when used. Verify their locations from the
+host's daemon/containerd configuration and mount layout. Then set, for example:
+
+```json
+{
+  "imageStorage": {
+    "storePaths": ["/var/lib/containerd", "/var/lib/docker"],
+    "reserveBytes": 16106127360,
+    "resumeBytes": 18253611008
+  }
+}
+```
+
+These example paths must be replaced with this host's verified paths. A path is
+an operator assertion about the store's backing filesystem, not an instruction
+to discover or relocate a store. The checkout, process root and Docker data-root
+alone do not identify every content/snapshot store. The host process needs to
+see the same backing mounts as the native daemon. Docker Desktop/VM stores,
+remote stores and unresolved mappings cannot be measured this way; leave the
+policy disabled until a trustworthy native local mapping is available.
+Enabled admission rejects non-Unix Docker endpoints and factory builders that
+use a remote, different or multiple daemon endpoint. Missing, unreadable,
+invalid or incomplete observations hold builds rather than fall back to a
+measurement of the process filesystem.
+
+For `imageBuilder: "factory"`, also set `imageStorage.cachePath` to an existing
+directory on the verified backing filesystem of that builder's BuildKit volume.
+When the builder has not yet been created, identify its future volume's backing
+filesystem and use an existing directory there. Do not assume it shares the
+image store. Store aliases on one device are measured as one filesystem, using
+the lowest available reading; every distinct constrained filesystem must qualify.
+`statfs` available blocks exclude space reserved from ordinary users.
+
+The example uses a 15 GiB reserve and a configurable 2 GiB recovery margin
+(resume at 17 GiB), as reviewed in issue #70. These are opt-in example values,
+not global defaults. A byte is the configuration unit: 1 GB is 1,000,000,000
+bytes; 1 GiB is 1,073,741,824 bytes. Choose both thresholds explicitly.
+
+The host checks before a toolchain build, an agent-stage build, builder setup
+and a factory bake. Below reserve it attempts only dedicated factory-cache
+reclamation, then measures again. Daemon mode leaves all shared cache to the
+host operator, even if an old factory builder exists. Existing image retention
+still runs under its complete-current-image, reference and rollback protections;
+a storage hold never relaxes those protections. No image pruning is attempted
+as part of admission when the current image inventory is incomplete.
+
+Once held, every constrained filesystem must reach `resumeBytes` on a fresh
+reading. Equality at reserve admits an unheld build; equality at recovery
+releases a held one. The hold survives host restarts in the private
+`image-storage.json` record. Failure to record admission state also holds builds.
+Existing-image reuse proceeds, and running work can finish. Storage pressure
+alone consumes no attempt, changes no ticket readiness and creates no provider
+usage hold, owner hold or paused run. Affected repositories wait for a later
+pass to prepare their image.
+
+A factory builder may additionally set `imageRetention.cacheMaximumBytes`,
+with or without a filesystem reserve. Age pruning runs first. A separate
+[Buildx prune](https://docs.docker.com/reference/cli/docker/buildx/prune/)
+uses `--max-used-space` for the byte target; pressure also uses
+`--min-free-space` at the recovery threshold, without an age filter, so recent
+unused cache is expendable. Only `factory-sandbox` is selected. In-use cache
+stays; failed pruning or reported cache remaining above the configured target
+holds new builds. Buildx reports cache usage in rounded decimal units, so the
+post-prune target check has that reporting precision. Unsupported Buildx flags
+or unreadable usage fail closed. A missing builder has no cache to prune.
+
+The cache target and filesystem reserve are separate conditions. The host's
+roughly 8 GB daemon GC target is host policy, not a factory-cache default.
+Pruning a cache on another filesystem cannot recover an image store, and a
+cache target cannot guarantee free space.
+
+One host process serializes whole image preparations and cache maintenance;
+each subsequent build measures again after the earlier operation completes.
+This coordinates the factory's own work, not CI, external builders, other host
+processes or growing running workloads. Those need host coordination and can
+consume the reserve during an admitted build. Admission does not reserve bytes
+or guarantee a build's peak disk requirement.
+
+The private process log reports the hold. `status.json.imageStorage` exposes
+`held`, `reason`, `observedAt`, the byte thresholds, each filesystem's identity,
+configured paths and available bytes, and the reclamation pressure, freed-space
+report and error. Thresholds are null for a cache-target-only policy. These
+diagnostics do not appear in the public provider event stream or issue comments.
+
 ## Repository pauses
 
 A repository is paused for a pass, claiming and launching nothing there, when:
@@ -980,7 +1074,7 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - its token command fails;
 - its clone does not update;
 - its `.factory/config.json` is missing or invalid;
-- it has no `.factory/Dockerfile`, or its sandbox image does not build;
+- it has no `.factory/Dockerfile`, its sandbox image does not build, or storage admission holds a new build;
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
 - its platform reads fail.
