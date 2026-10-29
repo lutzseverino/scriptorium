@@ -34,9 +34,10 @@ toolchain image, each from a Dockerfile on stdin. The toolchain's base image
 may be one only the local daemon has, and the daemon's registry mirrors apply.
 
 A host that opts into the
-[factory builder](host.md#the-factory-builder) builds both images in one
+[factory builder](host.md#the-factory-builder) builds both images through
 Buildx bake instead, in the factory's own Buildx builder, `factory-sandbox`,
-and loads them into Docker. That needs Docker's Buildx plugin. The first such
+and loads them into Docker. With storage admission enabled, separate toolchain
+and agent target invocations allow a fresh check between them. That needs Docker's Buildx plugin. The first such
 build creates the builder with the `docker-container` driver and BuildKit
 v0.34.0, pinned by its image index digest in `src/sandbox-image.ts`. That
 builder pulls the toolchain's base image itself, without the daemon's images

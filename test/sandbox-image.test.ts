@@ -229,7 +229,7 @@ test("storage admission gates every expanding build and still permits existing-i
       else await assert.rejects(build(), ImageStorageHold);
       assert.deepEqual(builds, []);
       availableBytes = 17;
-      if (existing || builder === "factory") await build();
+      if (existing) await build();
       else await assert.rejects(build(), ImageStorageHold); // toolchain consumed reserve; agent must wait
       assert.equal(builds.length, existing ? 0 : 1);
     }
@@ -271,5 +271,45 @@ test("factory builds recheck pressure after builder setup and before bake starts
   assert.equal(
     calls.some((args) => args[1] === "bake"),
     false,
+  );
+});
+
+test("an admitted factory pair builds toolchain and agent targets under separate fresh admissions", async () => {
+  const { createImageStorage } = await import("../src/image-storage.ts");
+  const targets: string[][] = [];
+  let observations = 0;
+  const storage = createImageStorage(
+    { storePaths: ["/store"], reserveBytes: 15, resumeBytes: 17 },
+    {
+      observe: async () => {
+        observations++;
+        return [{ paths: ["/store"], filesystem: "dev:1", availableBytes: 18 }];
+      },
+      reclaim: async () => null,
+      now: () => new Date(),
+    },
+  );
+  const beforeBuild: number[] = [];
+  await buildSandboxImage(
+    {
+      dockerfile: "FROM base",
+      uid: 1000,
+      gid: 1000,
+      builder: "factory",
+      storage,
+    },
+    async (args) => {
+      if (args[1] === "bake") {
+        targets.push(args.slice(8));
+        beforeBuild.push(observations);
+      }
+      return "";
+    },
+  );
+  assert.deepEqual(targets, [["toolchain"], ["agent"]]);
+  assert.equal(beforeBuild.length, 2);
+  assert.ok(
+    beforeBuild[1] > beforeBuild[0],
+    "agent target requires a new filesystem observation",
   );
 });

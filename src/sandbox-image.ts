@@ -85,7 +85,12 @@ export async function buildSandboxImage(
       "utf8",
     );
     if (builder === "factory")
-      await bake({ dockerfile, layer, uid, gid, toolchain, image }, run, check);
+      await bake(
+        { dockerfile, layer, uid, gid, toolchain, image },
+        run,
+        check,
+        options.storage?.enabled ?? false,
+      );
     else {
       // The daemon's own builder reads the toolchain's base image and the
       // toolchain image from the daemon, with its registry mirrors. Each
@@ -136,10 +141,11 @@ async function bake(
   },
   run: DockerRun,
   check: () => Promise<void>,
+  separateStages: boolean,
 ): Promise<void> {
   await check();
   await ensureBuilder(run);
-  // One bake builds both images in the factory's builder and loads them into
+  // Bake builds both images in the factory's builder and loads them into
   // the daemon. The agent layer starts from the toolchain build's result, not
   // from a daemon image, which the builder can't see. The builds' context is
   // an empty directory. The Dockerfiles are files, since bake would read
@@ -173,21 +179,27 @@ async function bake(
         },
       }),
     );
-    await check();
-    await run(
-      [
-        "buildx",
-        "bake",
-        "--builder",
-        sandboxBuilder,
-        "--file",
-        "bake.json",
-        "--load",
-        "toolchain",
-        "agent",
-      ],
-      { cwd: work },
-    );
+    // With admission enabled, load the toolchain first, then obtain a fresh
+    // admission for the agent build. The second bake resolves target:toolchain
+    // in the same builder; it never needs a daemon-only base image.
+    for (const targets of separateStages
+      ? [["toolchain"], ["agent"]]
+      : [["toolchain", "agent"]]) {
+      await check();
+      await run(
+        [
+          "buildx",
+          "bake",
+          "--builder",
+          sandboxBuilder,
+          "--file",
+          "bake.json",
+          "--load",
+          ...targets,
+        ],
+        { cwd: work },
+      );
+    }
   } finally {
     await rm(work, { recursive: true, force: true });
   }

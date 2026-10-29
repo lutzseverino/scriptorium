@@ -154,6 +154,7 @@ export function createImageStorage(
   }
 
   return {
+    enabled: Boolean(policy || ports.checkCache),
     run<T>(operation: (check: () => Promise<void>) => Promise<T>): Promise<T> {
       return exclusive(() => operation(check));
     },

@@ -179,8 +179,16 @@ export async function pruneSandboxCache(
       .filter(Boolean)
       .reduce((total, line) => {
         const record = JSON.parse(line) as { Size: string };
-        // Buildx exposes Size as a decimal, human-readable string, including in
-        // JSON. Fail closed on unknown output instead of trusting prune success.
+        // Buildx JSON documents integer byte strings. Accept unit-formatted
+        // variants too; fail closed on unknown output or unsafe byte counts.
+        if (typeof record.Size !== "string")
+          throw new Error("factory cache usage is unreadable");
+        if (/^\d+$/.test(record.Size)) {
+          const bytes = Number(record.Size);
+          if (!Number.isSafeInteger(bytes))
+            throw new Error("factory cache usage is unreadable");
+          return total + bytes;
+        }
         const match = /^(\d+(?:\.\d+)?)\s*(B|kB|MB|GB|TB|PB)$/.exec(
           record.Size,
         );

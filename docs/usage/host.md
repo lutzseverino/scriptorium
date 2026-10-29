@@ -1045,8 +1045,8 @@ uses `--max-used-space` for the byte target; pressure also uses
 `--min-free-space` at the recovery threshold, without an age filter, so recent
 unused cache is expendable. Only `factory-sandbox` is selected. In-use cache
 stays; failed pruning or reported cache remaining above the configured target
-holds new builds. Buildx reports cache usage in rounded decimal units, so the
-post-prune target check has that reporting precision. Unsupported Buildx flags
+holds new builds. The post-prune check accepts Buildx JSON byte strings and unit-formatted
+variants; the latter have the precision Buildx reports. Unsupported Buildx flags
 or unreadable usage fail closed. A missing builder has no cache to prune.
 
 The cache target and filesystem reserve are separate conditions. The host's

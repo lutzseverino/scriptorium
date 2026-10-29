@@ -448,9 +448,9 @@ test("a host building with the daemon's own builder prunes no build cache, even 
 
 test("factory cache applies age then a size target, reclaiming recent unused cache under pressure", async () => {
   const records = [
-    { Size: "6GB", Reclaimable: true, recent: true },
-    { Size: "2GB", Reclaimable: false, recent: true },
-    { Size: "1GB", Reclaimable: true, recent: false },
+    { Size: "6000000000", Reclaimable: true, recent: true },
+    { Size: "2000000000", Reclaimable: false, recent: true },
+    { Size: "1000000000", Reclaimable: true, recent: false },
   ];
   const calls: string[][] = [];
   const docker: Docker = async (args) => {
@@ -475,7 +475,7 @@ test("factory cache applies age then a size target, reclaiming recent unused cac
     minimumFreeBytes: 18253611008,
   });
   assert.deepEqual(records, [
-    { Size: "2GB", Reclaimable: false, recent: true },
+    { Size: "2000000000", Reclaimable: false, recent: true },
   ]);
   const prunes = calls.filter((args) => args[1] === "prune");
   assert.equal(prunes.length, 2);
@@ -530,4 +530,40 @@ test("enabled cache targets never prune daemon cache or a leftover builder and t
     ),
     /Docker unavailable/,
   );
+});
+
+test("cache size checks accept byte strings and unit-formatted output at the target and reject unknown output", async () => {
+  for (const Size of ["2000000000", "2GB"]) {
+    const docker: Docker = async (args) =>
+      args[1] === "du" ? JSON.stringify({ Size }) : "Total: 0B";
+    assert.equal(
+      await pruneSandboxCache(docker, {
+        builder: "factory",
+        hours: 24,
+        maximumBytes: 2000000000,
+      }),
+      null,
+    );
+    await assert.rejects(
+      pruneSandboxCache(docker, {
+        builder: "factory",
+        hours: 24,
+        maximumBytes: 1999999999,
+      }),
+      /above its target/,
+    );
+  }
+  for (const Size of ["unknown", "-1", "9007199254740992", null]) {
+    await assert.rejects(
+      pruneSandboxCache(
+        async (args) => (args[1] === "du" ? JSON.stringify({ Size }) : ""),
+        {
+          builder: "factory",
+          hours: 24,
+          maximumBytes: 2000000000,
+        },
+      ),
+      /unreadable/,
+    );
+  }
 });
