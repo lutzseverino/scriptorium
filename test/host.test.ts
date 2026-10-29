@@ -29,6 +29,10 @@ import {
 import { sandboxEnvironment } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
 import type { FactoryEvent } from "../src/events.ts";
+import {
+  ImageStorageHold,
+  type ImageStorageStatus,
+} from "../src/image-storage.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
 import type { Retention } from "../src/image-retention.ts";
@@ -502,6 +506,7 @@ function host(
     configuration = {},
     caps = { "claude-code": 2, codex: 1 },
     imageFailures = [],
+    storage,
     usage = {},
     retention = [],
     pruning = [],
@@ -517,6 +522,7 @@ function host(
     caps?: { "claude-code": number; codex: number };
     // Each build in turn fails with its error, or succeeds on null.
     imageFailures?: (Error | null)[];
+    storage?: ImageStorageStatus;
     // Each provider's usage as the next read finds it: absent or null has no
     // usage window, a number has no reset, and an error is thrown.
     usage?: Record<string, number | UsageWindow | null | Error>;
@@ -618,6 +624,7 @@ function host(
       return token;
     },
     remoteUrl: (repository) => remotes[repository],
+    imageStorageStatus: () => storage,
     async buildImage(dockerfile) {
       builds.push(dockerfile);
       const failure = imageFailures.shift();
@@ -4804,3 +4811,100 @@ for (const state of ["live", "ended", "awaiting merge", "paused", "restarted"])
       assert.deepEqual(issue.labels, ["ready-for-agent"]);
       assert.equal(run.launched.length, 1);
     });
+
+test("storage holds admit no new tickets, preserve retries and provider state, and let existing runs settle", async (t) => {
+  const storage: ImageStorageStatus = {
+    held: true,
+    reason: "recover the image store",
+    observedAt: "2026-10-29T14:00:00Z",
+    reserveBytes: 16106127360,
+    resumeBytes: 18253611008,
+    filesystems: [
+      {
+        paths: ["/actual/containerd"],
+        filesystem: "device:7",
+        availableBytes: 100,
+      },
+    ],
+    reclamation: { pressure: true, freed: null, error: null },
+  };
+  const failures = [
+    null,
+    new ImageStorageHold(storage),
+    new ImageStorageHold(storage),
+    null,
+  ];
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    caps: { "claude-code": 1, codex: 1 },
+    imageFailures: failures,
+    storage,
+  });
+  await run.tick();
+  const before = run.status().providers;
+  // The first run is still running when pressure arrives.
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(run.launched[0].removed, false);
+  assert.deepEqual(run.status().providers, before);
+  assert.deepEqual(run.status().imageStorage, storage);
+  assert.match(
+    run.status().repositories[0].reason,
+    /^sandbox image builds wait for storage:/,
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
+    "ready-for-agent",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
+  // Closing the already-running ticket lets it settle during the hold.
+  run.github.find("acme/widgets", 4).state = "CLOSED";
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(
+    run.github.find("acme/widgets", 4).labels.includes("factory:running"),
+    false,
+  );
+  assert.equal(
+    run.github.find("acme/widgets", 4).labels.includes("factory:failed"),
+    false,
+  );
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(run.launched[1].options.name, "acme/widgets#5");
+  assert.equal(run.launched[1].options.agent.name, "claude-code");
+});
+
+test("a storage-held retry remains attempt two when storage recovers", async (t) => {
+  const hold = new ImageStorageHold({
+    held: true,
+    reason: "low storage",
+    observedAt: "2026-10-29T14:00:00Z",
+    reserveBytes: 15,
+    resumeBytes: 17,
+    filesystems: [],
+    reclamation: { pressure: true, freed: null, error: null },
+  });
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    imageFailures: [null, hold, hold, null],
+  });
+  await run.tick();
+  run.launched[0].finish(new Error("agent crashed"));
+  await settled();
+  await run.tick();
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels.sort(), [
+    "factory:running",
+    "ready-for-agent",
+  ]);
+  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(run.launched[1].options.agent.name, "codex");
+  assert.match(run.launched[1].options.prompt!, /First attempt failure/);
+});

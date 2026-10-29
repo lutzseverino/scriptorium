@@ -53,6 +53,7 @@ import {
   writeSandboxToken,
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
+import { ImageStorageHold, type ImageStorageStatus } from "./image-storage.ts";
 import type { Retention } from "./image-retention.ts";
 import {
   completionSignal,
@@ -86,6 +87,8 @@ export type HostPorts = {
   // Builds the sandbox image over the repository's toolchain Dockerfile, with
   // the host's image builder, and resolves its tag.
   buildImage(dockerfile: string): Promise<string>;
+  // Private diagnostics of the last storage admission decision.
+  imageStorageStatus?(): ImageStorageStatus | undefined;
   // Removes the factory's obsolete sandbox images beyond the host's
   // allowance, keeping every `current` and `running` image and every image a
   // container uses. Rejects, removing nothing, when its inventory fails.
@@ -295,7 +298,11 @@ export function createHost(
             await readFile(dockerfile, "utf8"),
           );
         } catch (error) {
-          pause(`its sandbox image did not build: ${error}`);
+          pause(
+            error instanceof ImageStorageHold
+              ? error.message
+              : `its sandbox image did not build: ${error}`,
+          );
         }
     } catch (error) {
       pause(`its clone did not update: ${error}`);
@@ -980,10 +987,21 @@ export function createHost(
     }
     const providers = providerStatuses();
     events.commit(providers);
+    const imageStorage = ports.imageStorageStatus?.();
     try {
       await writeStatus(
         join(configuration.stateDirectory, "status.json"),
-        hostStatus(snapshot.now, passes, decisions, providers),
+        hostStatus(
+          snapshot.now,
+          passes,
+          decisions,
+          providers,
+          imageStorage
+            ? (JSON.parse(
+                redactor.redact(JSON.stringify(imageStorage)),
+              ) as ImageStorageStatus)
+            : undefined,
+        ),
       );
     } catch (error) {
       report(`the status file was not written: ${error}`);

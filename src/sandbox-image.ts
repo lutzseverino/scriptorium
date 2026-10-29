@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ImageStorage } from "./image-storage.ts";
+
 export const AGENT_LAYER_VERSION = "4";
 
 // The factory layer's label, which every sandbox container carries from its
@@ -52,6 +54,7 @@ export async function buildSandboxImage(
     gid: number;
     // The daemon's own builder unless the host opts into the factory builder.
     builder?: ImageBuilder;
+    storage?: ImageStorage;
   },
   run: DockerRun = docker,
 ): Promise<string> {
@@ -75,35 +78,47 @@ export async function buildSandboxImage(
   ]).catch(() => "");
   if (existing.trim() === identity) return image;
 
-  const toolchain = `${image}-toolchain`;
-  const layer = await readFile(
-    new URL("./agent-layer.Dockerfile", import.meta.url),
-    "utf8",
-  );
-  if (builder === "factory")
-    await bake({ dockerfile, layer, uid, gid, toolchain, image }, run);
-  else {
-    // The daemon's own builder reads the toolchain's base image and the
-    // toolchain image from the daemon, with its registry mirrors. Each
-    // Dockerfile goes on stdin, so neither build has a context.
-    await run(["build", "--tag", toolchain, "-"], { input: dockerfile });
-    await run(
-      [
-        "build",
-        "--tag",
-        image,
-        "--build-arg",
-        `TOOLCHAIN_IMAGE=${toolchain}`,
-        "--build-arg",
-        `AGENT_UID=${uid}`,
-        "--build-arg",
-        `AGENT_GID=${gid}`,
-        "-",
-      ],
-      { input: layer },
+  const prepare = async (check: () => Promise<void>) => {
+    const toolchain = `${image}-toolchain`;
+    const layer = await readFile(
+      new URL("./agent-layer.Dockerfile", import.meta.url),
+      "utf8",
     );
-  }
-  return image;
+    if (builder === "factory")
+      await bake(
+        { dockerfile, layer, uid, gid, toolchain, image },
+        run,
+        check,
+        options.storage?.enabled ?? false,
+      );
+    else {
+      // The daemon's own builder reads the toolchain's base image and the
+      // toolchain image from the daemon, with its registry mirrors. Each
+      // Dockerfile goes on stdin, so neither build has a context.
+      await check();
+      await run(["build", "--tag", toolchain, "-"], { input: dockerfile });
+      await check();
+      await run(
+        [
+          "build",
+          "--tag",
+          image,
+          "--build-arg",
+          `TOOLCHAIN_IMAGE=${toolchain}`,
+          "--build-arg",
+          `AGENT_UID=${uid}`,
+          "--build-arg",
+          `AGENT_GID=${gid}`,
+          "-",
+        ],
+        { input: layer },
+      );
+    }
+    return image;
+  };
+  return options.storage
+    ? options.storage.run(prepare)
+    : prepare(async () => {});
 }
 
 // Builds both images of a pair in the factory builder, creating it unless it
@@ -125,9 +140,12 @@ async function bake(
     image: string;
   },
   run: DockerRun,
+  check: () => Promise<void>,
+  separateStages: boolean,
 ): Promise<void> {
+  await check();
   await ensureBuilder(run);
-  // One bake builds both images in the factory's builder and loads them into
+  // Bake builds both images in the factory's builder and loads them into
   // the daemon. The agent layer starts from the toolchain build's result, not
   // from a daemon image, which the builder can't see. The builds' context is
   // an empty directory. The Dockerfiles are files, since bake would read
@@ -161,20 +179,27 @@ async function bake(
         },
       }),
     );
-    await run(
-      [
-        "buildx",
-        "bake",
-        "--builder",
-        sandboxBuilder,
-        "--file",
-        "bake.json",
-        "--load",
-        "toolchain",
-        "agent",
-      ],
-      { cwd: work },
-    );
+    // With admission enabled, load the toolchain first, then obtain a fresh
+    // admission for the agent build. The second bake resolves target:toolchain
+    // in the same builder; it never needs a daemon-only base image.
+    for (const targets of separateStages
+      ? [["toolchain"], ["agent"]]
+      : [["toolchain", "agent"]]) {
+      await check();
+      await run(
+        [
+          "buildx",
+          "bake",
+          "--builder",
+          sandboxBuilder,
+          "--file",
+          "bake.json",
+          "--load",
+          ...targets,
+        ],
+        { cwd: work },
+      );
+    }
   } finally {
     await rm(work, { recursive: true, force: true });
   }
