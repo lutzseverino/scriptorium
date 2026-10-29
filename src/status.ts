@@ -2,6 +2,7 @@
 // operator's monitoring. The factory posts no status to GitHub.
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { ImageStorageStatus } from "./image-storage.ts";
 import type { Decision } from "./factory.ts";
 import type { ProviderStatus } from "./events.ts";
 
@@ -18,6 +19,7 @@ export type Status = {
   updatedAt: string;
   repositories: RepositoryStatus[];
   providers: ProviderStatus[];
+  imageStorage?: ImageStorageStatus;
 };
 
 // Each repository in the order given, with its pause reason or null, and
@@ -27,10 +29,12 @@ export function hostStatus(
   repositories: { name: string; paused: string | null }[],
   decisions: Decision[],
   providers: ProviderStatus[] = [],
+  imageStorage?: ImageStorageStatus,
 ): Status {
   return {
     updatedAt,
     providers,
+    ...(imageStorage && { imageStorage }),
     repositories: repositories.map(({ name, paused }) => ({
       repository: name,
       ...(paused === null

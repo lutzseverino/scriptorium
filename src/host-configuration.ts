@@ -32,6 +32,7 @@ export type HostConfiguration = {
   // into the factory builder and the pruning of its cache.
   imageBuilder: ImageBuilder;
   imageRetention: ImageRetention;
+  imageStorage?: ImageStoragePolicy;
 };
 
 // How many obsolete sandbox image pairs the host keeps beyond every
@@ -41,6 +42,16 @@ export type HostConfiguration = {
 export type ImageRetention = {
   obsoletePairs: number;
   cacheMinimumAgeHours: number;
+  cacheMaximumBytes?: number;
+};
+
+// The operator identifies every local filesystem backing Docker's actual
+// content/snapshot stores, plus the dedicated builder's cache when selected.
+export type ImageStoragePolicy = {
+  storePaths: string[];
+  cachePath?: string;
+  reserveBytes: number;
+  resumeBytes: number;
 };
 
 // What each provider's usage does to its work: at or above `drainThreshold`
@@ -182,6 +193,9 @@ function withDefaults(
     imageRetention: {
       obsoletePairs: retention.obsoletePairs ?? 3,
       cacheMinimumAgeHours: retention.cacheMinimumAgeHours ?? 24,
+      ...(retention.cacheMaximumBytes !== undefined && {
+        cacheMaximumBytes: retention.cacheMaximumBytes,
+      }),
     },
   };
 }
@@ -291,23 +305,37 @@ function hostConfigurationProblems(value: unknown): string[] {
         (builder) => (imageBuilders as readonly string[]).includes(builder),
         `is not one of ${imageBuilders.join(", ")}`,
       ),
+      imageStorage: object(
+        {
+          storePaths: list(storePath, {
+            nonEmpty: true,
+            unique: (path) => path,
+          }),
+          cachePath: storePath,
+          reserveBytes: bytes,
+          resumeBytes: bytes,
+        },
+        ["cachePath"],
+      ),
       imageRetention: object(
         {
           obsoletePairs: number(
             (pairs) => Number.isSafeInteger(pairs) && pairs >= 0,
             "is not a whole number of image pairs",
           ),
+          cacheMaximumBytes: bytes,
           cacheMinimumAgeHours: number(
             (hours) => Number.isSafeInteger(hours) && hours > 0,
             "is not a positive whole number of hours",
           ),
         },
-        ["obsoletePairs", "cacheMinimumAgeHours"],
+        ["obsoletePairs", "cacheMinimumAgeHours", "cacheMaximumBytes"],
       ),
     },
     [
       "imageBuilder",
       "imageRetention",
+      "imageStorage",
       ...(shorthand ? ["platforms"] : ["readiness", "github"]),
     ],
   )(value, "", problems);
@@ -320,6 +348,24 @@ function hostConfigurationProblems(value: unknown): string[] {
     problems.push(
       `usage.pauseThreshold: ${pause} is below usage.drainThreshold, ${drain}`,
     );
+  const storage = (value as HostConfiguration | null)?.imageStorage;
+  if (storage && typeof storage === "object") {
+    if (
+      valid(bytes, storage.reserveBytes) &&
+      valid(bytes, storage.resumeBytes) &&
+      storage.resumeBytes <= storage.reserveBytes
+    )
+      problems.push(
+        "imageStorage.resumeBytes: must be greater than imageStorage.reserveBytes",
+      );
+    if (
+      (value as HostConfiguration).imageBuilder === "factory" &&
+      !storage.cachePath
+    )
+      problems.push(
+        "imageStorage.cachePath: is required for the factory builder",
+      );
+  }
   if (problems.length === 0) {
     const configuration = value as HostConfiguration;
     const registry = createRegistry(configuration.providers);
@@ -339,6 +385,16 @@ function authorizedRoles(platform: PlatformName): Check {
     { unique: (role) => role, nonEmpty: true },
   );
 }
+
+const bytes = number(
+  (value) => Number.isSafeInteger(value) && value > 0,
+  "is not a positive whole number of bytes",
+);
+const storePath = text(
+  (path) =>
+    isAbsolute(path) && !path.includes("\0") && !path.split("/").includes(".."),
+  "is not an absolute store path without parent traversal or NUL",
+);
 
 const percentage = number(
   (percent) => percent >= 0 && percent <= 100,
