@@ -81,6 +81,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync("state.json", "utf8"));
 let result;
+if (args.join(" ") === "repo set-default --view") process.exit(0);
 if (args[0] === "auth" && args[1] === "token") {
   process.stdout.write("synthetic-test-credential");
   process.exit(0);
