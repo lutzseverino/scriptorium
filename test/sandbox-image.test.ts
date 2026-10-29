@@ -300,7 +300,7 @@ test("an admitted factory pair builds toolchain and agent targets under separate
     },
     async (args) => {
       if (args[1] === "bake") {
-        targets.push(args.slice(8));
+        targets.push(args.slice(args.indexOf("--load") + 1));
         beforeBuild.push(observations);
       }
       return "";
