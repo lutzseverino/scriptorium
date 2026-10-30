@@ -154,6 +154,7 @@ type Pass = {
   image: string | null;
   read: Repository | null;
   configuration: FactoryConfiguration | null;
+  hasReviewPolicy: boolean;
 };
 
 export function createHost(
@@ -262,6 +263,7 @@ export function createHost(
       image: null,
       read: null,
       configuration: conventions.get(name) ?? null,
+      hasReviewPolicy: false,
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
     try {
@@ -281,6 +283,16 @@ export function createHost(
         ports.remoteUrl(name),
         configuration.gitIdentity,
       );
+      pass.hasReviewPolicy =
+        (
+          await git(clone, [
+            "ls-tree",
+            "--name-only",
+            "HEAD",
+            "--",
+            ".github/factory-review-policy.json",
+          ])
+        ).trim() === ".github/factory-review-policy.json";
       try {
         pass.configuration = readFactoryConfiguration(
           join(clone, factoryConfigurationPath),
@@ -712,6 +724,7 @@ export function createHost(
           pass.configuration!.prompt,
           registry.providers.get(run.provider)!.skillPrefix,
           issue,
+          pass.hasReviewPolicy,
           decision.retry,
           recovery,
         ),
@@ -1057,6 +1070,7 @@ export function prompt(
   template: string,
   skillPrefix: string,
   issue: number,
+  hasReviewPolicy: boolean,
   retry?: { failure: string; log: string },
   recovery?: Recovery,
 ): string {
@@ -1067,7 +1081,7 @@ export function prompt(
   );
   const guidance = [
     "Unattended execution:",
-    "This is a factory run. Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs. Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced. Use only the supplied credentials; never discover or switch identities to trigger a review.",
+    `This is a factory run.${hasReviewPolicy ? " Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs." : ""} Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced. Use only the supplied credentials; never discover or switch identities to trigger a review.`,
     "Before every delivery push, fetch origin and resolve its remote default branch again (for example, git fetch --prune origin, then git remote set-head origin --auto). Inspect the outgoing commits, including per-parent patches for merges (git log --stat --patch -m origin/HEAD..HEAD), and the change against that refreshed base (git diff origin/HEAD...HEAD). Keep both history and diff limited to the issue's work. A clean final diff can conceal reverted workflow edits or unrelated rewritten commits. When an update is needed, safely rebase or replay only the issue's own changes onto the current base. Never merge the default branch into the issue branch. Intentional workflow edits must remain visible; never discard them to bypass permissions. Revalidate a reconstructed change before publication.",
     "Preserve committed, staged, unstaged and untracked work and existing PR, review and handoff context before changing history. Continuing a branch does not require retaining unrelated history or override an owner's explicit request to reconstruct the issue's changes on the current base. If ownership is uncertain or reconstruction has conflicts, preserve the work and hand off under the repository's owner-question rules. After any permission refusal, stop with an explicit owner handoff: no second push, credential discovery or identity switch. Do not assume broader App permissions are necessary; ask the owner how to proceed.",
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
