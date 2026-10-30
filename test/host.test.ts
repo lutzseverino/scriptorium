@@ -1844,8 +1844,11 @@ test("custom prompts and retries retain the unattended execution and completion 
   for (const { options } of run.launched) {
     assert.match(options.prompt!, /ship #4/);
     assert.match(options.prompt!, /This is a factory run/);
-    assert.match(options.prompt!, /repository-owned.*review policy/);
-    assert.match(options.prompt!, /fixes, rebases, retries and resumed runs/);
+    assert.doesNotMatch(options.prompt!, /app-author review policy/);
+    assert.match(
+      options.prompt!,
+      /Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced/,
+    );
     assert.match(options.prompt!, /supplied credentials/);
     assert.match(options.prompt!, /Before every delivery push.*fetch.*origin/);
     assert.match(options.prompt!, /resolve.*remote default branch/);
@@ -1874,6 +1877,106 @@ test("custom prompts and retries retain the unattended execution and completion 
     assert.equal(options.maxIterations, 1);
   }
 });
+
+test("review policy guidance stays repository-specific through retries and recovery", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [{ number: 4 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        // Presence controls the prompt; babysit owns declaration validation.
+        ".github/factory-review-policy.json": "invalid JSON\n",
+      }),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    caps: { "claude-code": 2, codex: 2 },
+  });
+  await run.tick();
+  for (const name of ["acme/widgets", "acme/gadgets"]) {
+    git(run.clone(name), ["branch", "factory/issue-4"]);
+  }
+  for (const launch of run.launched) launch.finish();
+  await run.drain();
+  await run.tick();
+  run.interrupt();
+  for (const launch of run.launched) launch.finish();
+  await run.drain();
+  await run.restart().tick();
+
+  assert.equal(run.launched.length, 6);
+  const policy =
+    " Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs.";
+  for (let offset = 0; offset < 6; offset += 2) {
+    const pair = run.launched.slice(offset, offset + 2);
+    const withPolicy = pair.find(
+      ({ options }) => options.name === "acme/widgets#4",
+    )!.options.prompt!;
+    const withoutPolicy = pair.find(
+      ({ options }) => options.name === "acme/gadgets#4",
+    )!.options.prompt!;
+    assert.ok(withPolicy.includes(policy));
+    assert.doesNotMatch(withoutPolicy, /app-author review policy/);
+    // All other unattended-delivery instructions are identical.
+    const guidance = (text: string) =>
+      text
+        .split("\n\nUnattended execution:\n")[1]
+        .split("\nRecovery state:")[0];
+    assert.equal(
+      guidance(withPolicy).replace(policy, ""),
+      guidance(withoutPolicy),
+    );
+    if (offset > 0) {
+      assert.match(withPolicy, /First attempt failure:/);
+      assert.match(withoutPolicy, /First attempt failure:/);
+      assert.match(withPolicy, /Recovery state:/);
+      assert.match(withoutPolicy, /Recovery state:/);
+    }
+  }
+});
+
+for (const present of [false, true])
+  test(`recovery refreshes review policy presence from ${present} on the default branch`, async (t) => {
+    const policyPath = ".github/factory-review-policy.json";
+    const policy = JSON.stringify({ version: 1, author: "factory[bot]" });
+    const bare = remote(t, {
+      ...factoryFiles,
+      ...(present && { [policyPath]: policy }),
+    });
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    assert.equal(
+      run.launched[0].options.prompt!.includes("app-author review policy"),
+      present,
+    );
+    run.interrupt();
+    run.launched[0].finish();
+    await run.drain();
+    const work = join(dirname(bare), "work");
+    if (present) rmSync(join(work, policyPath));
+    else write(work, { [policyPath]: policy });
+    git(work, ["add", "."]);
+    git(work, ["commit", "--quiet", "-m", "change policy presence"]);
+    git(work, ["push", "--quiet", bare, "main"]);
+    // A leftover untracked file is not a default-branch declaration.
+    if (present) {
+      const clone = run.clone("acme/widgets");
+      git(clone, ["rm", "--quiet", policyPath]);
+      git(clone, ["commit", "--quiet", "-m", "remove local policy"]);
+      write(clone, { [policyPath]: policy });
+    }
+    await run.restart().tick();
+    assert.equal(run.launched.length, 2);
+    assert.equal(
+      run.launched[1].options.prompt!.includes("app-author review policy"),
+      !present,
+    );
+  });
 
 test("an aborted launch retains dirty recovery state across restart without publishing it", async (t) => {
   const run = host(t, {
