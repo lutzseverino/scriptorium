@@ -20,7 +20,18 @@ includes them. Restricting deletion keeps a published tag permanent. Verify
 that the owner can create a matching tag and no other actor can create,
 update or delete one. This ruleset is a setup requirement, not something a release agent
 may bypass. A factory tag selects code the host runs, so only the owner's
-account creates and pushes it.
+account creates and pushes it, including when the orchestrating agent acts
+on the owner's behalf under the release delegation below.
+
+## Release delegation
+
+The owner grants the orchestrating agent standing delegation to create and
+push tags and publish patch and minor Scriptorium releases on the owner's
+behalf. Each major version requires the owner's explicit go-ahead before
+tagging or publication. Delegated work uses the already authorized owner's
+account; this grants no tag-ruleset bypass to a different account or GitHub
+App. All validation, reviewed-tree, publication and verification requirements
+below apply to delegated releases.
 
 ## Choose the version
 
@@ -51,8 +62,9 @@ the final commit.
 
 ## Publish and verify
 
-Only the owner performs publication. In an up-to-date checkout of `main`,
-set `factory_version` to the chosen SemVer and `factory_pr` to the merged
+The owner or the orchestrating agent acting under the release delegation
+above performs publication through the owner's account. In an up-to-date
+checkout of `main`, set `factory_version` to the chosen SemVer and `factory_pr` to the merged
 release pull request's number. Save the reviewed release notes in the task's
 scratch directory and set `factory_notes` to that file's absolute path.
 Read the reviewed head and merge commit and fetch both. Confirm that the
