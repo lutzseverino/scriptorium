@@ -3093,3 +3093,41 @@ test("relaunch model and configuration reasons remain independently actionable u
     assert.deepEqual(launches(decideFactory(input, models)), []);
   }
 });
+
+test("pending automatic and orphan retries retain all model and configuration holds", () => {
+  const models = createRegistry(
+    {
+      "claude-code": { credential: "/unused" },
+      codex: { credential: "/unused" },
+    },
+    fakePorts().ports,
+    ["claude-sonnet-5-5", "claude-opus-5-5"],
+  );
+  for (const orphan of [false, true]) {
+    const candidate = issue(1, [
+      "ready-for-agent",
+      "factory:running",
+      "model:gpt-unlisted",
+    ]);
+    const repo = repository(widgets, [candidate], {
+      paused: "invalid configuration",
+      ...(orphan ? { claims: [{ issue: 1, pullRequest: "none" }] } : {}),
+    });
+    const input = snapshot({
+      repositories: [repo],
+      runs: orphan
+        ? []
+        : [run(1, { ended: { timedOut: false, pullRequest: "none" } })],
+    });
+    const held = () =>
+      decideFactory(input, models)
+        .flatMap((decision) =>
+          decision.kind === "skip" && decision.hold ? [decision.hold] : [],
+        )
+        .sort();
+    assert.deepEqual(held(), ["model-label", "repository-configuration"]);
+    candidate.labels = ["ready-for-agent", "factory:running"];
+    assert.deepEqual(held(), ["repository-configuration"]);
+    assert.deepEqual(launches(decideFactory(input, models)), []);
+  }
+});

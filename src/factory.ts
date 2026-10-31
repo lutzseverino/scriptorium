@@ -443,10 +443,18 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
               previous.ended.mergeCandidate))) ||
         (claim?.mergeCandidate && !claim.inputResume),
       );
+      const pendingLaunch =
+        continuing ||
+        Boolean(
+          (previous?.ended &&
+            "pullRequest" in previous.ended &&
+            previous.ended.pullRequest !== "open") ||
+          (claim && claim.pullRequest !== "open"),
+        );
       if (
         (!continuing && !issue.labels.includes(labels.ready)) ||
         [
-          ...(!continuing ? [labels.running, labels.paused] : []),
+          ...(!pendingLaunch ? [labels.running, labels.paused] : []),
           labels.failed,
           labels.needsInput,
           labels.skip,
