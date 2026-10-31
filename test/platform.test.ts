@@ -929,17 +929,17 @@ test("a run's pull request is its repository's own, opened since its first attem
       ],
       [pull(2, "OPEN")],
     ),
-    { state: "open", mergeCandidate: candidate },
+    { state: "open", ownedPullRequests: [2], mergeCandidate: candidate },
     "count owned PRs, not all closing candidates",
   );
   assert.deepEqual(
     await observed([pull(2, "OPEN")], [pull(2, "OPEN")]),
-    { state: "open", mergeCandidate: candidate },
+    { state: "open", ownedPullRequests: [2], mergeCandidate: candidate },
     "deduplicate candidates",
   );
   assert.deepEqual(
     await observed([pull(2, "OPEN", { headRefName: "other" })], []),
-    { state: "open", mergeCandidate: candidate },
+    { state: "open", ownedPullRequests: [2], mergeCandidate: candidate },
     "verified factory author qualifies",
   );
   for (const author of ["person", "arbitrary[bot]"])
@@ -953,11 +953,11 @@ test("a run's pull request is its repository's own, opened since its first attem
         ],
         [],
       ),
-      { state: "open" },
+      { state: "open", ownedPullRequests: [] },
     );
   assert.deepEqual(
     await observed([], [pull(2, "OPEN"), pull(3, "OPEN")]),
-    { state: "open" },
+    { state: "open", ownedPullRequests: [2, 3] },
     "two owned open PRs are ambiguous",
   );
   assert.deepEqual(
@@ -971,24 +971,26 @@ test("a run's pull request is its repository's own, opened since its first attem
       [pull(2, "OPEN")],
       403,
     ),
-    { state: "open", mergeCandidate: candidate },
+    { state: "open", ownedPullRequests: [2], mergeCandidate: candidate },
     "installation-token viewer failure preserves branch ownership",
   );
   assert.deepEqual(
     await observed([pull(2, "OPEN", { headRefName: "other" })], [], 403),
-    { state: "open" },
+    { state: "open", ownedPullRequests: [] },
     "unreadable identity grants no author ownership",
   );
   assert.deepEqual(await observed([pull(2, "MERGED")], []), {
     state: "merged",
+    ownedPullRequests: [],
     closesIssue: true,
   });
   assert.deepEqual(await observed([], [pull(2, "MERGED")]), {
     state: "merged",
+    ownedPullRequests: [],
   });
   assert.deepEqual(
     await observed([pull(2, "MERGED", { isCrossRepository: true })], []),
-    { state: "none" },
+    { state: "none", ownedPullRequests: [] },
   );
   const context = await repositoryPlatform(
     answers([], [pull(2, "CLOSED")]).connection,
@@ -1151,5 +1153,80 @@ test("closed-issue cleanup preserves unrelated labels and can resume after any f
       await recovered.releaseClosed(4);
       assert.deepEqual(issueLabels, unrelated);
     }
+  }
+});
+
+test("release holds read all open labelled PR numbers through authenticated pages", async () => {
+  const { connection, requests } = github((request, body) => {
+    assert.equal(request, "FactoryReleaseHold");
+    assert.deepEqual(body.variables, {
+      owner: "acme",
+      name: "widgets",
+      label: "release-hold",
+      after: requests.length === 1 ? null : "next",
+    });
+    assert.match(body.query, /states: OPEN/);
+    assert.match(body.query, /labels: \[\$label\]/);
+    return {
+      status: 200,
+      data: {
+        data: {
+          repository: {
+            pullRequests: {
+              totalCount: 2,
+              nodes: [{ number: requests.length === 1 ? 40 : 41 }],
+              pageInfo: {
+                hasNextPage: requests.length === 1,
+                endCursor: requests.length === 1 ? "next" : null,
+              },
+            },
+          },
+        },
+      },
+    };
+  });
+  assert.deepEqual(
+    await repositoryPlatform(connection, labels).readReleaseHold(),
+    [],
+  );
+  assert.equal(requests.length, 0);
+  assert.deepEqual(
+    await repositoryPlatform(connection, {
+      ...labels,
+      releaseHold: "release-hold",
+    }).readReleaseHold(),
+    [40, 41],
+  );
+});
+
+test("unreadable or incomplete release holds never imply no hold", async () => {
+  for (const response of [
+    { status: 503, data: {} },
+    { status: 200, data: { errors: [{ message: "unavailable" }] } },
+    { status: 200, data: { data: { repository: null } } },
+    ...[
+      { totalCount: 1, nodes: [], pageInfo: { hasNextPage: false } },
+      {
+        totalCount: 1,
+        nodes: [{ number: "40" }],
+        pageInfo: { hasNextPage: false },
+      },
+      {
+        totalCount: 1,
+        nodes: [{ number: 40 }],
+        pageInfo: { hasNextPage: true, endCursor: null },
+      },
+    ].map((pullRequests) => ({
+      status: 200,
+      data: { data: { repository: { pullRequests } } },
+    })),
+  ]) {
+    const { connection } = github(() => response);
+    await assert.rejects(
+      repositoryPlatform(connection, {
+        ...labels,
+        releaseHold: "release-hold",
+      }).readReleaseHold(),
+    );
   }
 });

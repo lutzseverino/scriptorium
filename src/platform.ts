@@ -192,6 +192,75 @@ export function repositoryPlatform(
   }
 
   return {
+    // Postern has no label-filtered PR listing port. Keep this GitHub fact
+    // on its authenticated transport, including every page of the labelled set.
+    async readReleaseHold(): Promise<number[]> {
+      if (labels.releaseHold === undefined) return [];
+      const [owner, name] = path.split("/");
+      const numbers = new Set<number>();
+      let after: string | null = null;
+      const cursors = new Set<string>();
+      for (;;) {
+        const response = await access.request({
+          method: "POST",
+          path: "/graphql",
+          body: {
+            query: `query FactoryReleaseHold($owner: String!, $name: String!, $label: String!, $after: String) {
+              repository(owner: $owner, name: $name) {
+                pullRequests(first: 100, after: $after, states: OPEN, labels: [$label]) {
+                  totalCount
+                  nodes { number }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }`,
+            variables: { owner, name, label: labels.releaseHold, after },
+          },
+        });
+        const result = response.data as {
+          errors?: unknown;
+          data?: {
+            repository?: {
+              pullRequests?: {
+                totalCount?: number;
+                nodes?: { number?: number }[];
+                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+              };
+            };
+          };
+        } | null;
+        const page = result?.data?.repository?.pullRequests;
+        const invalid = () =>
+          new PlatformError(
+            "invalidResponse",
+            "Release hold could not be read completely",
+          );
+        if (
+          result?.errors ||
+          !page ||
+          !Number.isInteger(page.totalCount) ||
+          page.totalCount! < 0 ||
+          !Array.isArray(page.nodes) ||
+          typeof page.pageInfo?.hasNextPage !== "boolean"
+        )
+          throw invalid();
+        for (const node of page.nodes) {
+          if (!Number.isInteger(node?.number) || node.number! <= 0)
+            throw invalid();
+          numbers.add(node.number!);
+        }
+        if (!page.pageInfo.hasNextPage) {
+          if (numbers.size !== page.totalCount) throw invalid();
+          return [...numbers].sort((a, b) => a - b);
+        }
+        const cursor = page.pageInfo.endCursor;
+        if (typeof cursor !== "string" || !cursor || cursors.has(cursor))
+          throw invalid();
+        cursors.add(cursor);
+        after = cursor;
+      }
+    },
+
     // An existing label is left as it is.
     async createStateLabels(): Promise<void> {
       for (const [role, color] of [
@@ -291,6 +360,7 @@ export function repositoryPlatform(
       state: PullRequestState;
       closesIssue?: true;
       pullRequests: InputResume["pullRequests"];
+      ownedPullRequests: number[];
       mergeCandidate?: MergeRelaunch;
     }> {
       const { found, closing } = await candidates(number, since);
@@ -312,6 +382,7 @@ export function repositoryPlatform(
       const pr = owned.length === 1 ? owned[0] : undefined;
       return {
         state: state(found),
+        ownedPullRequests: owned.map((pr) => pr.number),
         pullRequests: found
           .filter((pr) => typeof pr.number === "number")
           .map(({ number, headBranch, state, createdAt }) => ({

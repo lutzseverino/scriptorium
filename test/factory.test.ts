@@ -3131,3 +3131,83 @@ test("pending automatic and orphan retries retain all model and configuration ho
     assert.deepEqual(launches(decideFactory(input, models)), []);
   }
 });
+
+test("release holds gate only merge relaunches in their own repository and exclude the PR itself", () => {
+  const target = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  for (const hold of [[80, 81], null, [40], []]) {
+    const repo = repository(widgets, [issue(4, claimed)], {
+      releaseHold: hold,
+      claims: [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
+    });
+    const decisions = decide({
+      repositories: [
+        repo,
+        repository("acme/gadgets", [issue(5)]),
+        repository("acme/other", [issue(6, claimed)], {
+          claims: [{ issue: 6, pullRequest: "open", mergeCandidate: target }],
+        }),
+      ],
+    });
+    assert.equal(
+      launches(decisions).some((d) => d.issue === 4),
+      hold !== null && !hold.some((n) => n !== 40),
+    );
+    assert.ok(launches(decisions).some((d) => d.issue === 5));
+    assert.ok(launches(decisions).some((d) => d.issue === 6));
+    if (hold === null || hold.includes(80))
+      assert.match(skipOf(decisions, 4)!, /^relaunch waits: release hold/);
+  }
+});
+
+test("a release hold permits pickup, retries, interrupted and paused relaunches and needs-input resumes", () => {
+  const target = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const scenarios: { runs?: Run[]; claims?: Claim[]; labels?: string[] }[] = [
+    {},
+    { runs: [run(4, { ended: none })], labels: claimed },
+    {
+      runs: [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
+      labels: claimed,
+    },
+    {
+      runs: [
+        run(4, {
+          ended: {
+            paused: {
+              cause: "usage limit",
+              reset: null,
+              at: "2026-10-08T00:00:00Z",
+              until: "2026-10-08T01:00:00Z",
+            },
+            commented: true,
+          },
+        }),
+      ],
+      labels: ["factory:paused"],
+    },
+    {
+      claims: [
+        { issue: 4, pullRequest: "open", inputResume: { pullRequests: [] } },
+      ],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const repo = repository(widgets, [issue(4, scenario.labels)], {
+      releaseHold: [80],
+      claims: scenario.claims ?? [],
+    });
+    assert.equal(
+      launches(decide({ repositories: [repo], runs: scenario.runs })).length,
+      1,
+    );
+  }
+});

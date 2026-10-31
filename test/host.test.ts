@@ -183,6 +183,7 @@ function fakePlatform(
   const commentEdits = new Map<string, string[]>();
   const labels = new Map<string, Set<string>>();
   const viewers: Record<string, Account | null | Error> = {};
+  const releaseHolds: Record<string, number[] | Error> = {};
 
   // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
@@ -449,6 +450,26 @@ function fakePlatform(
             query: string;
             variables: { number: number };
           };
+          if (body.query.includes("FactoryReleaseHold")) {
+            await request("releaseHold");
+            const numbers = releaseHolds[repository] ?? [];
+            if (numbers instanceof Error) throw numbers;
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  repository: {
+                    pullRequests: {
+                      totalCount: numbers.length,
+                      nodes: numbers.map((number) => ({ number })),
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            };
+          }
           if (body.query.includes("FactoryCommentEdits")) {
             const id = (body.variables as unknown as { id: string }).id;
             const comment = state[repository]
@@ -507,7 +528,16 @@ function fakePlatform(
     };
   }
 
-  return { connect, find, refused, failedRemovals, calls, labels, viewers };
+  return {
+    connect,
+    find,
+    refused,
+    failedRemovals,
+    calls,
+    labels,
+    viewers,
+    releaseHolds,
+  };
 }
 
 // Sandcastle that records each run, with the token the sandbox would read,
@@ -6207,4 +6237,396 @@ test("concurrent readiness, parent, model and configuration holds resolve only w
   await run.tick();
   assert.equal(issue.comments.length, 4);
   for (const comment of issue.comments) assert.match(comment, /Resolved/);
+});
+
+const releaseHoldFiles = {
+  ...factoryFiles,
+  ".factory/config.json": JSON.stringify({
+    ...conventions,
+    labels: { ...conventions.labels, releaseHold: "factory:release-hold" },
+  }),
+};
+
+test("a release-held current PR resumes once after the last hold clears across restart", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  run.github.releaseHolds["acme/widgets"] = [80, 81];
+  await run.tick();
+  const prompt = run.launched[0].options.prompt!;
+  assert.match(prompt, /factory:release-hold/);
+  assert.match(prompt, /before any merge/);
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests.push(publishedPR(bare));
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const hold = () =>
+    issue.comments.filter((c) => c.includes("scriptorium:hold:release-hold"));
+  assert.equal(hold().length, 1);
+  assert.match(hold()[0], /#80, #81/);
+  assert.match(hold()[0], /last labelled PR closes or loses the label/);
+  const restarted = run.restart();
+  run.github.releaseHolds["acme/widgets"] = [81];
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(hold().length, 1);
+  assert.doesNotMatch(hold()[0], /#80/);
+  run.github.releaseHolds["acme/widgets"] = [];
+  await restarted.tick();
+  assert.equal(
+    run.launched.length,
+    2,
+    "a current PR gets its deferred merge relaunch",
+  );
+  assert.match(hold()[0], /Resolved/);
+  run.launched[1].finish();
+  await restarted.drain();
+  const again = run.restart();
+  await again.tick();
+  await again.tick();
+  assert.equal(
+    run.launched.length,
+    2,
+    "the resumed head is consumed exactly once",
+  );
+  assert.equal(hold().length, 1);
+});
+
+for (const behind of [false, true])
+  test(`a hold observed mid-run survives a clear before settlement and restart, behind: ${behind}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    run.github.releaseHolds["acme/widgets"] = [80];
+    await run.tick();
+    run.github.releaseHolds["acme/widgets"] = [];
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    issue.branchPullRequests.push(publishedPR(bare));
+    if (behind) advanceDefault(bare);
+    run.launched[0].finish();
+    await run.drain();
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, 2);
+    await restarted.tick();
+    assert.equal(run.launched.length, 2, "one relaunch even when behind");
+    run.launched[1].finish();
+    await restarted.drain();
+    await run.restart().tick();
+    assert.equal(run.launched.length, 2, "the resumed head stays consumed");
+  });
+
+for (const unreadable of [false, true])
+  test(`a merge relaunch stopped by a release hold leaves its head unconsumed, unreadable: ${unreadable}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const pr = publishedPR(bare);
+    advanceDefault(bare);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    run.github.releaseHolds["acme/widgets"] = unreadable
+      ? new PlatformError("invalidResponse", "release read unavailable")
+      : [80];
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, 1);
+    if (unreadable) {
+      assert.match(run.reports.join("\n"), /release hold read failed/);
+      const comments = run.github.find("acme/widgets", 4).comments.join("\n");
+      assert.match(comments, /release hold state is unreadable/);
+      assert.doesNotMatch(comments, /#80/);
+    }
+    run.github.releaseHolds["acme/widgets"] = [];
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "the same head gets its deferred merge attempt",
+    );
+    run.launched[1].finish();
+    await restarted.drain();
+    await run.restart().tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "an unheld merge attempt consumes the head",
+    );
+  });
+
+for (const scenario of [
+  "needs input",
+  "failed",
+  "running",
+  "two owned PRs",
+  "another base",
+  "human closing reference",
+  "skip",
+  "model",
+  "cap",
+  "provider",
+  "repository pause",
+])
+  test(`release-held resumption retains the eligibility gate: ${scenario}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+      configuration: {
+        usage: {
+          drainThreshold: 80,
+          pauseThreshold: 95,
+          afterDrain: "auto-resume",
+        },
+      },
+    });
+    run.github.releaseHolds["acme/widgets"] = [80];
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr);
+    if (scenario === "running") {
+      run.github.releaseHolds["acme/widgets"] = [];
+      await run.tick();
+      assert.equal(run.launched.length, 1);
+      return;
+    }
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    run.github.releaseHolds["acme/widgets"] = [];
+    switch (scenario) {
+      case "needs input":
+        issue.labels.push("factory:needs-input");
+        break;
+      case "failed":
+        issue.labels.push("factory:failed");
+        break;
+      case "two owned PRs":
+        issue.branchPullRequests.push({ ...pr, number: 41 });
+        break;
+      case "another base":
+        pr.baseBranch = "other";
+        break;
+      case "human closing reference":
+        issue.branchPullRequests = [];
+        issue.pullRequests.push({
+          ...pr,
+          headBranch: "human-work",
+          author: { login: "human", bot: false },
+        });
+        break;
+      case "skip":
+      case "repository pause": {
+        const work = join(dirname(bare), "work");
+        write(work, {
+          ".factory/config.json":
+            scenario === "repository pause"
+              ? "{}"
+              : JSON.stringify({
+                  ...conventions,
+                  labels: {
+                    ...conventions.labels,
+                    releaseHold: "factory:release-hold",
+                    skip: "owner:delivery",
+                  },
+                }),
+        });
+        git(work, ["add", "."]);
+        git(work, ["commit", "--quiet", "-m", "edit configuration"]);
+        git(work, ["push", "--quiet", bare, "main"]);
+        if (scenario === "skip") issue.labels.push("owner:delivery");
+        break;
+      }
+      case "model":
+        issue.labels.push("model:unknown");
+        break;
+      case "cap":
+        run.configuration.providers["claude-code"]!.cap = 0;
+        break;
+      case "provider":
+        run.usage["claude-code"] = 95;
+        break;
+    }
+    await run.restart().tick();
+    assert.equal(run.launched.length, 1, scenario);
+  });
+
+test("awaiting-merge PRs that ended before a hold do not acquire release-held resumption", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  run.github.find("acme/widgets", 4).branchPullRequests.push(publishedPR(bare));
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  run.github.releaseHolds["acme/widgets"] = [80];
+  const restarted = run.restart();
+  await restarted.tick();
+  run.github.releaseHolds["acme/widgets"] = [];
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+});
+
+test("a release PR does not hold itself while another labelled PR still holds it", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const pr = publishedPR(bare);
+  advanceDefault(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  run.github.releaseHolds["acme/widgets"] = [40, 80];
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  const comment = run.github
+    .find("acme/widgets", 4)
+    .comments.find((c) => c.includes("scriptorium:hold:release-hold"));
+  assert.match(comment!, /#80/);
+  assert.doesNotMatch(comment!, /#40/);
+  run.github.releaseHolds["acme/widgets"] = [40];
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+});
+
+test("an unreadable settlement holds a current implementation PR until a successful clear read", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  run.github.find("acme/widgets", 4).branchPullRequests.push(publishedPR(bare));
+  run.launched[0].finish();
+  await run.drain();
+  run.github.releaseHolds["acme/widgets"] = new PlatformError(
+    "invalidResponse",
+    "unreadable",
+  );
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  run.github.releaseHolds["acme/widgets"] = [];
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+});
+
+test("a hold observed before interruption remains sticky after the same attempt resumes", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  run.github.releaseHolds["acme/widgets"] = [80];
+  await run.tick();
+  run.interrupt();
+  run.launched[0].finish();
+  await run.drain();
+  run.github.releaseHolds["acme/widgets"] = [];
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+  run.github.find("acme/widgets", 4).branchPullRequests.push(publishedPR(bare));
+  run.launched[1].finish();
+  await restarted.drain();
+  await restarted.tick();
+  assert.equal(
+    run.launched.length,
+    3,
+    "hold evidence survives the interrupted continuation",
+  );
+});
+
+for (const unreadable of [false, true])
+  test(`release-held classification survives two owned PRs at settlement, unreadable: ${unreadable}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+    run.github.releaseHolds["acme/widgets"] = unreadable
+      ? new PlatformError("invalidResponse", "unreadable")
+      : [80];
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.equal(run.launched.length, 1, "multiple owned PRs prevent launch");
+    const restarted = run.restart();
+    issue.branchPullRequests[1].state = "closed";
+    run.github.releaseHolds["acme/widgets"] = [];
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "the remaining current PR resumes after eligibility returns",
+    );
+    run.launched[1].finish();
+    await restarted.drain();
+    await run.restart().tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "resumption still consumes the head once",
+    );
+  });
+
+test("closed historical held PRs do not keep the surviving release PR's hold comment active", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  const pr = publishedPR(bare);
+  issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+  run.github.releaseHolds["acme/widgets"] = [80];
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  const hold = () =>
+    issue.comments.find((c) => c.includes("scriptorium:hold:release-hold"));
+  assert.match(hold()!, /#80/);
+  issue.branchPullRequests[1].state = "closed";
+  run.github.releaseHolds["acme/widgets"] = [40];
+  run.configuration.providers["claude-code"]!.cap = 0;
+  await run.restart().tick();
+  assert.equal(
+    run.launched.length,
+    1,
+    "cap keeps the current held record without a new run",
+  );
+  assert.match(hold()!, /Resolved/, "a release PR never holds its own merge");
 });

@@ -8,7 +8,7 @@ defaults. Optional comment templates default to the factory's own wording; see
 
 ## Schema
 
-The fields in this example are required. `labels.skip`, `comments` and its
+The fields in this example are required. `labels.skip`, `labels.releaseHold`, `comments` and its
 individual entries are optional. Unknown fields at any level, malformed
 values and versions other than numeric `1` are invalid.
 
@@ -27,25 +27,26 @@ values and versions other than numeric `1` are invalid.
 }
 ```
 
-| Field               | Value                                                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`           | Numeric `1`, the factory configuration schema version.                                                                                          |
-| `labels.ready`      | The repository's ready label. The repository creates it; the factory never creates, adds or removes it.                                         |
-| `labels.running`    | The label the factory adds when it claims an issue and removes when it releases, pauses or fails the claim.                                     |
-| `labels.failed`     | The label the factory adds after a final failure. Remove it to allow another run.                                                               |
-| `labels.needsInput` | The label an agent adds when it needs an answer. After answering, remove it to allow a fresh first attempt.                                     |
-| `labels.paused`     | The label the factory swaps in for the running label when it pauses a run: the factory paused the run and resumes it by itself; leave it alone. |
-| `labels.skip`       | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
-| `modelLabelPrefix`  | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
-| `prompt`            | A string containing both `{skillPrefix}` and `{issue}`. Every occurrence expands to the provider's skill prefix and the issue number.           |
-| `comments`          | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
+| Field                | Value                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`            | Numeric `1`, the factory configuration schema version.                                                                                          |
+| `labels.ready`       | The repository's ready label. The repository creates it; the factory never creates, adds or removes it.                                         |
+| `labels.running`     | The label the factory adds when it claims an issue and removes when it releases, pauses or fails the claim.                                     |
+| `labels.failed`      | The label the factory adds after a final failure. Remove it to allow another run.                                                               |
+| `labels.needsInput`  | The label an agent adds when it needs an answer. After answering, remove it to allow a fresh first attempt.                                     |
+| `labels.paused`      | The label the factory swaps in for the running label when it pauses a run: the factory paused the run and resumes it by itself; leave it alone. |
+| `labels.skip`        | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
+| `labels.releaseHold` | Optional repository-owned label on open release PRs that holds merges in this repository. The factory never creates or changes it.              |
+| `modelLabelPrefix`   | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
+| `prompt`             | A string containing both `{skillPrefix}` and `{issue}`. Every occurrence expands to the provider's skill prefix and the issue number.           |
+| `comments`           | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
 
 Label names and the model label prefix must be non-empty strings without
 leading or trailing whitespace. All configured label names, including the
-optional skip label, must be distinct, ignoring case, so a state label can
+optional skip and release-hold labels, must be distinct, ignoring case, so a state label can
 never write readiness or the skip label. The factory creates
 or updates the four state labels (running, failed, needs input and paused) with
-its state descriptions and colors on every pass, leaving the ready and skip
+its state descriptions and colors on every pass, leaving the ready, skip and release-hold
 labels to the repository.
 
 When `labels.skip` is configured, a ready issue carrying that label is not
@@ -56,6 +57,40 @@ status and logs. Removing the skip label returns the issue to the frontier on
 the next pass under the usual rules. Adding it to an existing run does not
 stop or change that run, its retry, or its resumption after a pause. Omitting
 `labels.skip` leaves pickup unchanged.
+
+When `labels.releaseHold` is set, every pass reads the numbers of open PRs
+carrying that label through Postern's authenticated GraphQL transport. Closed
+and merged PRs do not hold, and a labelled PR never holds itself. For example,
+`"releaseHold": "factory:release-hold"` holds merge relaunches while another
+open PR carries `factory:release-hold`; an unreadable hold also makes merge
+relaunches wait for a successful read. Other repositories continue normally.
+Omitting the key leaves behavior unchanged and keeps configuration version `1`.
+
+This holds merges only. Pickup, retries, interrupted and paused relaunches,
+and needs-input resumes still proceed under their usual gates. Every run's
+prompt names the label and directs the agent to check for another open labelled
+PR before any merge. While held, it finishes implementation, validation and
+review, leaves its PR open, and ends its run. The prompt alone cannot enforce
+a release PR opened mid-run: installed babysit's merge check from
+[Repo Canon #742](https://github.com/lutzseverino/repo-canon/issues/742) supplies
+that guard and returns its release-hold exit without merging. That companion
+change is required for the mid-run guard; this host change does not install it.
+
+A run remembers a hold observed during its execution across passes and
+restarts, even if the hold clears before settlement. An unreadable hold at
+settlement conservatively marks its open run-owned PR release-held too. Once a
+successful read finds no other labelled PR, that PR gets one merge relaunch,
+even when current with the default branch, under every other merge-relaunch
+eligibility and launch gate. A merge relaunch ended by a hold leaves its head
+unconsumed. PRs awaiting merge before the hold acquire no release-held mark;
+ordinary stale-base recovery still handles them. See
+[merge relaunches](host.md#merge-relaunches) for ownership and handoff rules.
+
+Each release-held issue, or issue whose merge relaunch waits for a hold, has
+one release-hold comment. It names the other labelled PRs, updates in place as
+the set changes, and is marked resolved when the last one closes or loses the
+label. An unreadable set is reported as unreadable, without inventing PR
+numbers. Comments remain single across passes and restarts.
 
 The state labels say what a person must do. Running means the factory is
 working on the issue. Failed means it is stopped until a person acts, whether

@@ -32,6 +32,7 @@ import {
 } from "./factory-configuration.ts";
 import {
   decideFactory,
+  releaseHoldReason,
   type Claim,
   type Decision,
   type Issue,
@@ -119,6 +120,11 @@ type HostRun = Run & {
   awaitingMergeNotified?: true;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
+  // Labelled PRs observed during this run, retained even after the hold clears.
+  releaseHoldObserved?: number[];
+  releaseHoldSettled?: true;
+  // Run-owned PRs whose merges this run deferred, independent of eligibility.
+  releaseHeld?: number[];
   launchResult?: LaunchResult;
   recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
@@ -159,6 +165,8 @@ type Pass = {
   read: Repository | null;
   configuration: FactoryConfiguration | null;
   hasReviewPolicy: boolean;
+  releaseHold?: number[] | null;
+  releaseHeld: Map<number, number[]>;
 };
 
 export function createHost(
@@ -268,6 +276,7 @@ export function createHost(
       read: null,
       configuration: conventions.get(name) ?? null,
       hasReviewPolicy: false,
+      releaseHeld: new Map(),
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
     try {
@@ -341,6 +350,26 @@ export function createHost(
       if (pass.paused === null)
         pause(`its state labels could not be created: ${error}`);
     }
+    if (pass.configuration.labels.releaseHold !== undefined) {
+      try {
+        pass.releaseHold = await platform.readReleaseHold();
+      } catch (error) {
+        pass.releaseHold = null;
+        report(`${name} relaunch waits: release hold read failed: ${error}`);
+      }
+    }
+    // Persist before settlement or launch decisions: a later clear read must
+    // not erase a hold that affected a still-running attempt.
+    for (const run of runs.filter(
+      (run) => run.repository === name && !run.releaseHoldSettled,
+    )) {
+      if (pass.releaseHold?.length) {
+        run.releaseHoldObserved = [
+          ...new Set([...(run.releaseHoldObserved ?? []), ...pass.releaseHold]),
+        ];
+        record(run);
+      }
+    }
     try {
       const issues = await platform.readIssues();
       for (const run of runs.filter(
@@ -352,6 +381,32 @@ export function createHost(
           run.issue,
           run.pullRequestSince,
         );
+        if (!run.releaseHoldSettled) {
+          const held = observation.ownedPullRequests.filter(
+            (own) =>
+              pass.releaseHold === null ||
+              (run.releaseHoldObserved ?? []).some((number) => number !== own),
+          );
+          if (held.length) {
+            run.releaseHeld = held;
+            // A merge attempt stopped by a release hold did not spend its
+            // head's recovery opportunity. Other consumed heads stay bounded.
+            if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
+              run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
+                (head) => head !== mergeHead(run.mergeRelaunch!),
+              );
+          }
+          run.releaseHoldSettled = true;
+          record(run);
+        }
+        // Historical marks survive temporary ineligibility; visible reasons
+        // concern only PRs that are still open and owned in this pass.
+        pass.releaseHeld.set(
+          run.issue,
+          (run.releaseHeld ?? []).filter((number) =>
+            observation.ownedPullRequests.includes(number),
+          ),
+        );
         const mergeCandidate = await readMergeCandidate(
           git,
           clone,
@@ -359,6 +414,7 @@ export function createHost(
           observation.mergeCandidate,
           run.mergeRelaunchHeads ?? [],
           pass,
+          run.releaseHeld,
         );
         run.ended = {
           ...(mergeCandidate && { mergeCandidate }),
@@ -387,6 +443,9 @@ export function createHost(
         authorization: served.authorization,
         paused: pass.paused,
         issues,
+        ...(pass.releaseHold !== undefined && {
+          releaseHold: pass.releaseHold,
+        }),
         claims: await readClaims(
           name,
           platform,
@@ -581,6 +640,7 @@ export function createHost(
     candidate: MergeRelaunch | undefined,
     consumed: string[],
     pass: Pass,
+    releaseHeld?: number[],
   ): Promise<MergeRelaunch | undefined> {
     if (
       !candidate ||
@@ -598,6 +658,7 @@ export function createHost(
       candidate.baseBranch !== defaultRef.slice("refs/remotes/origin/".length)
     )
       return undefined;
+    if (releaseHeld?.includes(candidate.number)) return candidate;
     await git(clone, [
       "fetch",
       "--quiet",
@@ -701,6 +762,12 @@ export function createHost(
           conventions.set(name, recorded.configuration);
         recovered.push({
           ...recorded,
+          // Older awaiting-merge records predate this hold; they acquire no
+          // new sticky evidence merely because the process restarted.
+          ...((recorded.releaseHoldSettled ||
+            (recorded.ended && "pullRequest" in recorded.ended)) && {
+            releaseHoldSettled: true,
+          }),
           exited: true,
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
           ended: recorded.interrupted
@@ -830,6 +897,15 @@ export function createHost(
       ...(decision.inputResume && { inputResume: decision.inputResume }),
       ...(decision.mergeRelaunch && { mergeRelaunch: decision.mergeRelaunch }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
+      releaseHoldObserved: [
+        ...new Set([
+          ...(previous?.ended &&
+          ("interrupted" in previous.ended || "paused" in previous.ended)
+            ? (previous.releaseHoldObserved ?? [])
+            : []),
+          ...(pass.releaseHold ?? []),
+        ]),
+      ],
       ...(decision.relaunch &&
         marker.awaitingMergeNotified && { awaitingMergeNotified: true }),
       startedAt,
@@ -877,6 +953,7 @@ export function createHost(
           recovery,
           decision.mergeRelaunch,
           decision.inputResume,
+          pass.configuration!.labels.releaseHold,
         ),
         branch: runBranch(issue),
         log: raw,
@@ -1186,6 +1263,14 @@ export function createHost(
             ? [{ key: decision.hold, reason: decision.reason }]
             : [],
         );
+        const held = pass.releaseHeld.get(issue.number);
+        if (
+          held?.length &&
+          !holds.some((hold) => hold.key === "release-hold")
+        ) {
+          const reason = releaseHoldReason(pass.releaseHold, held);
+          if (reason) holds.push({ key: "release-hold", reason });
+        }
         try {
           await pass.platform.reconcileHolds(issue.number, holds);
         } catch (error) {
@@ -1291,6 +1376,7 @@ export function prompt(
   recovery?: Recovery,
   mergeRelaunch?: MergeRelaunch,
   inputResume?: InputResume,
+  releaseHoldLabel?: string,
 ): string {
   const start = template.replace(
     /\{(skillPrefix|issue)\}/g,
@@ -1304,6 +1390,11 @@ export function prompt(
     "Preserve committed, staged, unstaged and untracked work and existing PR, review and handoff context before changing history. Continuing a branch does not require retaining unrelated history or override an owner's explicit request to reconstruct the issue's changes on the current base. If ownership is uncertain or reconstruction has conflicts, preserve the work and hand off under the repository's owner-question rules. After any permission refusal, stop with an explicit owner handoff: no second push, credential discovery or identity switch. Do not assume broader App permissions are necessary; ask the owner how to proceed.",
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
     `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes still determine delivery.`,
+    ...(releaseHoldLabel === undefined
+      ? []
+      : [
+          `Release hold: before any merge, check for open PRs carrying the label ${JSON.stringify(releaseHoldLabel)}, other than your own PR. While any exists, do not merge: finish implementation, validation and review, leave your PR open and end the run. The factory resumes merging after the hold ends. Installed babysit's merge check (repo-canon #742) supplies the mid-run guard and its release-hold exit; the prompt alone cannot prevent a release PR opened mid-run from racing a merge.`,
+        ]),
     ...(mergeRelaunch
       ? [
           `Merge relaunch: bring PR #${mergeRelaunch.number}, relaunched for head ${mergeRelaunch.headCommit}, onto the current default branch (${mergeRelaunch.baseBranch}); revalidate it; push; wait for current-head checks and reviews; then merge it through the repository's installed babysit under the existing merge authorization. Preserve this same PR, its reviews and handoff context and all dirty work. Where installed babysit supports branch-update recovery, follow it, including stale-base exit 4. Otherwise use the delivery-push instructions above to rebase or replay only this issue's changes and revalidate; babysit's other merge gates still apply. Conflicts, failed validation or checks, uncertain ownership and permission refusals require preserving work and a reasoned owner handoff without merging. Never use GitHub update-branch or merge the default branch into the issue branch.`,
