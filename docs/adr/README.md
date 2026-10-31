@@ -23,3 +23,6 @@ This directory records consequential decisions local to the factory.
   Postern's facts while keeping readiness and authorization, and the host
   configuration names each platform's accepted roles and accounts that never
   authorize.
+- [Read the contract decision from the validator's posted result](0007-read-the-contract-decision-from-the-validators-posted-result.md):
+  the factory checks the issue-contract validator's versioned result against
+  platform facts and no longer interprets Agent Briefs itself.
