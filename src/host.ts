@@ -946,9 +946,15 @@ export function createHost(
         cwd: paths.clone,
         image: pass.image!,
         prompt: prompt(
-          pass.configuration!.prompt,
-          registry.providers.get(run.provider)!.skillPrefix,
-          issue,
+          registry.providers
+            .get(run.provider)!
+            .renderInvocation(
+              pass.configuration!.skill,
+              pass.configuration!.arguments.replaceAll(
+                "{issue}",
+                String(issue),
+              ),
+            ),
           pass.hasReviewPolicy,
           decision.retry,
           recovery,
@@ -1369,9 +1375,7 @@ export function createHost(
 }
 
 export function prompt(
-  template: string,
-  skillPrefix: string,
-  issue: number,
+  start: string,
   hasReviewPolicy: boolean,
   retry?: { failure: string; log: string },
   recovery?: Recovery,
@@ -1379,11 +1383,6 @@ export function prompt(
   inputResume?: InputResume,
   releaseHoldLabel?: string,
 ): string {
-  const start = template.replace(
-    /\{(skillPrefix|issue)\}/g,
-    (_match, field: string) =>
-      field === "skillPrefix" ? skillPrefix : String(issue),
-  );
   const guidance = [
     "Unattended execution:",
     `This is a factory run.${hasReviewPolicy ? " Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs." : ""} Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced. Use only the supplied credentials; never discover or switch identities to trigger a review.`,

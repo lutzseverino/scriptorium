@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "labels": {
     "ready": [],
     "running": null,
@@ -8,5 +8,6 @@
     "paused": "waiting\n"
   },
   "modelLabelPrefix": 3,
-  "prompt": "do work"
+  "skill": " ship ",
+  "arguments": 3
 }

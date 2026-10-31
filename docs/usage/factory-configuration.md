@@ -2,19 +2,19 @@
 
 Each repository names its conventions in `.factory/config.json`. The factory
 reads it from the repository's default branch on every pass, alongside
-`.factory/Dockerfile`. Labels, the model-label prefix and the prompt have no
-defaults. Optional comment templates default to the factory's own wording; see
+`.factory/Dockerfile`. Labels, the model-label prefix, the skill and its
+arguments have no defaults. Optional comment templates default to the factory's own wording; see
 [the ownership decision](../adr/0005-default-the-factorys-own-comment-wording.md).
 
 ## Schema
 
 The fields in this example are required. `labels.skip`, `labels.releaseHold`, `comments` and its
 individual entries are optional. Unknown fields at any level, malformed
-values and versions other than numeric `1` are invalid.
+values and versions other than numeric `2` are invalid.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "labels": {
     "ready": "queued",
     "running": "working",
@@ -23,13 +23,14 @@ values and versions other than numeric `1` are invalid.
     "paused": "waiting"
   },
   "modelLabelPrefix": "agent:",
-  "prompt": "{skillPrefix}ship #{issue}"
+  "skill": "ship",
+  "arguments": "#{issue}"
 }
 ```
 
 | Field                | Value                                                                                                                                           |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`            | Numeric `1`, the factory configuration schema version.                                                                                          |
+| `version`            | Numeric `2`, the factory configuration schema version.                                                                                          |
 | `labels.ready`       | The repository's ready label. The repository creates it; the factory never creates, adds or removes it.                                         |
 | `labels.running`     | The label the factory adds when it claims an issue and removes when it releases, pauses or fails the claim.                                     |
 | `labels.failed`      | The label the factory adds after a final failure. Remove it to allow another run.                                                               |
@@ -38,8 +39,15 @@ values and versions other than numeric `1` are invalid.
 | `labels.skip`        | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
 | `labels.releaseHold` | Optional repository-owned label on open release PRs that holds merges in this repository. The factory never creates or changes it.              |
 | `modelLabelPrefix`   | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
-| `prompt`             | A string containing both `{skillPrefix}` and `{issue}`. Every occurrence expands to the provider's skill prefix and the issue number.           |
+| `skill`              | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
+| `arguments`          | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
 | `comments`           | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
+
+Version 1 configurations and the old `prompt` field are refused. Migrate by
+setting `version` to `2`, replacing `prompt` with `skill` and `arguments`, and
+removing `{skillPrefix}`: the provider owns the invocation syntax. There is no
+compatibility layer. For example, `"prompt": "{skillPrefix}ship #{issue}"` becomes
+`"skill": "ship", "arguments": "#{issue}"`.
 
 Label names and the model label prefix must be non-empty strings without
 leading or trailing whitespace. All configured label names, including the
@@ -64,7 +72,7 @@ and merged PRs do not hold, and a labelled PR never holds itself. For example,
 `"releaseHold": "factory:release-hold"` holds merge relaunches while another
 open PR carries `factory:release-hold`; an unreadable hold also makes merge
 relaunches wait for a successful read. Other repositories continue normally.
-Omitting the key leaves behavior unchanged and keeps configuration version `1`.
+Omitting the key leaves behavior unchanged and keeps configuration version `2`.
 
 This holds merges only. Pickup, retries, interrupted and paused relaunches,
 and needs-input resumes still proceed under their usual gates. Every run's
@@ -103,11 +111,14 @@ The host's default model applies when an issue has no model label. Multiple
 model labels, an unknown provider or model, and an unsupported effort hold
 that issue with a reason; see the [provider grammar](host.md#providers).
 
-## Prompts and pauses
+## Skill invocations and retries
 
 For the example above, issue 4 starts with `/ship #4` on Claude Code or
-`$ship #4` on Codex. A retry uses the current configured template followed by
-the factory's fixed context block: the first attempt's failure and, when
+`$ship #4` on Codex. The host substitutes `{issue}` in `arguments`, and each
+provider adapter renders the skill invocation in its own syntax. The factory
+appends its unattended execution guidance, including the release-hold instruction
+when configured, after that invocation. A retry uses the current invocation
+followed by the factory's fixed context block: the first attempt's failure and, when
 readable, the end of its log (at most 200 lines and 16 KiB). The branch
 `factory/issue-<n>`, retry context and `.factory/Dockerfile` path are fixed by
 the factory.
@@ -121,7 +132,7 @@ comment and keeps the default failure, parent-close and awaiting-merge comments:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "labels": {
     "ready": "queued",
     "running": "working",
@@ -130,7 +141,8 @@ comment and keeps the default failure, parent-close and awaiting-merge comments:
     "paused": "waiting"
   },
   "modelLabelPrefix": "agent:",
-  "prompt": "{skillPrefix}ship #{issue}",
+  "skill": "ship",
+  "arguments": "#{issue}",
   "comments": {
     "pause": "Waiting for {provider}: {cause}.{#reset} Resets {reset}.{/reset}{#threshold} Threshold: {threshold}%.{/threshold} The factory will remove `{label}` when it resumes."
   }
@@ -138,7 +150,7 @@ comment and keeps the default failure, parent-close and awaiting-merge comments:
 ```
 
 Omitting `comments`, supplying `"comments": {}`, or omitting an individual
-entry uses the relevant default. Version remains `1`; there is no host
+entry uses the relevant default. Version remains `2`; there is no host
 setting. Supplied entries must be non-empty JSON strings; whitespace and
 newlines are preserved. Encode a newline as `\n` in JSON. No placeholder is
 required, so a fixed comment is valid. No disclaimer is injected; put any

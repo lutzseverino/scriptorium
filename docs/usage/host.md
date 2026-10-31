@@ -299,9 +299,9 @@ The factory names the failure but never logs the command's output.
 The provider registry in `src/providers.ts` holds one adapter per provider the
 host configuration names: Claude Code and Codex. Each adapter launches its
 agent through Sandcastle, lists its reasoning efforts, routes bare model slugs
-by its vendor prefix (`claude-*` or `gpt-*`), supplies the prompt's
-`{skillPrefix}` (`/` or `$`), reads its usage, and recognizes its own
-usage-limit error at the end of an ended run's raw log. Its launch credential
+by its vendor prefix (`claude-*` or `gpt-*`), renders the configured skill and
+arguments as an invocation (`/skill …` or `$skill …`), reads its usage, and
+recognizes its own usage-limit error at the end of an ended run's raw log. Its launch credential
 is a host file: the Claude Code setup-token file, or the Codex login
 (`auth.json`) the host keeps renewing. Claude can use a separate host-renewed
 login copy for usage. Each credential is read again when needed; no provider

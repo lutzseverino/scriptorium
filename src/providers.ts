@@ -55,8 +55,8 @@ export type ProviderAdapter = {
   readonly defaultEffort: string;
   // A bare model slug with one of these prefixes runs on this provider.
   readonly vendorPrefixes: readonly string[];
-  // The prompt's `{skillPrefix}`: how the agent CLI invokes a skill.
-  readonly skillPrefix: string;
+  // Renders a skill invocation in this agent CLI's syntax.
+  renderInvocation(skill: string, args: string): string;
   // Runs the agent through Sandcastle, delivering the credential as it stands
   // at this launch.
   launch(request: LaunchRequest): Promise<LaunchResult>;

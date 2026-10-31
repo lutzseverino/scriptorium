@@ -17,7 +17,7 @@ function fixture(name: string): string {
 
 test("a repository's factory configuration is read without convention defaults", () => {
   assert.deepEqual(readFactoryConfiguration(fixture("valid")), {
-    version: 1,
+    version: 2,
     labels: {
       ready: "queued",
       running: "working",
@@ -26,15 +26,65 @@ test("a repository's factory configuration is read without convention defaults",
       paused: "waiting",
     },
     modelLabelPrefix: "agent:",
-    prompt: "Handle #{issue} using {skillPrefix}ship",
+    skill: "ship",
+    arguments: "#{issue}",
   });
 });
 
-test("the configuration this repository adopted from Repo Canon is accepted", () => {
-  const adopted = fileURLToPath(
+test("the configuration this repository uses is accepted", () => {
+  const configured = fileURLToPath(
     new URL(`../${factoryConfigurationPath}`, import.meta.url),
   );
-  assert.equal(readFactoryConfiguration(adopted).version, 1);
+  assert.equal(readFactoryConfiguration(configured).version, 2);
+});
+
+test("version 1 prompt configurations are refused without a compatibility layer", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  delete configuration.skill;
+  delete configuration.arguments;
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ...configuration,
+      version: 1,
+      prompt: "{skillPrefix}ship #{issue}",
+    }),
+  );
+  assert.throws(() => readFactoryConfiguration(path), {
+    message: `The factory configuration ${path} is invalid:\n- prompt: is not a factory configuration field\n- skill: is missing\n- arguments: is missing\n- version: must be 2`,
+  });
+
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ...configuration,
+      version: 2,
+      skill: "ship",
+      arguments: "#{issue}",
+      prompt: "{skillPrefix}ship #{issue}",
+    }),
+  );
+  assert.throws(() => readFactoryConfiguration(path), {
+    message: `The factory configuration ${path} is invalid:\n- prompt: is not a factory configuration field`,
+  });
+});
+
+test("skill names must be trimmed and arguments preserve whitespace", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const skill of ["", " ship", "ship ", null, 7, [], {}]) {
+    writeFileSync(path, JSON.stringify({ ...configuration, skill }));
+    assert.throws(() => readFactoryConfiguration(path), /skill:/);
+  }
+  for (const args of [null, 7, [], {}]) {
+    writeFileSync(path, JSON.stringify({ ...configuration, arguments: args }));
+    assert.throws(() => readFactoryConfiguration(path), /arguments:/);
+  }
+  for (const args of ["", "fixed arguments", " #{issue}\n{issue} "]) {
+    writeFileSync(path, JSON.stringify({ ...configuration, arguments: args }));
+    assert.equal(readFactoryConfiguration(path).arguments, args);
+  }
 });
 
 test("a skip label is optional, trimmed and distinct from every other label", (t) => {
@@ -62,7 +112,7 @@ test("a skip label is optional, trimmed and distinct from every other label", (t
 
 test("missing fields are refused instead of supplied from defaults", () => {
   assert.throws(() => readFactoryConfiguration(fixture("missing")), {
-    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- modelLabelPrefix: is missing\n- prompt: is missing\n- labels.needsInput: is missing\n- labels.paused: is missing`,
+    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.needsInput: is missing\n- labels.paused: is missing`,
   });
 });
 
@@ -74,7 +124,7 @@ test("unknown fields at either level are invalid", () => {
 
 test("malformed fields and an unsupported version are invalid", () => {
   assert.throws(() => readFactoryConfiguration(fixture("malformed")), {
-    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 1\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- prompt: must contain {skillPrefix} and {issue}`,
+    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 2\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
   });
 });
 
@@ -146,7 +196,7 @@ for (const name of [
     );
   });
 
-test("comment templates are optional and individually configurable in version 1", (t) => {
+test("comment templates are optional and individually configurable in version 2", (t) => {
   const path = join(directory(t), "config.json");
   const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   for (const comments of [
@@ -196,7 +246,7 @@ test("every supplied comment template is validated before any comment is needed"
   }
 });
 
-test("a release-hold label is optional, trimmed and distinct in version 1", (t) => {
+test("a release-hold label is optional, trimmed and distinct in version 2", (t) => {
   const path = join(directory(t), "config.json");
   const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   configuration.labels.skip = "manual";

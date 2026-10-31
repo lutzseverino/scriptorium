@@ -36,7 +36,7 @@ test("a host configuration naming a provider without an adapter is refused", () 
   );
 });
 
-test("each adapter lists its efforts, vendor prefixes and skill prefix", () => {
+test("each adapter lists its efforts and vendor prefixes", () => {
   const { providers } = createRegistry(both, fakePorts().ports);
   const traits = Object.fromEntries(
     [...providers].map(([name, adapter]) => [
@@ -45,7 +45,6 @@ test("each adapter lists its efforts, vendor prefixes and skill prefix", () => {
         efforts: adapter.efforts,
         defaultEffort: adapter.defaultEffort,
         vendorPrefixes: adapter.vendorPrefixes,
-        skillPrefix: adapter.skillPrefix,
       },
     ]),
   );
@@ -54,15 +53,33 @@ test("each adapter lists its efforts, vendor prefixes and skill prefix", () => {
       efforts: ["low", "medium", "high", "xhigh", "max"],
       defaultEffort: "high",
       vendorPrefixes: ["claude-"],
-      skillPrefix: "/",
     },
     codex: {
       efforts: ["low", "medium", "high", "xhigh"],
       defaultEffort: "high",
       vendorPrefixes: ["gpt-"],
-      skillPrefix: "$",
     },
   });
+});
+
+test("each provider renders the same skill and arguments in its own syntax", () => {
+  const { providers } = createRegistry(both, fakePorts().ports);
+  const configuration = { skill: "ship", arguments: "#96; issue=96" };
+  for (const [name, expected] of [
+    ["claude-code", "/ship #96; issue=96"],
+    ["codex", "$ship #96; issue=96"],
+  ])
+    assert.equal(
+      providers
+        .get(name)!
+        .renderInvocation(configuration.skill, configuration.arguments),
+      expected,
+    );
+  for (const [name, expected] of [
+    ["claude-code", "/ship"],
+    ["codex", "$ship"],
+  ])
+    assert.equal(providers.get(name)!.renderInvocation("ship", ""), expected);
 });
 
 test("models route bare slugs by vendor prefix and take an optional effort", () => {

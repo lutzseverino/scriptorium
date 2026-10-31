@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { validateCommentTemplate } from "./comment-template.ts";
 
 export type FactoryConfiguration = {
-  version: 1;
+  version: 2;
   labels: {
     ready: string;
     running: string;
@@ -14,7 +14,8 @@ export type FactoryConfiguration = {
     releaseHold?: string;
   };
   modelLabelPrefix: string;
-  prompt: string;
+  skill: string;
+  arguments: string;
   comments?: {
     pause?: string;
     failure?: string;
@@ -65,7 +66,7 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
   };
   const root = object(
     value,
-    ["version", "labels", "modelLabelPrefix", "prompt"],
+    ["version", "labels", "modelLabelPrefix", "skill", "arguments"],
     "",
     ["comments"],
   );
@@ -78,8 +79,8 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
       problems.push(`${path}: is not a non-empty trimmed string`);
   };
   if (root) {
-    if (Object.hasOwn(root, "version") && root.version !== 1)
-      problems.push("version: must be 1");
+    if (Object.hasOwn(root, "version") && root.version !== 2)
+      problems.push("version: must be 2");
     if (Object.hasOwn(root, "labels")) {
       const fields = ["ready", "running", "failed", "needsInput", "paused"];
       const labels = object(root.labels, fields, "labels.", [
@@ -105,13 +106,9 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     }
     if (Object.hasOwn(root, "modelLabelPrefix"))
       text(root.modelLabelPrefix, "modelLabelPrefix");
-    if (
-      Object.hasOwn(root, "prompt") &&
-      (typeof root.prompt !== "string" ||
-        !root.prompt.includes("{skillPrefix}") ||
-        !root.prompt.includes("{issue}"))
-    )
-      problems.push("prompt: must contain {skillPrefix} and {issue}");
+    if (Object.hasOwn(root, "skill")) text(root.skill, "skill");
+    if (Object.hasOwn(root, "arguments") && typeof root.arguments !== "string")
+      problems.push("arguments: is not a string");
     if (Object.hasOwn(root, "comments")) {
       const comments = object(root.comments, [], "comments.", [
         "pause",
