@@ -20,11 +20,12 @@ import {
   type Account,
   type Comment,
   type ConnectOptions,
-  type Connection,
+  type ConnectionWithLinkAdditions,
   type Issue,
   type IssueState,
   type IssueTrackerCapabilities,
   type PullRequest,
+  type SubIssueLinkAddition,
 } from "@lutzseverino/postern";
 import { sandboxEnvironment } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
@@ -52,7 +53,7 @@ import { briefComment, approvalComment } from "./contract-fixture.ts";
 type TimelineEvent = { at: string } & (
   | { event: "labeled"; label: string; actor: string | null; id?: number }
   | { event: "edited" | "renamed" | "commented" }
-  | { event: "linked"; subIssue: number }
+  | { event: "linked"; subIssue: number; actor?: string | null }
 );
 
 type IssueSpec = {
@@ -68,11 +69,13 @@ type IssueSpec = {
   comments?: string[];
   discussion?: Comment[] | Error;
   latestDeletion?: string | null | Error;
+  linkAdditions?: SubIssueLinkAddition[] | Error;
   // Events after the issue's creation, when the owner applied its labels.
   timeline?: TimelineEvent[];
 };
 
-// Every capability GitHub's adapter offers.
+// Legacy capability fixtures retain latest-link fallback coverage. Tests can
+// opt into the complete link history that GitHub now offers.
 const githubCapabilities: IssueTrackerCapabilities = {
   nativeParent: true,
   nativeBlockers: true,
@@ -205,7 +208,10 @@ function fakePlatform(
 
   // The connection to `repository`, which always passes the factory's section
   // names.
-  function connect(repository: string, options: ConnectOptions): Connection {
+  function connect(
+    repository: string,
+    options: ConnectOptions,
+  ): ConnectionWithLinkAdditions {
     assert.deepEqual(options.relationshipSections, {
       parent: "Parent",
       blockedBy: "Blocked by",
@@ -355,6 +361,28 @@ function fakePlatform(
           edit(number).state = "CLOSED";
         },
         issue: unused,
+        issueEvent: unused,
+        labels: unused,
+        updateLabel: unused,
+        async subIssueLinkAdditions(number) {
+          await request("subIssueLinkAdditions", number);
+          const issue = find(repository, number);
+          if (issue.linkAdditions instanceof Error) throw issue.linkAdditions;
+          return (
+            issue.linkAdditions ??
+            issue.timeline.flatMap((item) =>
+              item.event === "linked"
+                ? [
+                    {
+                      subIssue: reference(item.subIssue, "OPEN"),
+                      actor: account(item.actor ?? null),
+                      time: item.at,
+                    },
+                  ]
+                : [],
+            )
+          );
+        },
         async updateComment(id, body) {
           await request("updateComment", id, body);
           for (const issue of state[repository]) {
@@ -429,6 +457,7 @@ function fakePlatform(
       },
       access: {
         capabilities: {},
+        requestPages: unused,
         async role(login) {
           await request("role", login);
           const role = roles[login] ?? null;
@@ -3525,6 +3554,110 @@ test("a repository whose remote no platform serves is refused, and the others ar
   assert.equal(
     run.github.calls.some(([repository]) => repository === "acme/widgets"),
     false,
+  );
+});
+
+test("authorized link additions release tickets while mixed and unknown history holds their parents", async (t) => {
+  const later = "2026-10-09T10:00:01Z";
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 1,
+          subIssues: [{ number: 2 }],
+          timeline: [
+            labelled("owner"),
+            { event: "linked", subIssue: 2, at: reviewed, actor: "owner" },
+            { event: "linked", subIssue: 2, at: later, actor: "owner" },
+          ],
+        },
+        { number: 2, parent: 1 },
+        {
+          number: 3,
+          subIssues: [{ number: 4 }],
+          timeline: [
+            labelled("owner"),
+            { event: "linked", subIssue: 4, at: reviewed, actor: "casey" },
+            { event: "linked", subIssue: 4, at: later, actor: "owner" },
+          ],
+        },
+        { number: 4, parent: 3 },
+        {
+          number: 5,
+          subIssues: [{ number: 6 }],
+          linkAdditions: [
+            {
+              subIssue: null,
+              actor: { login: "owner", bot: false },
+              time: null,
+            },
+          ],
+        },
+        { number: 6, parent: 5 },
+        {
+          number: 7,
+          subIssues: [{ number: 8 }],
+          timeline: [
+            labelled("owner"),
+            { event: "linked", subIssue: 8, at: later, actor: "morgan" },
+          ],
+        },
+        { number: 8, parent: 7 },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    roles: {
+      owner: "admin",
+      casey: "write",
+      morgan: new PlatformError("unavailable", "role unavailable"),
+    },
+    capabilities: { ...githubCapabilities, subIssueLinkAdditions: true },
+  });
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#2"],
+  );
+  assert.match(held(run, 4)!, /ticket #4 was linked by @casey.*not authorized/);
+  assert.match(held(run, 6)!, /ticket link has no known time/);
+  assert.match(held(run, 8)!, /repository role of @morgan.*could not be read/);
+  assert.match(
+    run.github.find("acme/widgets", 4).comments[0],
+    /scriptorium:hold:parent-readiness/,
+  );
+  assert.deepEqual(run.github.find("acme/widgets", 8).comments, []);
+  assert.equal(
+    run.github.calls.filter((call) => call[1] === "role" && call[2] === "owner")
+      .length,
+    1,
+  );
+});
+
+test("a failed link-history read pauses pickup until a successful pass", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 1,
+          subIssues: [{ number: 2 }],
+          linkAdditions: new PlatformError(
+            "unavailable",
+            "history unavailable",
+          ),
+        },
+        { number: 2, parent: 1 },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    capabilities: { ...githubCapabilities, subIssueLinkAdditions: true },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  run.github.find("acme/widgets", 1).linkAdditions = [];
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#2"],
   );
 });
 

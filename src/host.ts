@@ -16,7 +16,7 @@ import { join } from "node:path";
 import {
   PlatformError,
   type ConnectOptions,
-  type Connection,
+  type ConnectionWithLinkAdditions,
 } from "@lutzseverino/postern";
 import {
   updateClone,
@@ -79,7 +79,7 @@ export type HostPorts = {
   // Connects to the hosting platform of the repository at the remote URL,
   // throwing a `PlatformError` with reason `unsupported` for a remote no
   // platform adapter serves.
-  connect(remote: string, options: ConnectOptions): Connection;
+  connect(remote: string, options: ConnectOptions): ConnectionWithLinkAdditions;
   // Runs Git in `cwd`, authenticating to GitHub as the token's holder.
   git(token: string, cwd: string, args: string[]): Promise<string>;
   // Runs the host's token command for the repository and resolves the token
@@ -464,10 +464,11 @@ export function createHost(
   // platform its remote names and the host's settings for that platform, or
   // why the factory doesn't serve it. A platform that marks no bots needs the
   // accounts that never authorize named.
-  function connect(
-    name: string,
-  ):
-    | { connection: Connection; authorization: Repository["authorization"] }
+  function connect(name: string):
+    | {
+        connection: ConnectionWithLinkAdditions;
+        authorization: Repository["authorization"];
+      }
     | { refused: string } {
     let connection;
     try {

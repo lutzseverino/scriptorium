@@ -96,23 +96,46 @@ export function readinessExclusions(
 // revision binding. `on` names the issue to re-apply it on when that is
 // another issue.
 function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
-  const { ready, authorizedRoles, neverAuthorize } = policy;
+  const { ready } = policy;
   const reapply = `remove and re-apply ${ready}${on}`;
-  const authorized = `a person with the ${authorizedRoles.join(" or ")} role must ${reapply}`;
   if (issue.ready === null)
     return {
       reason: `is refused: no event applying ${ready} was found; ${reapply}`,
       waiting: false,
     };
   const { at, actor } = issue.ready;
+  const refused = actorRefusal(
+    actor,
+    policy,
+    { subject: ready, action: "applied" },
+    on,
+  );
+  if (refused) return refused;
+  if (issue.editedAt !== null && Date.parse(at) <= Date.parse(issue.editedAt))
+    return {
+      reason: `is refused: ${ready} was applied at ${at}, not after the body's last edit at ${issue.editedAt}; review the edit, then ${reapply}`,
+      waiting: false,
+    };
+  return issue.contractHold;
+}
+
+// Ready labels and link additions share the host's complete actor policy.
+function actorRefusal(
+  actor: Actor,
+  policy: Policy,
+  event: { subject: string; action: "applied" | "linked" },
+  on = "",
+): ReadinessHold | null {
+  const { ready, authorizedRoles, neverAuthorize } = policy;
+  const authorized = `a person with the ${authorizedRoles.join(" or ")} role must remove and re-apply ${ready}${on}`;
   if (actor.kind === "bot")
     return {
-      reason: `is refused: ${ready} was applied by ${actor.login}, a bot or app, which never authorizes; ${authorized}`,
+      reason: `is refused: ${event.subject} was ${event.action} by ${actor.login}, a bot or app, which never authorizes; ${authorized}`,
       waiting: false,
     };
   if (actor.kind === "unknown")
     return {
-      reason: `is refused: ${ready} was applied by an account that is not a user, which never authorizes; ${authorized}`,
+      reason: `is refused: ${event.subject} was ${event.action} by an account that is not a user, which never authorizes; ${authorized}`,
       waiting: false,
     };
   // Platform logins ignore case.
@@ -122,34 +145,30 @@ function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
     )
   )
     return {
-      reason: `is refused: ${ready} was applied by @${actor.login}, an account the host configuration never lets authorize; ${authorized}`,
+      reason: `is refused: ${event.subject} was ${event.action} by @${actor.login}, an account the host configuration never lets authorize; ${authorized}`,
       waiting: false,
     };
   if (actor.kind === "unreadable")
     return {
-      reason: `waits: the repository role of @${actor.login}, who applied ${ready}, could not be read this pass`,
+      reason: `waits: the repository role of @${actor.login}, who ${event.action} ${event.subject}, could not be read this pass`,
       waiting: true,
     };
   if (actor.role === null)
     return {
-      reason: `is refused: ${ready} was applied by @${actor.login}, who holds no repository role; ${authorized}`,
+      reason: `is refused: ${event.subject} was ${event.action} by @${actor.login}, who holds no repository role; ${authorized}`,
       waiting: false,
     };
   if (!authorizedRoles.includes(actor.role))
     return {
-      reason: `is refused: ${ready} was applied by @${actor.login}, whose repository role ${actor.role} is not authorized; ${authorized}`,
+      reason: `is refused: ${event.subject} was ${event.action} by @${actor.login}, whose repository role ${actor.role} is not authorized; ${authorized}`,
       waiting: false,
     };
-  if (issue.editedAt !== null && Date.parse(at) <= Date.parse(issue.editedAt))
-    return {
-      reason: `is refused: ${ready} was applied at ${at}, not after the body's last edit at ${issue.editedAt}; review the edit, then ${reapply}`,
-      waiting: false,
-    };
-  return issue.contractHold;
+  return null;
 }
 
-// A parent's readiness releases its sub-issues while it counts, is newer than
-// the parent's latest sub-issue link, and no open blocker holds the parent.
+// A parent's readiness releases its sub-issues while it counts, every link
+// since readiness is authorized, and no open blocker holds the parent. Without
+// complete link history, readiness must follow the latest link time.
 function parentHold(
   parent: Issue,
   policy: Policy,
@@ -165,7 +184,27 @@ function parentHold(
   if (refused)
     return { ...refused, reason: `whose readiness ${refused.reason}` };
   const link = parent.latestLink;
-  if (link && Date.parse(parent.ready!.at) <= Date.parse(link.at))
+  if (parent.linkAdditions !== null) {
+    for (const addition of parent.linkAdditions) {
+      if (addition.at === null)
+        return {
+          reason: `whose ticket link has no known time; remove and re-apply ${ready} on ${name} once its tickets are published`,
+          waiting: false,
+        };
+      if (Date.parse(addition.at) < Date.parse(parent.ready!.at)) continue;
+      const refused = actorRefusal(
+        addition.actor,
+        policy,
+        {
+          subject: `ticket${addition.ticket === null ? "" : ` ${reference(addition.ticket)}`}`,
+          action: "linked",
+        },
+        ` on ${name}`,
+      );
+      if (refused)
+        return { ...refused, reason: `whose readiness ${refused.reason}` };
+    }
+  } else if (link && Date.parse(parent.ready!.at) <= Date.parse(link.at))
     return {
       reason: `whose readiness predates its latest ticket${link.ticket === null ? "" : ` ${reference(link.ticket)}`}; remove and re-apply ${ready} on ${name} once its tickets are published`,
       waiting: false,

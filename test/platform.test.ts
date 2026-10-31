@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   connect,
   PlatformError,
-  type Connection,
+  type ConnectionWithLinkAdditions,
   type IssueTracker,
   type Comment,
 } from "@lutzseverino/postern";
@@ -638,6 +638,50 @@ const created = (issue: number) => ({
 
 test("open issues reach the core with their readiness, links and times, and without their bodies", async () => {
   const { connection, requests } = github((request) => {
+    if (request === "PosternSubIssueLinkAdditions")
+      return {
+        status: 200,
+        data: {
+          data: {
+            repository: {
+              issue: {
+                timelineItems: page([
+                  {
+                    createdAt: "2026-10-03T00:00:00Z",
+                    actor: { __typename: "User", login: "casey" },
+                    subIssue: reference("Acme/Widgets", 2),
+                  },
+                  {
+                    createdAt: "2026-10-06T00:00:00Z",
+                    actor: { __typename: "User", login: "owner" },
+                    subIssue: reference("acme/gadgets", 6, "CLOSED"),
+                  },
+                  {
+                    createdAt: "2026-10-07T00:00:00Z",
+                    actor: { __typename: "User", login: "casey" },
+                    subIssue: reference("acme/widgets", 2),
+                  },
+                  {
+                    createdAt: "2026-10-07T12:00:00Z",
+                    actor: null,
+                    subIssue: null,
+                  },
+                  {
+                    createdAt: "2026-10-08T00:00:00Z",
+                    actor: { __typename: "Bot", login: "release-bot[bot]" },
+                    subIssue: null,
+                  },
+                  {
+                    createdAt: "2026-10-09T00:00:00Z",
+                    actor: { __typename: "User", login: "morgan" },
+                    subIssue: null,
+                  },
+                ]),
+              },
+            },
+          },
+        },
+      };
     if (request === "PosternIssues")
       return {
         status: 200,
@@ -730,6 +774,38 @@ test("open issues reach the core with their readiness, links and times, and with
       contractHold: null,
       nativeParent: null,
       latestLink: { ticket: null, at: "2026-10-03T00:00:00Z" },
+      linkAdditions: [
+        {
+          ticket: 2,
+          at: "2026-10-03T00:00:00Z",
+          actor: { kind: "user", login: "casey", role: null },
+        },
+        {
+          ticket: "acme/gadgets#6",
+          at: "2026-10-06T00:00:00Z",
+          actor: { kind: "user", login: "owner", role: "admin" },
+        },
+        {
+          ticket: 2,
+          at: "2026-10-07T00:00:00Z",
+          actor: { kind: "user", login: "casey", role: null },
+        },
+        {
+          ticket: null,
+          at: "2026-10-07T12:00:00Z",
+          actor: { kind: "unknown" },
+        },
+        {
+          ticket: null,
+          at: "2026-10-08T00:00:00Z",
+          actor: { kind: "bot", login: "release-bot[bot]" },
+        },
+        {
+          ticket: null,
+          at: "2026-10-09T00:00:00Z",
+          actor: { kind: "unreadable", login: "morgan" },
+        },
+      ],
       subIssues: [
         { number: 2, state: "open" },
         { number: "acme/gadgets#6", state: "closed" },
@@ -748,6 +824,7 @@ test("open issues reach the core with their readiness, links and times, and with
       contractHold: null,
       nativeParent: 1,
       latestLink: null,
+      linkAdditions: null,
       subIssues: [],
       blockedBy: [
         { number: 3, state: "closed" },
@@ -772,6 +849,7 @@ test("open issues reach the core with their readiness, links and times, and with
       contractHold: null,
       nativeParent: null,
       latestLink: null,
+      linkAdditions: null,
       subIssues: [],
       blockedBy: [],
     })),
@@ -782,15 +860,91 @@ test("open issues reach the core with their readiness, links and times, and with
     [
       "GET /repos/acme/widgets/issues/1/events",
       "GET /repos/acme/widgets/collaborators/owner/permission",
-      "GET /repos/acme/widgets/issues/2/events",
+      "PosternSubIssueLinkAdditions",
       "GET /repos/acme/widgets/collaborators/casey/permission",
+      "GET /repos/acme/widgets/collaborators/morgan/permission",
+      "GET /repos/acme/widgets/issues/2/events",
       "GET /repos/acme/widgets/issues/4/events",
       "GET /repos/acme/widgets/issues/5/events",
       "GET /repos/acme/widgets/issues/8/events",
-      "GET /repos/acme/widgets/collaborators/morgan/permission",
       "GET /repos/acme/widgets/issues/9/events",
     ],
   );
+});
+test("link history distinguishes unsupported, empty, unknown-time and failed reads", async () => {
+  const setup = () =>
+    github((request) => {
+      if (request === "PosternIssues")
+        return {
+          status: 200,
+          data: {
+            data: {
+              repository: {
+                issues: page([
+                  issueNode(1, {
+                    subIssues: page([reference("acme/widgets", 2)]),
+                    timelineItems: {
+                      nodes: [{ createdAt: "2026-10-06T00:00:00Z" }],
+                    },
+                  }),
+                ]),
+              },
+            },
+          },
+        };
+      if (request.endsWith("/events"))
+        return {
+          status: 200,
+          data: [labeled(1, user("owner"), "2026-10-05T00:00:00Z")],
+        };
+      if (request.endsWith("/permission"))
+        return {
+          status: 200,
+          data: { permission: "admin", role_name: "admin" },
+        };
+    }).connection;
+  const unsupported = setup();
+  const { subIssueLinkAdditions: _history, ...capabilities } =
+    unsupported.issueTracker.capabilities;
+  const legacy = repositoryPlatform(
+    {
+      ...unsupported,
+      issueTracker: { ...unsupported.issueTracker, capabilities },
+    },
+    labels,
+  );
+  const [fallback] = await legacy.readIssues();
+  assert.equal(fallback.linkAdditions, null);
+  assert.deepEqual(fallback.latestLink, {
+    ticket: null,
+    at: "2026-10-06T00:00:00Z",
+  });
+
+  const original = setup();
+  const connection = {
+    ...original,
+    issueTracker: { ...original.issueTracker },
+  };
+  connection.issueTracker.subIssueLinkAdditions = async () => [];
+  assert.deepEqual(
+    (await repositoryPlatform(connection, labels).readIssues())[0]
+      .linkAdditions,
+    [],
+  );
+  connection.issueTracker.subIssueLinkAdditions = async () => [
+    { subIssue: null, actor: null, time: null },
+  ];
+  assert.deepEqual(
+    (await repositoryPlatform(connection, labels).readIssues())[0]
+      .linkAdditions,
+    [{ ticket: null, actor: { kind: "unknown" }, at: null }],
+  );
+  connection.issueTracker.subIssueLinkAdditions = async () => {
+    throw new PlatformError("unavailable", "history unavailable");
+  };
+  await assert.rejects(repositoryPlatform(connection, labels).readIssues(), {
+    reason: "unavailable",
+  });
 });
 
 test("existing state labels are left as they are, and another refusal fails the pass", async () => {
@@ -1094,7 +1248,7 @@ function failing(issueLabels: string[], failAt: number) {
       path: "acme/widgets",
     },
     issueTracker,
-  } as unknown as Connection;
+  } as unknown as ConnectionWithLinkAdditions;
   return { platform: repositoryPlatform(connection, labels), writes };
 }
 

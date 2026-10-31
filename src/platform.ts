@@ -5,7 +5,7 @@
 import {
   PlatformError,
   type Account,
-  type Connection,
+  type ConnectionWithLinkAdditions,
   type IssueReference,
   type LabelChange,
   type PullRequest,
@@ -51,7 +51,7 @@ export type InputResume = {
 };
 
 export function repositoryPlatform(
-  connection: Connection,
+  connection: ConnectionWithLinkAdditions,
   labels: FactoryConfiguration["labels"],
   closeTemplate?: string,
 ) {
@@ -333,6 +333,23 @@ export function repositoryPlatform(
           latestLink:
             capabilities.linkTime && issue.linkTime !== null
               ? { ticket: null, at: issue.linkTime }
+              : null,
+          linkAdditions:
+            ready &&
+            issue.subIssues.length > 0 &&
+            capabilities.subIssueLinkAdditions
+              ? await Promise.all(
+                  (await issueTracker.subIssueLinkAdditions(issue.number)).map(
+                    async (addition) => ({
+                      ticket:
+                        addition.subIssue === null
+                          ? null
+                          : id(addition.subIssue),
+                      at: addition.time,
+                      actor: await actor(addition.actor),
+                    }),
+                  ),
+                )
               : null,
           subIssues: issue.subIssues.map(link),
           blockedBy: issue.blockedBy.map(link),
