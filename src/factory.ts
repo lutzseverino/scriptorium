@@ -9,6 +9,7 @@ import {
   readinessExclusion,
   readinessExclusions,
   references,
+  type Actor,
   type Policy,
   type Readiness,
   type ReadinessHold,
@@ -40,6 +41,10 @@ export type Issue = {
   // When a sub-issue was last linked, and which when the platform says, or
   // null when none was or the platform doesn't report it.
   latestLink: { ticket: IssueId | null; at: string } | null;
+  // Complete link additions in platform order, including repeats and unknown
+  // facts; null when the capability is unsupported or history wasn't needed.
+  linkAdditions:
+    { ticket: IssueId | null; at: string | null; actor: Actor }[] | null;
   subIssues: { number: IssueId; state: "open" | "closed" }[];
   blockedBy: { number: IssueId; state: "open" | "closed" }[];
 };

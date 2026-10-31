@@ -49,6 +49,7 @@ function issue(
     contractHold: null,
     nativeParent: null,
     latestLink: null,
+    linkAdditions: null,
     subIssues: [],
     blockedBy: [],
     ...details,
@@ -613,6 +614,103 @@ test("a ready sub-issue runs once its parent is ready after its latest ticket li
     ],
   });
   assert.deepEqual(launched(decisions), ["acme/widgets#5", "acme/widgets#6"]);
+});
+
+test("authorized sub-issue links keep a parent's readiness valid", () => {
+  const decisions = decide({
+    issues: [
+      parent(released, {
+        latestLink: { ticket: 6, at: released },
+        linkAdditions: [
+          { ticket: 5, at: released, actor: owner },
+          {
+            ticket: 6,
+            at: "2026-10-09T10:07:00Z",
+            actor: { ...owner, role: "maintain" },
+          },
+        ],
+      }),
+      ...tickets(),
+    ],
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#5", "acme/widgets#6"]);
+});
+
+test("any unauthorized addition since readiness holds a parent despite later authorized links", () => {
+  for (const actor of [
+    { kind: "user", login: "casey", role: "write" },
+    { kind: "user", login: "casey", role: null },
+    { kind: "bot", login: "factory[bot]" },
+    { kind: "unknown" },
+    { kind: "unreadable", login: "casey" },
+    { kind: "user", login: "EXCLUDED", role: "admin" },
+  ] satisfies Actor[]) {
+    for (const at of [released, "2026-10-09T10:07:00Z"]) {
+      const decisions = decide({
+        authorization: {
+          authorizedRoles: ["admin", "maintain"],
+          neverAuthorize: ["excluded"],
+        },
+        issues: [
+          parent(released, {
+            linkAdditions: [
+              {
+                ticket: 5,
+                at: "2026-10-09T10:05:00Z",
+                actor: { kind: "unknown" },
+              },
+              { ticket: null, at, actor },
+              { ticket: 5, at: "2026-10-09T10:08:00Z", actor: owner },
+              { ticket: 5, at: "2026-10-09T10:09:00Z", actor: owner },
+            ],
+          }),
+          ...tickets(),
+        ],
+      });
+      assert.deepEqual(launches(decisions), [], `${actor.kind} at ${at}`);
+      assert.match(skipOf(decisions, 5)!, /sub-issue of #3, whose readiness/);
+      const hold = decisions.find(
+        (decision) => decision.kind === "skip" && decision.issue === 5,
+      );
+      assert.ok(hold?.kind === "skip");
+      assert.equal(
+        hold.hold,
+        actor.kind === "unreadable" ? undefined : "parent-readiness",
+      );
+    }
+  }
+});
+
+test("an unknown link time holds a parent even for an authorized actor", () => {
+  const decisions = decide({
+    issues: [
+      parent(released, {
+        linkAdditions: [{ ticket: 5, at: null, actor: owner }],
+      }),
+      ...tickets(),
+    ],
+  });
+  assert.deepEqual(launches(decisions), []);
+  assert.match(skipOf(decisions, 5)!, /ticket link has no known time/);
+});
+
+test("complete link history supersedes latest-link time and ignores only additions before readiness", () => {
+  for (const linkAdditions of [
+    [],
+    [{ ticket: 5, at: "2026-10-09T10:05:59Z", actor: { kind: "unknown" } }],
+    [{ ticket: null, at: released, actor: owner }],
+  ] satisfies NonNullable<Issue["linkAdditions"]>[]) {
+    const decisions = decide({
+      issues: [
+        parent(released, {
+          latestLink: { ticket: 6, at: released },
+          linkAdditions,
+        }),
+        ...tickets(),
+      ],
+    });
+    assert.deepEqual(launched(decisions), ["acme/widgets#5", "acme/widgets#6"]);
+  }
 });
 
 test("a sub-issue waits while its parent is not ready for agent", () => {

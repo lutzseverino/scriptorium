@@ -415,8 +415,13 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   missing or redacted history holds pickup with a reason.
 - **Parents.** An open issue with native sub-issues in the same repository is
   a parent, and it never launches. Its sub-issue runs only while the parent's
-  readiness counts, is newer than the parent's latest sub-issue link, to the
-  second, and the parent has no open native blocker. On a platform that
+  readiness counts and the parent has no open native blocker. With complete
+  link history, additions at or after readiness keep it valid only when every
+  link actor passes the same readiness policy: an authorized person who is not
+  a bot or never-authorize account. An unauthorized, unknown or unreadable actor,
+  or an unknown link time, holds the parent; a later authorized link never hides
+  an earlier unauthorized one. Without complete history, readiness must be newer
+  than the parent's latest sub-issue link, to the second. On a platform that
   doesn't report link times, the factory skips the link check. A native
   parent that is closed or in another repository holds nothing.
 - **Closing.** An open issue whose readiness counts, with at least one native
