@@ -118,6 +118,7 @@ export type Registry = {
 export function createRegistry(
   configured: Record<string, ProviderSettings>,
   ports: ProviderPorts = defaultPorts,
+  allowed?: readonly string[],
 ): Registry {
   const unknown = Object.keys(configured).filter(
     (name) => !Object.hasOwn(adapters, name),
@@ -175,13 +176,29 @@ export function createRegistry(
     return { provider, model, effort };
   }
 
+  const listed = allowed?.map((value) => {
+    const model = resolve("", value);
+    if ("error" in model) throw new Error(model.error);
+    return `${model.provider}/${model.model}`;
+  });
+  function permitted(hint: string, value: string): Model | { error: string } {
+    const model = resolve(hint, value);
+    if ("error" in model) return model;
+    const identity = `${model.provider}/${model.model}`;
+    return listed && !listed.includes(identity)
+      ? {
+          error: `model ${identity} is not in models.allowed; ask the host operator to update the list or choose a listed model`,
+        }
+      : model;
+  }
+
   return {
     providers,
-    resolveModel: (value) => resolve("", value),
+    resolveModel: (value) => permitted("", value),
     resolveModelLabel(prefix, label) {
       if (!label.startsWith(prefix))
         return { error: `label ${label} is not under the prefix ${prefix}` };
-      return resolve(prefix, label.slice(prefix.length));
+      return permitted(prefix, label.slice(prefix.length));
     },
   };
 }

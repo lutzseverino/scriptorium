@@ -11,6 +11,7 @@ import {
   type PullRequest,
 } from "@lutzseverino/postern";
 import type { FactoryConfiguration } from "./factory-configuration.ts";
+import { reconcileHolds } from "./hold-comments.ts";
 import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
@@ -379,6 +380,9 @@ export function repositoryPlatform(
       await transition(issue, labels.failed, [labels.running, labels.paused]);
       await issueTracker.createComment(issue, comment);
     },
+
+    reconcileHolds: (issue: number, holds: { key: string; reason: string }[]) =>
+      reconcileHolds(issueTracker, issue, holds),
 
     async awaitingMerge(issue: number, comment: string) {
       await issueTracker.createComment(issue, comment);

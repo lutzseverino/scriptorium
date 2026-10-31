@@ -57,7 +57,11 @@ const maxBuffer = 64 * 1024 * 1024;
 const credentialHelper =
   '!f() { test "$1" = get && echo username=x-access-token && echo "password=$FACTORY_GITHUB_TOKEN"; }; f';
 
-const registry = createRegistry(configuration.providers);
+const registry = createRegistry(
+  configuration.providers,
+  undefined,
+  configuration.models.allowed,
+);
 const remoteUrl = (repository: string) =>
   `https://github.com/${repository}.git`;
 

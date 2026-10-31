@@ -1172,7 +1172,30 @@ export function createHost(
       if (pass.paused !== null)
         report(`${pass.name} is paused: ${pass.paused}`);
     const decisions = decideFactory(snapshot, registry);
-    // A failed write stops that repository's decisions for this pass, such as
+    // Hold comments retry independently; their availability never prevents
+    // a time-limit stop or settlement of existing work.
+    for (const pass of passes) {
+      if (!pass.read || !pass.platform) continue;
+      for (const issue of pass.read.issues) {
+        if (interrupting) break;
+        const holds = decisions.flatMap((decision) =>
+          decision.repository === pass.name &&
+          decision.issue === issue.number &&
+          decision.kind === "skip" &&
+          decision.hold
+            ? [{ key: decision.hold, reason: decision.reason }]
+            : [],
+        );
+        try {
+          await pass.platform.reconcileHolds(issue.number, holds);
+        } catch (error) {
+          report(
+            `${pass.name}#${issue.number} hold comments failed; reconciliation retries next pass: ${error}`,
+          );
+        }
+      }
+    }
+    // A failed transition stops the repository's later decisions, such as
     // a launch after a claim that did not apply; other repositories continue.
     const stopped = new Set<string>();
     for (const decision of decisions) {

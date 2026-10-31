@@ -7,6 +7,7 @@ import type { MergeRelaunch, InputResume } from "./platform.ts";
 import {
   closes,
   readinessExclusion,
+  readinessExclusions,
   references,
   type Policy,
   type Readiness,
@@ -190,7 +191,7 @@ export type Decision = { repository: string; issue: number } & (
   | { kind: "claim" }
   | { kind: "close"; tickets: IssueId[] }
   | Launch
-  | { kind: "skip"; reason: string }
+  | { kind: "skip"; reason: string; hold?: string }
   // Stops a running run's sandbox: at the time limit, or at the pause
   // threshold with the pause it ends with once its agent exits.
   | { kind: "stop"; reason: string; pause?: Pause }
@@ -343,11 +344,14 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const retry = retries.get(key(repository.name, issue.number));
     if (retry) {
       retries.delete(key(repository.name, issue.number));
-      decisions.push(...relaunch(repository, issue, retry, running, snapshot));
+      decisions.push(
+        ...relaunch(repository, issue, retry, running, snapshot, models),
+      );
       continue;
     }
     const { labels, modelLabelPrefix } = repository.configuration;
     if (!issue.labels.includes(labels.ready)) continue;
+    const excluded = exclusion(issue, repository);
     const reason =
       (labels.skip !== undefined && issue.labels.includes(labels.skip)
         ? `labelled \`${labels.skip}\`; delivered outside the factory`
@@ -359,7 +363,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       (issue.labels.includes(labels.paused)
         ? `labelled ${labels.paused}; the factory resumes its run by itself`
         : null) ??
-      exclusion(issue, repository) ??
+      excluded?.reason ??
       (snapshot.runs.some(
         (run) =>
           run.repository === repository.name && run.issue === issue.number,
@@ -368,7 +372,16 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         : null) ??
       paused(repository);
     if (reason) {
-      decisions.push({ kind: "skip", ...at, reason });
+      decisions.push({
+        kind: "skip",
+        ...at,
+        reason,
+        ...(reason === excluded?.reason && excluded?.key
+          ? { hold: excluded.key }
+          : reason === paused(repository)
+            ? { hold: "repository-configuration" }
+            : {}),
+      });
       continue;
     }
     const model = issueModel(
@@ -378,7 +391,12 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       models,
     );
     if ("error" in model) {
-      decisions.push({ kind: "skip", ...at, reason: model.error });
+      decisions.push({
+        kind: "skip",
+        ...at,
+        reason: model.error,
+        hold: "model-label",
+      });
       continue;
     }
     const gated = gate(model.provider, running, snapshot, "drain");
@@ -407,6 +425,91 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       repository: run.repository,
       issue: run.issue,
     });
+  // Reconcile every actionable reason independently of pickup's precedence.
+  // A blocked issue may also have a model error; neither clears the other.
+  for (const repository of snapshot.repositories) {
+    const { labels, modelLabelPrefix } = repository.configuration;
+    for (const issue of repository.issues) {
+      const at = { repository: repository.name, issue: issue.number };
+      const previous = snapshot.runs.find(
+        (run) => run.repository === at.repository && run.issue === at.issue,
+      );
+      const claim = repository.claims.find((claim) => claim.issue === at.issue);
+      const continuing = Boolean(
+        (previous?.ended &&
+          ("interrupted" in previous.ended ||
+            "paused" in previous.ended ||
+            ("mergeCandidate" in previous.ended &&
+              previous.ended.mergeCandidate))) ||
+        (claim?.mergeCandidate && !claim.inputResume),
+      );
+      const pendingLaunch =
+        continuing ||
+        Boolean(
+          (previous?.ended &&
+            "pullRequest" in previous.ended &&
+            previous.ended.pullRequest !== "open") ||
+          (claim && claim.pullRequest !== "open"),
+        );
+      if (
+        (!continuing && !issue.labels.includes(labels.ready)) ||
+        [
+          ...(!pendingLaunch ? [labels.running, labels.paused] : []),
+          labels.failed,
+          labels.needsInput,
+          labels.skip,
+        ].some(
+          (label) => label !== undefined && issue.labels.includes(label),
+        ) ||
+        !decisions.some(
+          (decision) =>
+            decision.repository === at.repository &&
+            decision.issue === at.issue &&
+            decision.kind === "skip",
+        )
+      )
+        continue;
+      const holds = (
+        continuing
+          ? []
+          : readinessExclusions(issue, repository.issues, policy(repository))
+      ).flatMap((hold) =>
+        hold.key ? [{ key: hold.key, reason: hold.reason }] : [],
+      );
+      if (issue.subIssues.length === 0) {
+        const model = issueModel(
+          issue,
+          modelLabelPrefix,
+          snapshot.settings,
+          models,
+        );
+        if ("error" in model)
+          holds.push({ key: "model-label", reason: model.error });
+        const configuration = paused(repository);
+        if (configuration)
+          holds.push({
+            key: "repository-configuration",
+            reason: configuration,
+          });
+      }
+      for (const hold of holds)
+        if (
+          !decisions.some(
+            (decision) =>
+              decision.repository === at.repository &&
+              decision.issue === at.issue &&
+              decision.kind === "skip" &&
+              decision.hold === hold.key,
+          )
+        )
+          decisions.push({
+            kind: "skip",
+            ...at,
+            reason: hold.reason,
+            hold: hold.key,
+          });
+    }
+  }
   return decisions;
 }
 
@@ -552,11 +655,12 @@ function relaunch(
   retry: Retry,
   running: Map<string, number>,
   snapshot: Snapshot,
+  models: Models,
 ): Decision[] {
   const at = { repository: repository.name, issue: issue.number };
   const { labels } = repository.configuration;
   const reason = issue.labels.includes(labels.ready)
-    ? exclusion(issue, repository)
+    ? exclusion(issue, repository)?.reason
     : `it no longer carries ${labels.ready}`;
   if (reason) {
     const readiness = readinessExclusion(
@@ -568,10 +672,33 @@ function relaunch(
       return [{ kind: "skip", ...at, reason: `retry waits: ${reason}` }];
     return [unretried(retry, reason)];
   }
+  const selected = issueModel(
+    issue,
+    repository.configuration.modelLabelPrefix,
+    snapshot.settings,
+    models,
+  );
+  if ("error" in selected)
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `retry waits: ${selected.error}`,
+        hold: "model-label",
+      },
+    ];
   const { provider } = retry.model;
   const gated =
     paused(repository) ?? gate(provider, running, snapshot, "drain");
-  if (gated) return [{ kind: "skip", ...at, reason: `retry waits: ${gated}` }];
+  if (gated)
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `retry waits: ${gated}`,
+        ...(repository.paused !== null && { hold: "repository-configuration" }),
+      },
+    ];
   running.set(provider, (running.get(provider) ?? 0) + 1);
   return [
     // A paused-labelled claim's retry runs under the running label.
@@ -607,26 +734,56 @@ function resume(
   const at = { repository: repository.name, issue: issue.number };
   if (needsInputExclusion(issue, repository.configuration.labels))
     return [{ kind: "release", ...at }];
-  if (run.mergeRelaunch) {
-    const excluded = mergeExclusion(issue, repository.configuration.labels);
-    const model = models.resolveModel(
-      `${run.provider}/${run.model}@${run.effort}`,
-    );
-    const reason = excluded ?? ("error" in model ? model.error : null);
-    if (reason)
-      return [
-        { kind: "skip", ...at, reason: `merge relaunch waits: ${reason}` },
-      ];
-  }
   const pause = run.ended && "paused" in run.ended ? run.ended : null;
   if (pause && !pause.commented)
     return [{ kind: "pause", ...at, pause: pause.paused }];
+  const selected = issueModel(
+    issue,
+    repository.configuration.modelLabelPrefix,
+    snapshot.settings,
+    models,
+  );
+  if ("error" in selected)
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `relaunch waits: ${selected.error}`,
+        hold: "model-label",
+      },
+    ];
+  const recordedModel = models.resolveModel(
+    `${run.provider}/${run.model}@${run.effort}`,
+  );
+  if ("error" in recordedModel)
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `relaunch waits: ${recordedModel.error}`,
+        hold: "model-label",
+      },
+    ];
+  if (run.mergeRelaunch) {
+    const excluded = mergeExclusion(issue, repository.configuration.labels);
+    if (excluded)
+      return [
+        { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
+      ];
+  }
   const gated =
     paused(repository) ??
     (pause && limited(run.provider, pause.paused, snapshot)) ??
     gate(run.provider, running, snapshot, "pause");
   if (gated)
-    return [{ kind: "skip", ...at, reason: `relaunch waits: ${gated}` }];
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `relaunch waits: ${gated}`,
+        ...(repository.paused !== null && { hold: "repository-configuration" }),
+      },
+    ];
   running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
   return [
     ...(pause ? [{ kind: "unpause" as const, ...at }] : []),
@@ -663,18 +820,38 @@ function mergeRelaunch(
     return [
       { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
     ];
-  const model = previous
-    ? models.resolveModel(
-        `${previous.provider}/${previous.model}@${previous.effort}`,
-      )
-    : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
+  const selected = issueModel(
+    issue,
+    modelLabelPrefix,
+    snapshot.settings,
+    models,
+  );
+  const model =
+    "error" in selected
+      ? selected
+      : previous
+        ? models.resolveModel(
+            `${previous.provider}/${previous.model}@${previous.effort}`,
+          )
+        : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
   const reason =
     "error" in model
       ? model.error
       : (paused(repository) ??
         gate(model.provider, running, snapshot, "pause"));
   if (reason)
-    return [{ kind: "skip", ...at, reason: `merge relaunch waits: ${reason}` }];
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `merge relaunch waits: ${reason}`,
+        ...("error" in model
+          ? { hold: "model-label" }
+          : repository.paused !== null
+            ? { hold: "repository-configuration" }
+            : {}),
+      },
+    ];
   if ("error" in model) return [];
   running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
   return [
@@ -918,18 +1095,24 @@ function oldestFirst(
 
 // A ready-labelled issue's exclusion from pickup, given its repository, whose
 // open issues may hold it.
-function exclusion(issue: Issue, repository: Repository): string | null {
+function exclusion(
+  issue: Issue,
+  repository: Repository,
+): { reason: string; key?: string } | null {
   const { labels } = repository.configuration;
   const needsInput = needsInputExclusion(issue, labels);
-  if (needsInput) return needsInput;
-  const held = readinessExclusion(issue, repository.issues, policy(repository));
-  if (held) return held.reason;
+  if (needsInput) return { reason: needsInput };
   if (issue.labels.includes(labels.failed))
-    return `labelled ${labels.failed}; remove the label to run it again`;
+    return {
+      reason: `labelled ${labels.failed}; remove the label to run it again`,
+    };
+  const held = readinessExclusion(issue, repository.issues, policy(repository));
+  if (held) return held;
   const blockers = issue.blockedBy.filter(
     (blocker) => blocker.state === "open",
   );
-  if (blockers.length > 0) return `blocked by ${references(blockers)}`;
+  if (blockers.length > 0)
+    return { reason: `blocked by ${references(blockers)}` };
   return null;
 }
 

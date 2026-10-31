@@ -149,3 +149,35 @@ test("an unconfigured provider, an unknown effort or an unroutable slug is a sta
   ] as const)
     assert.deepEqual(resolved, { error });
 });
+
+test("an allowed list compares resolved provider and model, preserving effort validation", () => {
+  const registry = createRegistry(both, fakePorts().ports, [
+    "gpt-6.1",
+    "claude-code/claude-x",
+  ]);
+  assert.deepEqual(
+    registry.resolveModelLabel("model:", "model:codex/gpt-6.1@low"),
+    {
+      provider: "codex",
+      model: "gpt-6.1",
+      effort: "low",
+    },
+  );
+  assert.deepEqual(registry.resolveModel("claude-x@max"), {
+    provider: "claude-code",
+    model: "claude-x",
+    effort: "max",
+  });
+  assert.match(
+    (registry.resolveModel("gpt-other") as { error: string }).error,
+    /not in models.allowed/,
+  );
+  assert.match(
+    (registry.resolveModel("claude-code/gpt-6.1") as { error: string }).error,
+    /not in models.allowed/,
+  );
+  assert.match(
+    (registry.resolveModel("gpt-6.1@max") as { error: string }).error,
+    /effort/,
+  );
+});
