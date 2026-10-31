@@ -486,13 +486,13 @@ Sandbox images live in the host's Docker daemon, tagged as the
 
 Ended runs and orphaned claims use the same table, in order. Pull requests
 come from the issue's closing references and its `factory/issue-<n>` branch.
-An open pull request takes precedence even when the run timed out or the
-issue closed.
+A closed issue settles as done first. Otherwise an open pull request takes
+precedence even when the run timed out or the issue needs input.
 
 | First matching observation               | Run outcome    | Action                                                                  |
 | ---------------------------------------- | -------------- | ----------------------------------------------------------------------- |
-| Pull request open                        | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.  |
 | Issue closed                             | Done           | Release the claim.                                                      |
+| Pull request open                        | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.  |
 | Pull request merged, issue open          | Failed, final  | Fail without retrying.                                                  |
 | Configured needs-input label present     | Needs input    | Release without failure or retry, including after timeout or orphaning. |
 | Unpushed commits under `unpushablePaths` | Failed, final  | Fail without retrying and name the paths.                               |
@@ -544,7 +544,10 @@ the repository is neither paused nor failed for that failure.
 The PR must target the refreshed remote default branch and be behind it:
 `origin/HEAD` is not an ancestor of the PR head fetched by SHA into the clone.
 Current-base PRs wait. Issues carrying the configured needs-input or failed
-label and issues with a running sandbox get no merge relaunch.
+label and issues with a running sandbox get no merge relaunch. The configured
+skip label reserves delivery for the orchestrating agent outside the factory,
+so it also holds merge relaunches, including interrupted or paused delivery.
+A failed label or an unresolved recorded model also holds that resumption.
 
 A merge relaunch takes a provider cap slot and waits for the pause threshold
 and for the repository to resume, as an interrupted run does. It keeps the

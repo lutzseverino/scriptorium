@@ -5536,3 +5536,52 @@ for (const reason of ["conflict", "failed checks", "permission refusal"])
       ),
     );
   });
+
+for (const orphan of [false, true])
+  test(`the configured skip label reserves stale PR delivery for the orchestrating agent, orphan: ${orphan}`, async (t) => {
+    const bare = remote(t, {
+      ...factoryFiles,
+      ".factory/config.json": JSON.stringify({
+        ...conventions,
+        labels: { ...conventions.labels, skip: "owner:delivery" },
+      }),
+    });
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: orphan
+              ? ["factory:running", "owner:delivery"]
+              : ["ready-for-agent"],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    if (!orphan) {
+      await run.tick();
+      run.launched[0].finish();
+      await run.drain();
+    }
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr);
+    if (!issue.labels.includes("owner:delivery"))
+      issue.labels.push("owner:delivery");
+    advanceDefault(bare);
+    await run.tick();
+    assert.equal(run.launched.length, orphan ? 0 : 1);
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, orphan ? 0 : 1);
+    assert.ok(issue.labels.includes("owner:delivery"));
+    assert.ok(issue.labels.includes("factory:running"));
+    issue.labels = issue.labels.filter((label) => label !== "owner:delivery");
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      orphan ? 1 : 2,
+      "skipping did not consume the PR head",
+    );
+  });

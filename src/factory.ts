@@ -273,7 +273,9 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const resumed = held.get(key(repository.name, issue.number));
     if (resumed) {
       held.delete(key(repository.name, issue.number));
-      decisions.push(...resume(repository, issue, resumed, running, snapshot));
+      decisions.push(
+        ...resume(repository, issue, resumed, running, snapshot, models),
+      );
       continue;
     }
     const previous = snapshot.runs.find(
@@ -555,10 +557,22 @@ function resume(
   run: Run,
   running: Map<string, number>,
   snapshot: Snapshot,
+  models: Models,
 ): Decision[] {
   const at = { repository: repository.name, issue: issue.number };
   if (needsInputExclusion(issue, repository.configuration.labels))
     return [{ kind: "release", ...at }];
+  if (run.mergeRelaunch) {
+    const excluded = mergeExclusion(issue, repository.configuration.labels);
+    const model = models.resolveModel(
+      `${run.provider}/${run.model}@${run.effort}`,
+    );
+    const reason = excluded ?? ("error" in model ? model.error : null);
+    if (reason)
+      return [
+        { kind: "skip", ...at, reason: `merge relaunch waits: ${reason}` },
+      ];
+  }
   const pause = run.ended && "paused" in run.ended ? run.ended : null;
   if (pause && !pause.commented)
     return [{ kind: "pause", ...at, pause: pause.paused }];
@@ -598,11 +612,11 @@ function mergeRelaunch(
 ): Decision[] {
   const at = { repository: repository.name, issue: issue.number };
   const { labels, modelLabelPrefix } = repository.configuration;
-  if (
-    issue.labels.includes(labels.needsInput) ||
-    issue.labels.includes(labels.failed)
-  )
-    return [];
+  const excluded = mergeExclusion(issue, labels);
+  if (excluded)
+    return [
+      { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
+    ];
   const model = previous
     ? models.resolveModel(
         `${previous.provider}/${previous.model}@${previous.effort}`,
@@ -631,6 +645,23 @@ function mergeRelaunch(
       mergeRelaunch: target,
     },
   ];
+}
+
+// A merge delivery never takes over an owner's question or a PR whose
+// continuation belongs outside the factory, including after interruption.
+function mergeExclusion(
+  issue: Issue,
+  labels: FactoryConfiguration["labels"],
+): string | null {
+  return (
+    needsInputExclusion(issue, labels) ??
+    (issue.labels.includes(labels.failed)
+      ? `labelled ${labels.failed}`
+      : null) ??
+    (labels.skip !== undefined && issue.labels.includes(labels.skip)
+      ? `labelled ${labels.skip}; delivered outside the factory`
+      : null)
+  );
 }
 
 function unretried({ run, failure }: Retry, reason: string): Decision {

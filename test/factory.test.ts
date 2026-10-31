@@ -2653,3 +2653,58 @@ test("a merge relaunch retains its attempt and model and uses a cap slot at the 
     [],
   );
 });
+
+test("merge delivery respects skip and failed labels and unresolved models after interruption", () => {
+  const mergeRelaunch = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  for (const ending of ["ended", "interrupted", "paused"]) {
+    const previous = run(4, {
+      mergeRelaunch,
+      ended:
+        ending === "paused"
+          ? {
+              paused: {
+                cause: "usage limit",
+                reset: null,
+                at: now,
+                until: now,
+              },
+              commented: true,
+            }
+          : ending === "interrupted"
+            ? { interrupted: true }
+            : {
+                timedOut: false,
+                pullRequest: "open",
+                mergeCandidate: mergeRelaunch,
+              },
+    });
+    const repo = repository(widgets, [
+      issue(4, ["factory:running", "owner:delivery"]),
+    ]);
+    repo.configuration.labels.skip = "owner:delivery";
+    assert.deepEqual(
+      launches(decide({ repositories: [repo], runs: [previous] })),
+      [],
+    );
+    repo.issues[0].labels = ["factory:running", "factory:failed"];
+    assert.deepEqual(
+      launches(decide({ repositories: [repo], runs: [previous] })),
+      [],
+    );
+    repo.issues[0].labels = ["factory:running"];
+    assert.deepEqual(
+      launches(
+        decideFactory(snapshot({ repositories: [repo], runs: [previous] }), {
+          ...registry,
+          resolveModel: () => ({ error: "recorded model unavailable" }),
+        }),
+      ),
+      [],
+    );
+  }
+});
