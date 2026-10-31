@@ -486,17 +486,19 @@ Sandbox images live in the host's Docker daemon, tagged as the
 
 Ended runs and orphaned claims use the same table, in order. Pull requests
 come from the issue's closing references and its `factory/issue-<n>` branch.
-A closed issue settles as done first. Otherwise an open pull request takes
-precedence even when the run timed out or the issue needs input.
+A closed issue settles as done first. For an open issue, a merged PR's actual
+closing-reference evidence determines completion. A needs-input question takes
+precedence over an unmerged PR, even after timeout or orphaning.
 
-| First matching observation               | Run outcome    | Action                                                                  |
-| ---------------------------------------- | -------------- | ----------------------------------------------------------------------- |
-| Issue closed                             | Done           | Release the claim.                                                      |
-| Pull request open                        | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.  |
-| Pull request merged, issue open          | Failed, final  | Fail without retrying.                                                  |
-| Configured needs-input label present     | Needs input    | Release without failure or retry, including after timeout or orphaning. |
-| Unpushed commits under `unpushablePaths` | Failed, final  | Fail without retrying and name the paths.                               |
-| Anything else                            | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                 |
+| First matching observation                                 | Run outcome    | Action                                                                                |
+| ---------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------- |
+| Issue closed                                               | Done           | Release the claim.                                                                    |
+| Pull request merged with a closing reference to this issue | Done           | Close the issue and clear the claim's running, paused, needs-input and failed labels. |
+| Pull request merged without a closing reference            | Failed, final  | Fail without retrying; the owner must decide whether the work finished the issue.     |
+| Configured needs-input label present                       | Needs input    | Release the claim and retain the existing work and PR context for resumption.         |
+| Pull request open                                          | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.                |
+| Unpushed commits under `unpushablePaths`                   | Failed, final  | Fail without retrying and name the paths.                                             |
+| Anything else                                              | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                               |
 
 An ended run awaiting merge posts one deterministic issue notice, without an
 agent or provider usage. It says the run ended, its pull request remains open,
@@ -514,12 +516,29 @@ merge. A failed comment write can retry on a later pass.
 The running label and an unsettled host run record are independent pickup
 gates. Removing the running label alone leaves the host record holding the
 issue, including after restart. Removing that label alone starts no new attempt
-and does not authorize a merge relaunch. An open pull request
-keeps the claim with or without the needs-input label. To hand work back, close
-the pull request before removing needs-input, wait for the factory to release
-the claim, then remove needs-input so pickup starts a fresh attempt 1 on the
-existing branch. Resolve a merged pull request's issue by closing it if the
-work finished it; a merged PR leaving its issue open fails for good.
+and does not authorize a merge relaunch.
+
+The configured state labels have these meanings:
+
+- `labels.running`: the factory holds the issue, including while awaiting merge.
+- `labels.needsInput`: an owner question holds the work. Once answered, remove
+  this label to resume the same work and PR, whether the PR is open or
+  closed-unmerged. The host retains the resume marker across restarts and
+  starts a fresh attempt 1 once the existing readiness, authorization, blockers,
+  skip, repository, capacity and usage gates allow pickup. Its prompt directs
+  the agent to preserve the PR, reviews, answers, handoff context and all local
+  work, reopen the existing PR when needed, refresh the default branch, rebase
+  or replay only this issue's changes and revalidate before delivery. It must
+  never open a replacement PR; uncertain ownership requires an owner handoff.
+- `labels.failed`: the run failed for good. Address its failure and remove the
+  label to retry under the same pickup gates.
+- `labels.paused`: provider usage paused the run; the factory resumes it
+  automatically. Do not remove this label by hand.
+
+These are configured strings, not fixed label names. Skipped work stays outside
+factory pickup and follows its repository's designated merge handoff. A merged
+branch-only PR is insufficient evidence to close an issue: only an actual
+closing reference authorizes that completion.
 
 Interrupted and [paused runs](#paused-runs) bypass the table and relaunch as
 the same attempt. An orphaned claim with no interrupted or paused record uses

@@ -3,7 +3,7 @@
 import type { FactoryConfiguration } from "./factory-configuration.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
-import type { MergeRelaunch } from "./platform.ts";
+import type { MergeRelaunch, InputResume } from "./platform.ts";
 import {
   closes,
   readinessExclusion,
@@ -70,6 +70,7 @@ export type Run = {
   retry?: { failure: string; log: string };
   // The delivery task, retained through interruptions and provider pauses.
   mergeRelaunch?: MergeRelaunch;
+  inputResume?: InputResume;
   startedAt: string;
   log: string;
   ended:
@@ -80,6 +81,7 @@ export type Run = {
         timedOut: boolean;
         orphaned?: true;
         pullRequest: PullRequestState;
+        closesIssue?: true;
         mergeCandidate?: MergeRelaunch;
         // Paths under the host's unpushable paths in commits the remote lacks.
         unpushedChanges?: string[];
@@ -90,7 +92,9 @@ export type Run = {
 export type Claim = {
   issue: number;
   pullRequest: PullRequestState;
+  closesIssue?: true;
   mergeCandidate?: MergeRelaunch;
+  inputResume?: InputResume;
   unpushedChanges?: string[];
 };
 
@@ -179,6 +183,7 @@ export type Launch = {
   // An interrupted or paused run launching again as the same attempt.
   relaunch?: true;
   mergeRelaunch?: MergeRelaunch;
+  inputResume?: InputResume;
 };
 
 export type Decision = { repository: string; issue: number } & (
@@ -196,6 +201,7 @@ export type Decision = { repository: string; issue: number } & (
       unpushedChanges?: string[];
     }
   | { kind: "keep" }
+  | { kind: "complete" }
   | { kind: "release" }
   // Swaps the running label for the paused one and tells the issue why.
   | { kind: "pause"; pause: Pause }
@@ -227,7 +233,20 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   }
   for (const repository of snapshot.repositories)
     for (const claim of repository.claims)
-      if (!closing.has(key(repository.name, claim.issue))) {
+      if (
+        !closing.has(key(repository.name, claim.issue)) &&
+        !(
+          claim.inputResume &&
+          claim.pullRequest !== "merged" &&
+          repository.issues.some(
+            (issue) =>
+              issue.number === claim.issue &&
+              !issue.labels.includes(
+                repository.configuration.labels.needsInput,
+              ),
+          )
+        )
+      ) {
         const settled = settleOutcome(
           {
             repository: repository.name,
@@ -238,6 +257,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
           {
             ended: "orphaned",
             pullRequest: claim.pullRequest,
+            closesIssue: claim.closesIssue,
             unpushedChanges: claim.unpushedChanges,
           },
           repository,
@@ -270,6 +290,15 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       });
       continue;
     }
+    if (
+      decisions.some(
+        (decision) =>
+          decision.repository === repository.name &&
+          decision.issue === issue.number &&
+          (decision.kind === "complete" || decision.kind === "fail"),
+      )
+    )
+      continue;
     const resumed = held.get(key(repository.name, issue.number));
     if (resumed) {
       held.delete(key(repository.name, issue.number));
@@ -289,6 +318,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         ? previous.ended.mergeCandidate
         : claim?.mergeCandidate;
     if (
+      !claim?.inputResume &&
       mergeCandidate &&
       !snapshot.runs.some(
         (run) =>
@@ -359,7 +389,13 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
     decisions.push(
       { kind: "claim", ...at },
-      { kind: "launch", ...at, ...model, attempt: 1 },
+      {
+        kind: "launch",
+        ...at,
+        ...model,
+        attempt: 1,
+        ...(claim?.inputResume && { inputResume: claim.inputResume }),
+      },
     );
   }
   for (const retry of retries.values())
@@ -395,7 +431,10 @@ function runningCounts(snapshot: Snapshot): Map<string, number> {
 }
 
 // A failed first run that may retry on the retry model.
-type SettlingRun = Pick<Run, "repository" | "issue" | "attempt"> & {
+type SettlingRun = Pick<
+  Run,
+  "repository" | "issue" | "attempt" | "inputResume"
+> & {
   log: string | null;
 };
 type Retry = { run: SettlingRun; failure: string; model: Model };
@@ -451,6 +490,7 @@ function settle(
           ? "timed out"
           : "exited",
       pullRequest: run.ended.pullRequest,
+      closesIssue: run.ended.closesIssue,
       unpushedChanges: run.ended.unpushedChanges,
     },
     repository,
@@ -463,7 +503,10 @@ function settle(
 // owns retries and gates; the outcome module owns observation precedence.
 function settleOutcome(
   run: SettlingRun,
-  observation: Pick<Observation, "ended" | "pullRequest" | "unpushedChanges">,
+  observation: Pick<
+    Observation,
+    "ended" | "pullRequest" | "unpushedChanges" | "closesIssue"
+  >,
   repository: Repository,
   snapshot: Snapshot,
   models: Models,
@@ -480,6 +523,7 @@ function settleOutcome(
     },
     snapshot.settings.timeLimitMinutes,
   );
+  if (outcome.kind === "complete") return [{ kind: "complete", ...at }];
   if (outcome.kind === "awaiting merge") return [{ kind: "keep", ...at }];
   if (outcome.kind === "done" || outcome.kind === "needs input")
     return [{ kind: "release", ...at }];
@@ -540,6 +584,7 @@ function relaunch(
       ...retry.model,
       attempt: 2,
       retry: { failure: retry.failure, log: retry.run.log ?? "" },
+      ...(retry.run.inputResume && { inputResume: retry.run.inputResume }),
     },
   ];
 }
@@ -593,6 +638,7 @@ function resume(
       effort: run.effort,
       attempt: run.attempt,
       ...(run.retry && { retry: run.retry }),
+      ...(run.inputResume && { inputResume: run.inputResume }),
       ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
       relaunch: true,
     },
@@ -641,6 +687,7 @@ function mergeRelaunch(
       ...model,
       attempt: previous?.attempt ?? 1,
       ...(previous?.retry && { retry: previous.retry }),
+      ...(previous?.inputResume && { inputResume: previous.inputResume }),
       relaunch: true,
       mergeRelaunch: target,
     },
