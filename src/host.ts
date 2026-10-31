@@ -1172,9 +1172,8 @@ export function createHost(
       if (pass.paused !== null)
         report(`${pass.name} is paused: ${pass.paused}`);
     const decisions = decideFactory(snapshot, registry);
-    // A failed write stops that repository's decisions for this pass, such as
-    // a launch after a claim that did not apply; other repositories continue.
-    const stopped = new Set<string>();
+    // Hold comments retry independently; their availability never prevents
+    // a time-limit stop or settlement of existing work.
     for (const pass of passes) {
       if (!pass.read || !pass.platform) continue;
       for (const issue of pass.read.issues) {
@@ -1196,6 +1195,9 @@ export function createHost(
         }
       }
     }
+    // A failed transition stops the repository's later decisions, such as
+    // a launch after a claim that did not apply; other repositories continue.
+    const stopped = new Set<string>();
     for (const decision of decisions) {
       if (interrupting) break;
       if (stopped.has(decision.repository)) continue;

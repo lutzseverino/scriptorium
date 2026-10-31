@@ -2961,3 +2961,86 @@ test("interrupted, paused and merge relaunches hold a recorded model removed fro
     );
   }
 });
+
+test("every relaunch holds an unlisted current label even when its recorded model is listed", () => {
+  const models = createRegistry(
+    {
+      "claude-code": { credential: "/unused" },
+      codex: { credential: "/unused" },
+    },
+    fakePorts().ports,
+    ["claude-sonnet-5-5"],
+  );
+  for (const ended of [
+    { interrupted: true as const },
+    {
+      paused: {
+        cause: "usage limit" as const,
+        reset: null,
+        at: now,
+        until: now,
+      },
+      commented: true,
+    },
+    {
+      timedOut: false,
+      pullRequest: "open" as const,
+      mergeCandidate: {
+        number: 10,
+        headCommit: "b".repeat(40),
+        baseBranch: "main",
+        createdAt: now,
+      },
+    },
+  ]) {
+    const decisions = decideFactory(
+      snapshot({
+        issues: [
+          issue(1, [
+            "ready-for-agent",
+            "factory:running",
+            "model:codex/gpt-unlisted",
+          ]),
+        ],
+        runs: [run(1, { ended })],
+        usage: { "claude-code": 0 },
+      }),
+      models,
+    );
+    assert.deepEqual(launches(decisions), []);
+    assert.ok(
+      decisions.some(
+        (decision) =>
+          decision.kind === "skip" && decision.hold === "model-label",
+      ),
+    );
+  }
+});
+
+test("a pending pause notice is delivered before the removed-model relaunch hold", () => {
+  const models = createRegistry(
+    { "claude-code": { credential: "/unused" } },
+    fakePorts().ports,
+    ["claude-opus-5-5"],
+  );
+  const paused = {
+    paused: { cause: "usage limit" as const, reset: null, at: now, until: now },
+    commented: false,
+  };
+  const input = snapshot({
+    issues: [issue(1, ["ready-for-agent", "factory:running"])],
+    runs: [run(1, { ended: paused })],
+    settings: { defaultModel: "claude-opus-5-5" },
+  });
+  assert.deepEqual(decideFactory(input, models), [
+    { kind: "pause", ...at(1), pause: paused.paused },
+  ]);
+  paused.commented = true;
+  const decisions = decideFactory(input, models);
+  assert.deepEqual(launches(decisions), []);
+  assert.ok(
+    decisions.some(
+      (decision) => decision.kind === "skip" && decision.hold === "model-label",
+    ),
+  );
+});

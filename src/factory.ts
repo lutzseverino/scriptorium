@@ -7,6 +7,7 @@ import type { MergeRelaunch, InputResume } from "./platform.ts";
 import {
   closes,
   readinessExclusion,
+  readinessExclusions,
   references,
   type Policy,
   type Readiness,
@@ -424,6 +425,72 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       repository: run.repository,
       issue: run.issue,
     });
+  // Reconcile every actionable reason independently of pickup's precedence.
+  // A blocked issue may also have a model error; neither clears the other.
+  for (const repository of snapshot.repositories) {
+    const { labels, modelLabelPrefix } = repository.configuration;
+    for (const issue of repository.issues) {
+      const at = { repository: repository.name, issue: issue.number };
+      if (
+        !issue.labels.includes(labels.ready) ||
+        [
+          labels.running,
+          labels.paused,
+          labels.failed,
+          labels.needsInput,
+          labels.skip,
+        ].some(
+          (label) => label !== undefined && issue.labels.includes(label),
+        ) ||
+        !decisions.some(
+          (decision) =>
+            decision.repository === at.repository &&
+            decision.issue === at.issue &&
+            decision.kind === "skip",
+        )
+      )
+        continue;
+      const holds = readinessExclusions(
+        issue,
+        repository.issues,
+        policy(repository),
+      ).flatMap((hold) =>
+        hold.key ? [{ key: hold.key, reason: hold.reason }] : [],
+      );
+      if (issue.subIssues.length === 0) {
+        const model = issueModel(
+          issue,
+          modelLabelPrefix,
+          snapshot.settings,
+          models,
+        );
+        if ("error" in model)
+          holds.push({ key: "model-label", reason: model.error });
+        const configuration = paused(repository);
+        if (configuration)
+          holds.push({
+            key: "repository-configuration",
+            reason: configuration,
+          });
+      }
+      for (const hold of holds)
+        if (
+          !decisions.some(
+            (decision) =>
+              decision.repository === at.repository &&
+              decision.issue === at.issue &&
+              decision.kind === "skip" &&
+              decision.hold === hold.key,
+          )
+        )
+          decisions.push({
+            kind: "skip",
+            ...at,
+            reason: hold.reason,
+            hold: hold.key,
+          });
+    }
+  }
   return decisions;
 }
 
@@ -648,6 +715,24 @@ function resume(
   const at = { repository: repository.name, issue: issue.number };
   if (needsInputExclusion(issue, repository.configuration.labels))
     return [{ kind: "release", ...at }];
+  const pause = run.ended && "paused" in run.ended ? run.ended : null;
+  if (pause && !pause.commented)
+    return [{ kind: "pause", ...at, pause: pause.paused }];
+  const selected = issueModel(
+    issue,
+    repository.configuration.modelLabelPrefix,
+    snapshot.settings,
+    models,
+  );
+  if ("error" in selected)
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `relaunch waits: ${selected.error}`,
+        hold: "model-label",
+      },
+    ];
   const recordedModel = models.resolveModel(
     `${run.provider}/${run.model}@${run.effort}`,
   );
@@ -667,9 +752,6 @@ function resume(
         { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
       ];
   }
-  const pause = run.ended && "paused" in run.ended ? run.ended : null;
-  if (pause && !pause.commented)
-    return [{ kind: "pause", ...at, pause: pause.paused }];
   const gated =
     paused(repository) ??
     (pause && limited(run.provider, pause.paused, snapshot)) ??
@@ -719,11 +801,20 @@ function mergeRelaunch(
     return [
       { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
     ];
-  const model = previous
-    ? models.resolveModel(
-        `${previous.provider}/${previous.model}@${previous.effort}`,
-      )
-    : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
+  const selected = issueModel(
+    issue,
+    modelLabelPrefix,
+    snapshot.settings,
+    models,
+  );
+  const model =
+    "error" in selected
+      ? selected
+      : previous
+        ? models.resolveModel(
+            `${previous.provider}/${previous.model}@${previous.effort}`,
+          )
+        : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
   const reason =
     "error" in model
       ? model.error
