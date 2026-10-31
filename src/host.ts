@@ -464,9 +464,7 @@ export function createHost(
   // platform its remote names and the host's settings for that platform, or
   // why the factory doesn't serve it. A platform that marks no bots needs the
   // accounts that never authorize named.
-  function connect(
-    name: string,
-  ):
+  function connect(name: string):
     | {
         connection: ConnectionWithLinkAdditions;
         authorization: Repository["authorization"];
