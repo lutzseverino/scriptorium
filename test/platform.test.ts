@@ -1153,3 +1153,78 @@ test("closed-issue cleanup preserves unrelated labels and can resume after any f
     }
   }
 });
+
+test("release holds read all open labelled PR numbers through authenticated pages", async () => {
+  const { connection, requests } = github((request, body) => {
+    assert.equal(request, "FactoryReleaseHold");
+    assert.deepEqual(body.variables, {
+      owner: "acme",
+      name: "widgets",
+      label: "release-hold",
+      after: requests.length === 1 ? null : "next",
+    });
+    assert.match(body.query, /states: OPEN/);
+    assert.match(body.query, /labels: \[\$label\]/);
+    return {
+      status: 200,
+      data: {
+        data: {
+          repository: {
+            pullRequests: {
+              totalCount: 2,
+              nodes: [{ number: requests.length === 1 ? 40 : 41 }],
+              pageInfo: {
+                hasNextPage: requests.length === 1,
+                endCursor: requests.length === 1 ? "next" : null,
+              },
+            },
+          },
+        },
+      },
+    };
+  });
+  assert.deepEqual(
+    await repositoryPlatform(connection, labels).readReleaseHold(),
+    [],
+  );
+  assert.equal(requests.length, 0);
+  assert.deepEqual(
+    await repositoryPlatform(connection, {
+      ...labels,
+      releaseHold: "release-hold",
+    }).readReleaseHold(),
+    [40, 41],
+  );
+});
+
+test("unreadable or incomplete release holds never imply no hold", async () => {
+  for (const response of [
+    { status: 503, data: {} },
+    { status: 200, data: { errors: [{ message: "unavailable" }] } },
+    { status: 200, data: { data: { repository: null } } },
+    ...[
+      { totalCount: 1, nodes: [], pageInfo: { hasNextPage: false } },
+      {
+        totalCount: 1,
+        nodes: [{ number: "40" }],
+        pageInfo: { hasNextPage: false },
+      },
+      {
+        totalCount: 1,
+        nodes: [{ number: 40 }],
+        pageInfo: { hasNextPage: true, endCursor: null },
+      },
+    ].map((pullRequests) => ({
+      status: 200,
+      data: { data: { repository: { pullRequests } } },
+    })),
+  ]) {
+    const { connection } = github(() => response);
+    await assert.rejects(
+      repositoryPlatform(connection, {
+        ...labels,
+        releaseHold: "release-hold",
+      }).readReleaseHold(),
+    );
+  }
+});

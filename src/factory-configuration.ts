@@ -11,6 +11,7 @@ export type FactoryConfiguration = {
     needsInput: string;
     paused: string;
     skip?: string;
+    releaseHold?: string;
   };
   modelLabelPrefix: string;
   prompt: string;
@@ -81,8 +82,11 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
       problems.push("version: must be 1");
     if (Object.hasOwn(root, "labels")) {
       const fields = ["ready", "running", "failed", "needsInput", "paused"];
-      const labels = object(root.labels, fields, "labels.", ["skip"]);
-      fields.push("skip");
+      const labels = object(root.labels, fields, "labels.", [
+        "skip",
+        "releaseHold",
+      ]);
+      fields.push("skip", "releaseHold");
       if (labels)
         for (const name of fields)
           if (Object.hasOwn(labels, name)) text(labels[name], `labels.${name}`);

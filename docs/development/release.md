@@ -50,6 +50,11 @@ for compatible releases: use `feat` for a capability, `fix` for a fix, or
 `pnpm install --lockfile-only`, and carries the changes needed for the release.
 Nothing is committed for the release after it merges.
 
+When this repository's `.factory/config.json` sets `labels.releaseHold`, apply
+that label to the release PR when opening it and keep it until the PR merges
+or closes. Other factory PRs then defer merging until the release hold ends;
+see [release holds](../usage/factory-configuration.md).
+
 Follow the [contribution guidelines](../../CONTRIBUTING.md), including review,
 the PR body, issue reference, and squash merge. The body names the version and
 the previous factory tag, with its repository when that is

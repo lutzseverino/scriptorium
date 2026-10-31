@@ -195,3 +195,26 @@ test("every supplied comment template is validated before any comment is needed"
     assert.throws(() => readFactoryConfiguration(path), /comments\./);
   }
 });
+
+test("a release-hold label is optional, trimmed and distinct in version 1", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  configuration.labels.skip = "manual";
+  configuration.labels.releaseHold = "release-hold";
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(readFactoryConfiguration(path), configuration);
+  for (const value of [
+    "",
+    " hold",
+    "hold ",
+    null,
+    9,
+    ...Object.values(configuration.labels)
+      .slice(0, -1)
+      .map((label) => String(label).toUpperCase()),
+  ]) {
+    configuration.labels.releaseHold = value;
+    writeFileSync(path, JSON.stringify(configuration));
+    assert.throws(() => readFactoryConfiguration(path), /labels.releaseHold:/);
+  }
+});

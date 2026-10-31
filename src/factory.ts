@@ -111,6 +111,8 @@ export type Repository = {
   paused: string | null;
   issues: Issue[];
   claims: Claim[];
+  // Open labelled PR numbers; null means the configured hold read failed.
+  releaseHold?: number[] | null;
 };
 
 export type Settings = {
@@ -820,6 +822,16 @@ function mergeRelaunch(
     return [
       { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
     ];
+  const hold = releaseHoldReason(repository.releaseHold, target.number);
+  if (hold)
+    return [
+      {
+        kind: "skip",
+        ...at,
+        reason: `relaunch waits: ${hold}`,
+        hold: "release-hold",
+      },
+    ];
   const selected = issueModel(
     issue,
     modelLabelPrefix,
@@ -869,6 +881,20 @@ function mergeRelaunch(
       mergeRelaunch: target,
     },
   ];
+}
+
+// The labelled PR itself never holds its own delivery. An unreadable set
+// requires a successful read before granting merge permission.
+export function releaseHoldReason(
+  hold: Repository["releaseHold"],
+  own: number,
+): string | null {
+  if (hold === null)
+    return "release hold state is unreadable; merging resumes after a successful read confirms no other labelled PR remains";
+  const others = hold?.filter((number) => number !== own) ?? [];
+  return others.length
+    ? `release hold (${others.map((number) => `#${number}`).join(", ")}); merging resumes when the last labelled PR closes or loses the label`
+    : null;
 }
 
 // A merge delivery never takes over an owner's question or a PR whose

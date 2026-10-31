@@ -435,7 +435,8 @@ The factory comments on actionable holds: refused readiness (the actor, a
 missing role, an edit after readiness or an unapproved current Agent Brief),
 a parent not ready under the parent rules above, a model-label error (several
 labels, an unresolvable label or an unlisted model), and a repository paused
-for its configuration. Each reason has one marker-keyed comment on the held
+for its configuration, and a release hold on merging. Each reason has one
+marker-keyed comment on the held
 issue. Changed details update it in place; a cleared reason edits it to say
 it is resolved. Recurrence reuses that comment, including after a host restart.
 Comments are never deleted.
@@ -580,6 +581,15 @@ kept awaiting merge or retried carries the running label. The notice starts no
 babysitting or retry attempt by itself and changes no outcome precedence.
 
 ### Merge relaunches
+
+An optional [release hold](factory-configuration.md) makes merge relaunches wait
+while another open PR carries `labels.releaseHold`, or the hold cannot be read.
+It leaves implementation launches, retries and interrupted or paused runs
+under their usual gates. Release-held PRs resume after a successful clear read,
+waiving only the behind requirement below. Sticky per-run evidence and the
+release-held PR number persist in the run record; a merge run ended by a hold
+does not consume its head. The issue's release-hold comment updates and resolves
+in place across restarts.
 
 Each pass assesses an ended run or orphaned claim awaiting merge for one
 **merge relaunch** per PR head. Exactly one open, same-repository PR must be
