@@ -3044,3 +3044,52 @@ test("a pending pause notice is delivered before the removed-model relaunch hold
     ),
   );
 });
+
+test("relaunch model and configuration reasons remain independently actionable under state labels", () => {
+  const models = createRegistry(
+    {
+      "claude-code": { credential: "/unused" },
+      codex: { credential: "/unused" },
+    },
+    fakePorts().ports,
+    ["claude-sonnet-5-5"],
+  );
+  for (const ended of [
+    { interrupted: true as const },
+    {
+      paused: {
+        cause: "usage limit" as const,
+        reset: null,
+        at: now,
+        until: now,
+      },
+      commented: true,
+    },
+    {
+      timedOut: false,
+      pullRequest: "open" as const,
+      mergeCandidate: {
+        number: 10,
+        headCommit: "c".repeat(40),
+        baseBranch: "main",
+        createdAt: now,
+      },
+    },
+  ]) {
+    const candidate = issue(1, ["factory:running", "model:gpt-unlisted"]);
+    const repo = repository(widgets, [candidate], {
+      paused: "invalid configuration",
+    });
+    const input = snapshot({ repositories: [repo], runs: [run(1, { ended })] });
+    const held = () =>
+      decideFactory(input, models)
+        .flatMap((decision) =>
+          decision.kind === "skip" && decision.hold ? [decision.hold] : [],
+        )
+        .sort();
+    assert.deepEqual(held(), ["model-label", "repository-configuration"]);
+    candidate.labels = ["factory:running"];
+    assert.deepEqual(held(), ["repository-configuration"]);
+    assert.deepEqual(launches(decideFactory(input, models)), []);
+  }
+});

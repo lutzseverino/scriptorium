@@ -431,11 +431,22 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const { labels, modelLabelPrefix } = repository.configuration;
     for (const issue of repository.issues) {
       const at = { repository: repository.name, issue: issue.number };
+      const previous = snapshot.runs.find(
+        (run) => run.repository === at.repository && run.issue === at.issue,
+      );
+      const claim = repository.claims.find((claim) => claim.issue === at.issue);
+      const continuing = Boolean(
+        (previous?.ended &&
+          ("interrupted" in previous.ended ||
+            "paused" in previous.ended ||
+            ("mergeCandidate" in previous.ended &&
+              previous.ended.mergeCandidate))) ||
+        (claim?.mergeCandidate && !claim.inputResume),
+      );
       if (
-        !issue.labels.includes(labels.ready) ||
+        (!continuing && !issue.labels.includes(labels.ready)) ||
         [
-          labels.running,
-          labels.paused,
+          ...(!continuing ? [labels.running, labels.paused] : []),
           labels.failed,
           labels.needsInput,
           labels.skip,
@@ -450,10 +461,10 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         )
       )
         continue;
-      const holds = readinessExclusions(
-        issue,
-        repository.issues,
-        policy(repository),
+      const holds = (
+        continuing
+          ? []
+          : readinessExclusions(issue, repository.issues, policy(repository))
       ).flatMap((hold) =>
         hold.key ? [{ key: hold.key, reason: hold.reason }] : [],
       );
