@@ -489,20 +489,21 @@ come from the issue's closing references and its `factory/issue-<n>` branch.
 An open pull request takes precedence even when the run timed out or the
 issue closed.
 
-| First matching observation               | Run outcome    | Action                                                                     |
-| ---------------------------------------- | -------------- | -------------------------------------------------------------------------- |
-| Pull request open                        | Awaiting merge | Tell the issue once and keep the claim without taking a provider cap slot. |
-| Issue closed                             | Done           | Release the claim.                                                         |
-| Pull request merged, issue open          | Failed, final  | Fail without retrying.                                                     |
-| Configured needs-input label present     | Needs input    | Release without failure or retry, including after timeout or orphaning.    |
-| Unpushed commits under `unpushablePaths` | Failed, final  | Fail without retrying and name the paths.                                  |
-| Anything else                            | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                    |
+| First matching observation               | Run outcome    | Action                                                                  |
+| ---------------------------------------- | -------------- | ----------------------------------------------------------------------- |
+| Pull request open                        | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.  |
+| Issue closed                             | Done           | Release the claim.                                                      |
+| Pull request merged, issue open          | Failed, final  | Fail without retrying.                                                  |
+| Configured needs-input label present     | Needs input    | Release without failure or retry, including after timeout or orphaning. |
+| Unpushed commits under `unpushablePaths` | Failed, final  | Fail without retrying and name the paths.                               |
+| Anything else                            | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                 |
 
 An ended run awaiting merge posts one deterministic issue notice, without an
 agent or provider usage. It says the run ended, its pull request remains open,
-and the factory retains the claim without a live agent. The owner must resolve
-the pull request by merging or closing it; the factory keeps observing the
-outcome under the table above. Merging does not always close the issue. The
+and the factory retains the claim without a live agent while it waits. An
+eligible stale PR gets a merge relaunch as described below. Otherwise the owner
+resolves the pull request by merging or closing it; the factory keeps observing
+the outcome under the table above. Merging does not always close the issue. The
 notice uses the factory's default wording or the optional
 [`comments.awaitingMerge` template](factory-configuration.md#comment-templates).
 Successful delivery is recorded for that attempt or retained orphan claim, so
@@ -512,7 +513,8 @@ merge. A failed comment write can retry on a later pass.
 
 The running label and an unsettled host run record are independent pickup
 gates. Removing the running label alone leaves the host record holding the
-issue, including after restart, and launches no new run. An open pull request
+issue, including after restart. Removing that label alone starts no new attempt
+and does not authorize a merge relaunch. An open pull request
 keeps the claim with or without the needs-input label. To hand work back, close
 the pull request before removing needs-input, wait for the factory to release
 the claim, then remove needs-input so pickup starts a fresh attempt 1 on the
@@ -526,7 +528,61 @@ with no record counts as attempt 1. An issue carrying the configured running
 or paused label that no run on the host holds is such a claim. Failing or
 releasing a claim removes whichever of the two labels it carries, and a claim
 kept awaiting merge or retried carries the running label. The notice starts no
-babysitting or retry attempt and changes no outcome precedence.
+babysitting or retry attempt by itself and changes no outcome precedence.
+
+### Merge relaunches
+
+Each pass assesses an ended run or orphaned claim awaiting merge for one
+**merge relaunch** per PR head. Exactly one open, same-repository PR must be
+owned by the run: its head branch is `factory/issue-<n>`, or its author matches
+the factory identity successfully read through the supplied platform
+connection. A closing reference alone, a person's unrelated PR, or an arbitrary
+bot author grants no delivery ownership. If the identity read fails (including
+an installation token's unsupported viewer read), only branch ownership counts;
+the repository is neither paused nor failed for that failure.
+
+The PR must target the refreshed remote default branch and be behind it:
+`origin/HEAD` is not an ancestor of the PR head fetched by SHA into the clone.
+Current-base PRs wait. Issues carrying the configured needs-input or failed
+label and issues with a running sandbox get no merge relaunch.
+
+A merge relaunch takes a provider cap slot and waits for the pause threshold
+and for the repository to resume, as an interrupted run does. It keeps the
+attempt, provider, model, effort and PR history of the run that opened the PR;
+it consumes no retry. A label-only orphan uses its model label or the host's
+default model, as pickup does. An unresolved model is logged and skipped.
+The host persists consumed PR/head pairs before launch, across passes and
+restarts. An unchanged consumed head stays awaiting merge. A new head is
+assessed again: each advance of the default branch can earn another relaunch
+when a head produced by previous recovery falls behind. The bound is per PR
+head, not one recovery for the entire PR.
+
+The agent brings the same PR onto the current base, revalidates, pushes, waits
+for current-head checks and reviews, then merges through the repository's
+installed babysit under existing merge authorization. It preserves dirty work,
+reviews and handoff context. The recovery-state prompt's restriction applies
+to restoring local state; the subsequent merge delivery is the task. Where
+installed babysit supports branch-update recovery, follow it, including stale-base
+exit `4`. Where it does not, the existing delivery-push instructions require
+fetching origin, resolving its default branch, inspecting outgoing history and
+diff, rebasing or replaying only the issue's changes, and revalidating.
+Never merge the default branch into the issue branch or use GitHub update-branch.
+Babysit's other merge gates always apply.
+
+Repo Canon v0.19.1 has no branch-update recovery or final freshness guard: its
+ruleset does not require strict check freshness. A default-branch advance
+between the recovery push and merge can therefore still race, as on other
+factory merges. Installing a Repo Canon release containing [#697](https://github.com/lutzseverino/repo-canon/pull/697)
+freshness and branch-update recovery closes that window;
+[#749](https://github.com/lutzseverino/repo-canon/pull/749) tightens freshness
+confirmation. Code on Repo Canon main alone changes no installed adopter.
+
+The relaunch ends through the same run-outcome table. Conflicts, failed
+validation or checks, uncertain ownership and permission refusals require a
+reasoned owner handoff with work preserved, without merging or switching
+identity. The host observes Git ancestry and launches agents; delivery Git
+operations and babysit remain the agent's responsibility. The existing
+post-run restricted-path assessment keeps its role; no pre-push gate is added.
 
 ### External review of factory pull requests
 
@@ -1091,7 +1147,10 @@ After every pass the factory replaces `status.json` whole. It lists each
 repository in the host configuration's order with its state, `running` or
 `paused` with the reason, and the issues the pass held with their skip reasons.
 It also lists every configured provider in configuration order, even with no
-frontier issue or running work. The factory posts no status to GitHub.
+frontier issue or running work. A repository with active merge relaunches has
+`mergeRelaunches` entries naming each `issue`, `pullRequest` and `headCommit`;
+these distinguish delivery recovery from pickup and failure retries. The
+factory posts no status to GitHub.
 
 Each `providers` entry has the following version 1 operational contract,
 also used by the event stream's `state` field. Times are UTC ISO 8601 strings;
