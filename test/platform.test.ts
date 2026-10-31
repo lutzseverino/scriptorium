@@ -905,11 +905,14 @@ test("a run's pull request is its repository's own, opened since its first attem
     closing: unknown[],
     branch: unknown[],
     viewerStatus = 200,
-  ) =>
-    repositoryPlatform(
+  ) => {
+    const { pullRequests: context, ...observation } = await repositoryPlatform(
       answers(closing, branch, viewerStatus).connection,
       labels,
     ).pullRequestObservation(4);
+    assert.ok(Array.isArray(context));
+    return observation;
+  };
   const candidate = {
     number: 2,
     headCommit: "a".repeat(40),
@@ -976,6 +979,29 @@ test("a run's pull request is its repository's own, opened since its first attem
     { state: "open" },
     "unreadable identity grants no author ownership",
   );
+  assert.deepEqual(await observed([pull(2, "MERGED")], []), {
+    state: "merged",
+    closesIssue: true,
+  });
+  assert.deepEqual(await observed([], [pull(2, "MERGED")]), {
+    state: "merged",
+  });
+  assert.deepEqual(
+    await observed([pull(2, "MERGED", { isCrossRepository: true })], []),
+    { state: "none" },
+  );
+  const context = await repositoryPlatform(
+    answers([], [pull(2, "CLOSED")]).connection,
+    labels,
+  ).pullRequestObservation(4);
+  assert.deepEqual(context.pullRequests, [
+    {
+      number: 2,
+      headBranch: "factory/issue-4",
+      state: "closed",
+      createdAt: "2026-10-09T12:00:00Z",
+    },
+  ]);
   assert.equal(await state([], []), "none");
   assert.equal(await state([pull(1, "CLOSED")], [pull(2, "MERGED")]), "merged");
   assert.equal(await state([pull(1, "CLOSED")], [pull(2, "OPEN")]), "open");

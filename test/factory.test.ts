@@ -1083,7 +1083,7 @@ for (const attempt of [1, 2] as const)
         );
       });
 
-test("an ended run's open pull request keeps its claim with or without a needs-input label", () => {
+test("an ended run's open pull request keeps its claim unless it needs input", () => {
   for (const attempt of [1, 2] as const)
     for (const ending of [
       { timedOut: false },
@@ -1102,7 +1102,10 @@ test("an ended run's open pull request keeps its claim with or without a needs-i
             run(4, { attempt, ended: { ...ending, pullRequest: "open" } }),
           ],
         });
-        assert.deepEqual(decisions[0], { kind: "keep", ...at(4) });
+        assert.deepEqual(decisions[0], {
+          kind: needsInput ? "release" : "keep",
+          ...at(4),
+        });
         assert.deepEqual(launches(decisions), []);
       }
 });
@@ -1240,26 +1243,24 @@ test("a claim no run holds stays while its pull request is open and is released 
   );
 });
 
-test("a needs-input claim left by an earlier factory process releases unless its pull request is open", () => {
+test("a needs-input claim left by an earlier factory process releases unless merged", () => {
   for (const pullRequest of ["none", "closed", "merged", "open"] as const)
     assert.deepEqual(
       decide({
         issues: [issue(4, [...claimed, "factory:needs-input"])],
         claims: [{ issue: 4, pullRequest }],
       }).filter(({ kind }) => kind !== "skip"),
-      pullRequest === "open"
-        ? [{ kind: "keep", ...at(4) }]
-        : pullRequest === "merged"
-          ? [
-              {
-                kind: "fail",
-                ...at(4),
-                failure:
-                  "its pull request merged without closing the issue; close the issue if that finished it",
-                log: null,
-              },
-            ]
-          : [{ kind: "release", ...at(4) }],
+      pullRequest === "merged"
+        ? [
+            {
+              kind: "fail",
+              ...at(4),
+              failure:
+                "its pull request merged without closing the issue; close the issue if that finished it",
+              log: null,
+            },
+          ]
+        : [{ kind: "release", ...at(4) }],
     );
 });
 
@@ -2707,4 +2708,92 @@ test("merge delivery respects skip and failed labels and unresolved models after
       [],
     );
   }
+});
+
+test("needs-input resumption and failed-label retry obey the existing pickup gates", () => {
+  for (const inputResume of [
+    undefined,
+    {
+      pullRequests: [
+        {
+          number: 40,
+          headBranch: "factory/issue-4",
+          state: "open" as const,
+          createdAt: now,
+        },
+      ],
+    },
+  ]) {
+    const claims: Claim[] = inputResume
+      ? [{ issue: 4, pullRequest: "open", inputResume }]
+      : [];
+    const eligible = issue(4);
+    assert.equal(
+      launches(decide({ issues: [eligible], claims }))[0]?.attempt,
+      1,
+    );
+    for (const held of [
+      issue(4, ["ready-for-agent", "factory:failed"]),
+      issue(4, ["ready-for-agent", "factory:needs-input"]),
+      issue(4, []),
+      issue(4, undefined, { blockedBy: [{ number: 2, state: "open" }] }),
+      issue(4, undefined, {
+        ready: {
+          at: now,
+          actor: { kind: "bot", login: "bot[bot]" },
+        },
+      }),
+      issue(4, undefined, {
+        contractHold: {
+          reason: "readiness waits: revised contract",
+          waiting: true,
+        },
+      }),
+    ])
+      assert.deepEqual(launches(decide({ issues: [held], claims })), []);
+    assert.deepEqual(
+      launches(
+        decide({ issues: [eligible], claims, usage: { "claude-code": 80 } }),
+      ),
+      [],
+    );
+    assert.deepEqual(
+      launches(
+        decide({
+          issues: [eligible],
+          claims,
+          settings: { caps: { "claude-code": 0, codex: 0 } },
+        }),
+      ),
+      [],
+    );
+    const repo = repository(widgets, [eligible], {
+      claims,
+      paused: "configuration missing",
+    });
+    assert.deepEqual(launches(decide({ repositories: [repo] })), []);
+    repo.paused = null;
+    repo.configuration.labels.skip = "factory:skip";
+    eligible.labels.push("factory:skip");
+    assert.deepEqual(launches(decide({ repositories: [repo] })), []);
+  }
+});
+
+test("a merged closing-reference PR completes runs and orphan claims without a replacement launch", () => {
+  assert.equal(
+    decide({
+      issues: [issue(4)],
+      runs: [
+        run(4, {
+          ended: { timedOut: false, pullRequest: "merged", closesIssue: true },
+        }),
+      ],
+    })[0].kind,
+    "complete",
+  );
+  const decisions = decide({
+    issues: [issue(4)],
+    claims: [{ issue: 4, pullRequest: "merged", closesIssue: true }],
+  });
+  assert.deepEqual(decisions, [{ kind: "complete", ...at(4) }]);
 });

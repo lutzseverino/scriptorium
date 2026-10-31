@@ -343,15 +343,8 @@ function fakePlatform(
         capabilities: { closingReferences: true },
         async closing(number) {
           await request("closing", number);
-          return find(repository, number).pullRequests.map(
-            (pullRequest) =>
-              (typeof pullRequest === "string"
-                ? {
-                    state: lower(pullRequest),
-                    createdAt: "2026-10-09T12:00:00Z",
-                    crossRepository: false,
-                  }
-                : pullRequest) as PullRequest,
+          return find(repository, number).pullRequests.filter(
+            (pr): pr is PullRequest => typeof pr !== "string",
           );
         },
         async byHeadBranch(branch) {
@@ -360,11 +353,29 @@ function fakePlatform(
           return state[repository]
             .flatMap((issue) => [
               ...issue.branchPullRequests,
+              // String fixtures observe branch-only PR states; explicit PRs
+              // in pullRequests carry actual closing-reference evidence.
+              ...issue.pullRequests
+                .filter(
+                  (pr) =>
+                    typeof pr === "string" &&
+                    branch === `factory/issue-${issue.number}`,
+                )
+                .map(
+                  (pr) =>
+                    ({
+                      state: lower(pr as string),
+                      createdAt: "2026-10-09T12:00:00Z",
+                      crossRepository: false,
+                    }) as PullRequest,
+                ),
               ...issue.pullRequests.filter(
                 (pr): pr is PullRequest => typeof pr !== "string",
               ),
             ])
-            .filter((pr) => pr.headBranch === branch);
+            .filter(
+              (pr) => pr.headBranch === branch || pr.headBranch === undefined,
+            );
         },
         pullRequest: unused,
         reviews: unused,
@@ -2139,7 +2150,6 @@ test("an ended run awaiting merge tells its issue once across polls, label remov
   await run.tick();
   const issue = run.github.find("acme/widgets", 4);
   issue.pullRequests.push("OPEN");
-  issue.labels.push("factory:needs-input");
   await run.tick();
   assert.deepEqual(issue.comments, [], "a live run needs no notice");
   run.launched[0].finish();
@@ -2183,7 +2193,7 @@ test("orphan claims awaiting merge are notified once, retry failed delivery and 
         { number: 4, labels: ["factory:running"], pullRequests: ["OPEN"] },
         {
           number: 5,
-          labels: ["factory:paused", "factory:needs-input"],
+          labels: ["factory:paused"],
           pullRequests: ["OPEN"],
         },
       ],
@@ -2202,7 +2212,7 @@ test("orphan claims awaiting merge are notified once, retry failed delivery and 
   assert.equal(first.comments.length, 1);
   assert.equal(second.comments.length, 1);
   assert.doesNotMatch(first.comments[0], /Model:|Log:|attempt/);
-  assert.deepEqual(second.labels, ["factory:needs-input", "factory:running"]);
+  assert.deepEqual(second.labels, ["factory:running"]);
   await active.tick();
   active = run.restart();
   await active.tick();
@@ -2211,19 +2221,21 @@ test("orphan claims awaiting merge are notified once, retry failed delivery and 
   assert.equal(run.launched.length, 0);
   first.state = "CLOSED";
   first.pullRequests = ["MERGED"];
+  second.state = "CLOSED";
   second.pullRequests = ["CLOSED"];
   await active.tick();
   assert.deepEqual(first.labels, []);
-  assert.deepEqual(second.labels, ["factory:needs-input"]);
+  assert.deepEqual(second.labels, []);
   // A later orphan claim on the same issue is eligible for its own notice.
-  second.labels.push("factory:running");
+  second.state = "OPEN";
+  second.labels = ["factory:running"];
   second.pullRequests = ["OPEN"];
   await active.tick();
   assert.equal(second.comments.length, 2);
   // A claim removed outside the host also ends its notification lifetime.
-  second.labels = ["factory:needs-input"];
+  second.labels = [];
   await active.tick();
-  second.labels.push("factory:running");
+  second.labels = ["factory:running"];
   await run.restart().tick();
   assert.equal(second.comments.length, 3);
 });
@@ -5523,7 +5535,7 @@ for (const reason of ["conflict", "failed checks", "permission refusal"])
     await restarted.tick();
     await restarted.tick();
     assert.equal(run.launched.length, 1);
-    assert.ok(issue.labels.includes("factory:running"));
+    assert.ok(!issue.labels.includes("factory:running"));
     assert.ok(issue.labels.includes("factory:needs-input"));
     assert.equal(pr.state, "open");
     assert.equal(
@@ -5584,4 +5596,213 @@ for (const orphan of [false, true])
       orphan ? 1 : 2,
       "skipping did not consume the PR head",
     );
+  });
+
+test("a merged closing-reference PR closes its issue and clears factory state", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = { ...publishedPR(bare), state: "merged" as const };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          labels: ["factory:running", "factory:needs-input", "factory:failed"],
+          pullRequests: [pr],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.equal(issue.state, "CLOSED");
+  assert.deepEqual(issue.labels, []);
+  assert.equal(run.launched.length, 0);
+});
+
+for (const state of ["open", "closed"] as const)
+  test(`removing needs input resumes the same ${state} PR after restart on the current base`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const pr = { ...publishedPR(bare), state };
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: [
+              "ready-for-agent",
+              "factory:running",
+              "factory:needs-input",
+            ],
+            branchPullRequests: [pr],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 0);
+    const issue = run.github.find("acme/widgets", 4);
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:needs-input"]);
+    advanceDefault(bare);
+    const restarted = run.restart();
+    await restarted.tick();
+    issue.labels = ["ready-for-agent"];
+    await restarted.tick();
+    assert.equal(run.launched.length, 1);
+    const options = run.launched[0].options;
+    assert.match(options.prompt!, /Needs-input resume: continue PR #40/);
+    assert.match(options.prompt!, /same PR.*current default branch/);
+    assert.match(options.prompt!, /Never open a replacement PR/);
+    assert.equal(
+      git(run.clone("acme/widgets"), ["rev-parse", "HEAD"]).trim(),
+      git(join(dirname(bare), "work"), ["rev-parse", "main"]).trim(),
+    );
+    await restarted.tick();
+    assert.equal(run.launched.length, 1, "no duplicate sandbox or claim");
+    run.launched[0].finish();
+    await run.drain();
+  });
+
+test("an ended run resumes its PR with committed and dirty work and retains PR history through interruption", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = publishedPR(bare);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const clone = run.clone("acme/widgets");
+  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
+  git(clone, [
+    "worktree",
+    "add",
+    "--quiet",
+    "-b",
+    "factory/issue-4",
+    work,
+    "origin/factory/issue-4",
+  ]);
+  write(work, { "committed.txt": "local commit\n" });
+  git(work, ["add", "."]);
+  git(work, ["commit", "--quiet", "-m", "preserved work"]);
+  write(work, { "staged.txt": "staged\n" });
+  git(work, ["add", "staged.txt"]);
+  write(work, { "feature.txt": "unstaged\n", "untracked.txt": "untracked\n" });
+  const before = git(work, ["status", "--porcelain"]);
+  const head = git(work, ["rev-parse", "HEAD"]).trim();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests = [pr];
+  issue.labels.push("factory:needs-input");
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  advanceDefault(bare);
+  issue.labels = ["ready-for-agent"];
+  run.clock.now = new Date("2026-10-10T12:00:00Z");
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+  assert.match(
+    run.launched[1].options.prompt!,
+    /Needs-input resume: continue PR #40/,
+  );
+  assert.ok(run.launched[1].options.prompt!.includes(head));
+  assert.equal(git(work, ["status", "--porcelain"]), before);
+  const since = recordOf(run.state, 4, 1).pullRequestSince;
+  assert.equal(since, "2026-10-09T12:00:00.000Z");
+  restarted.interrupt();
+  const interrupted = run.restart();
+  await interrupted.tick();
+  assert.equal(run.launched.length, 3);
+  assert.match(
+    run.launched[2].options.prompt!,
+    /Needs-input resume: continue PR #40/,
+  );
+  assert.equal(recordOf(run.state, 4, 1).pullRequestSince, since);
+  issue.pullRequests = [{ ...pr, state: "merged" }];
+  issue.branchPullRequests = [];
+  run.launched[2].finish();
+  await run.drain();
+  await interrupted.tick();
+  assert.equal(issue.state, "CLOSED");
+  assert.deepEqual(issue.labels, ["ready-for-agent"]);
+});
+
+test("removing the configured failed label retries only once the other pickup gates allow it", async (t) => {
+  const labels = {
+    ready: "work:ready",
+    running: "work:running",
+    needsInput: "work:question",
+    failed: "work:failed",
+    paused: "work:paused",
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          labels: [labels.ready, labels.failed],
+          blockedBy: [{ number: 5, state: "OPEN" }],
+        },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify({ ...conventions, labels }),
+      }),
+    },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.labels = [labels.ready];
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  issue.blockedBy = [];
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.deepEqual(issue.labels, [labels.ready, labels.running]);
+  run.launched[0].finish();
+  await run.drain();
+});
+
+for (const failedLabel of [
+  "factory:failed",
+  "factory:running",
+  "factory:needs-input",
+])
+  test(`closing-reference completion recovers a failed ${failedLabel} removal after restart`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const pr = { ...publishedPR(bare), state: "merged" as const };
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: [
+              "factory:running",
+              "factory:failed",
+              "factory:needs-input",
+            ],
+            pullRequests: [pr],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    const key = `acme/widgets#4 ${failedLabel}`;
+    run.github.failedRemovals.set(
+      key,
+      new PlatformError("unavailable", "temporary label failure"),
+    );
+    await run.tick();
+    run.github.failedRemovals.delete(key);
+    const restarted = run.restart();
+    await restarted.tick();
+    await restarted.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    assert.equal(issue.state, "CLOSED");
+    assert.deepEqual(issue.labels, []);
+    assert.equal(run.launched.length, 0);
   });

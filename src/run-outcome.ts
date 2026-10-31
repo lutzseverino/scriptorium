@@ -6,6 +6,7 @@ export type Observation = {
   ended: "exited" | "timed out" | "orphaned";
   pullRequest: PullRequestState;
   issueClosed: boolean;
+  closesIssue?: true;
   needsInput: boolean;
   unpushedChanges?: string[];
 };
@@ -13,6 +14,7 @@ export type Observation = {
 export type RunOutcome =
   | { kind: "awaiting merge" }
   | { kind: "done" }
+  | { kind: "complete" }
   | { kind: "needs input" }
   | {
       kind: "failed";
@@ -26,15 +28,17 @@ export function runOutcome(
   timeLimitMinutes: number,
 ): RunOutcome {
   if (observation.issueClosed) return { kind: "done" };
-  if (observation.pullRequest === "open") return { kind: "awaiting merge" };
   if (observation.pullRequest === "merged")
-    return {
-      kind: "failed",
-      final: true,
-      failure:
-        "its pull request merged without closing the issue; close the issue if that finished it",
-    };
+    return observation.closesIssue
+      ? { kind: "complete" }
+      : {
+          kind: "failed",
+          final: true,
+          failure:
+            "its pull request merged without closing the issue; close the issue if that finished it",
+        };
   if (observation.needsInput) return { kind: "needs input" };
+  if (observation.pullRequest === "open") return { kind: "awaiting merge" };
   if (observation.unpushedChanges?.length)
     return {
       kind: "failed",

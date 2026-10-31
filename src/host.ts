@@ -47,6 +47,7 @@ import {
   runBranch,
   type RepositoryPlatform,
   type MergeRelaunch,
+  type InputResume,
 } from "./platform.ts";
 import {
   githubTokens,
@@ -369,6 +370,7 @@ export function createHost(
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
           pullRequest: observation.state,
+          ...(observation.closesIssue && { closesIssue: true }),
         };
         const paths = await readUnpushableChanges(
           git,
@@ -459,23 +461,37 @@ export function createHost(
     const claims: Claim[] = [];
     const closed = await platform.readClosedClaims();
     for (const number of closed) await platform.releaseClosed(number);
+    const markerDirectory = directory(name).claims;
+    const waiting = existsSync(markerDirectory)
+      ? readdirSync(markerDirectory)
+          .filter((file) => /^issue-\d+\.json$/.test(file))
+          .map((file) => Number(file.slice(6, -5)))
+          .filter((number) => readClaimMarker(name, number).inputResume)
+      : [];
     const numbers = [
-      ...closed,
-      ...issues
-        .filter(
-          (issue) =>
-            issue.labels.includes(labels.running) ||
-            issue.labels.includes(labels.paused),
-        )
-        .map((issue) => issue.number),
+      ...new Set([
+        ...waiting,
+        ...closed,
+        ...issues
+          .filter(
+            (issue) =>
+              issue.labels.includes(labels.running) ||
+              issue.labels.includes(labels.paused) ||
+              issue.labels.includes(labels.needsInput),
+          )
+          .map((issue) => issue.number),
+      ]),
     ];
     const { clone } = directory(name);
     const git: Git = async (cwd, args) =>
       ports.git(await tokens.get(name), cwd, args);
     for (const number of numbers) {
       if (held(number)) continue;
-      const observation = await platform.pullRequestObservation(number);
       const marker = readClaimMarker(name, number);
+      const observation = await platform.pullRequestObservation(
+        number,
+        marker.inputResume?.since,
+      );
       const mergeCandidate = await readMergeCandidate(
         git,
         clone,
@@ -486,7 +502,21 @@ export function createHost(
       );
       const claim: Claim = {
         issue: number,
+        ...(marker.inputResume && {
+          inputResume: {
+            ...marker.inputResume,
+            pullRequests: [
+              ...new Map(
+                [
+                  ...marker.inputResume.pullRequests,
+                  ...observation.pullRequests,
+                ].map((pr) => [pr.number, pr]),
+              ).values(),
+            ],
+          },
+        }),
         pullRequest: observation.state,
+        ...(observation.closesIssue && { closesIssue: true }),
         ...(mergeCandidate && { mergeCandidate }),
       };
       const paths = await readUnpushableChanges(
@@ -519,6 +549,7 @@ export function createHost(
     issue: number,
   ): {
     awaitingMergeNotified?: true;
+    inputResume?: InputResume;
     mergeRelaunchHeads?: string[];
   } {
     const path = claimNoticePath(repository, issue);
@@ -781,6 +812,7 @@ export function createHost(
       effort: decision.effort,
       attempt: decision.attempt,
       ...(decision.retry && { retry: decision.retry }),
+      ...(decision.inputResume && { inputResume: decision.inputResume }),
       ...(decision.mergeRelaunch && { mergeRelaunch: decision.mergeRelaunch }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
       ...(decision.relaunch &&
@@ -788,6 +820,8 @@ export function createHost(
       startedAt,
       pullRequestSince:
         previous?.pullRequestSince ??
+        decision.inputResume?.since ??
+        decision.inputResume?.pullRequests[0]?.createdAt ??
         decision.mergeRelaunch?.createdAt ??
         startedAt,
       log,
@@ -827,6 +861,7 @@ export function createHost(
           decision.retry,
           recovery,
           decision.mergeRelaunch,
+          decision.inputResume,
         ),
         branch: runBranch(issue),
         log: raw,
@@ -936,6 +971,10 @@ export function createHost(
         forget(decision);
         return;
       }
+      case "complete":
+        await platform.complete(decision.issue);
+        forget(decision);
+        return;
       case "claim":
         await platform.claim(decision.issue);
         return;
@@ -1000,10 +1039,46 @@ export function createHost(
         }
         return;
       }
-      case "release":
+      case "release": {
+        const issue = pass.read?.issues.find(
+          (issue) => issue.number === decision.issue,
+        );
+        const waiting = issue?.labels.includes(
+          pass.configuration!.labels.needsInput,
+        );
+        const previous = find(decision);
+        const marker = readClaimMarker(decision.repository, decision.issue);
+        if (waiting) {
+          const since = previous?.pullRequestSince ?? marker.inputResume?.since;
+          const observation = await platform.pullRequestObservation(
+            decision.issue,
+            since,
+          );
+          const path = claimNoticePath(decision.repository, decision.issue);
+          mkdirSync(directory(decision.repository).claims, { recursive: true });
+          writeFileSync(
+            `${path}.partial`,
+            JSON.stringify({
+              ...marker,
+              inputResume: {
+                ...(since && { since }),
+                pullRequests: observation.pullRequests,
+              },
+            }),
+          );
+          renameSync(`${path}.partial`, path);
+        }
         await platform.release(decision.issue);
-        forget(decision);
+        if (waiting) {
+          // Keep the durable resume marker while retiring the attempt.
+          if (previous) {
+            runs.splice(runs.indexOf(previous), 1);
+            previous.settled = true;
+            record(previous);
+          }
+        } else forget(decision);
         return;
+      }
       case "pause": {
         const run = find(decision);
         const ended = run && pausedEnding(run);
@@ -1066,6 +1141,7 @@ export function createHost(
           effort: run.effort,
           attempt: run.attempt,
           ...(run.retry && { retry: run.retry }),
+          ...(run.inputResume && { inputResume: run.inputResume }),
           ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
           startedAt: run.startedAt,
           log: run.log,
@@ -1176,6 +1252,7 @@ export function prompt(
   retry?: { failure: string; log: string },
   recovery?: Recovery,
   mergeRelaunch?: MergeRelaunch,
+  inputResume?: InputResume,
 ): string {
   const start = template.replace(
     /\{(skillPrefix|issue)\}/g,
@@ -1193,6 +1270,11 @@ export function prompt(
       ? [
           `Merge relaunch: bring PR #${mergeRelaunch.number}, relaunched for head ${mergeRelaunch.headCommit}, onto the current default branch (${mergeRelaunch.baseBranch}); revalidate it; push; wait for current-head checks and reviews; then merge it through the repository's installed babysit under the existing merge authorization. Preserve this same PR, its reviews and handoff context and all dirty work. Where installed babysit supports branch-update recovery, follow it, including stale-base exit 4. Otherwise use the delivery-push instructions above to rebase or replay only this issue's changes and revalidate; babysit's other merge gates still apply. Conflicts, failed validation or checks, uncertain ownership and permission refusals require preserving work and a reasoned owner handoff without merging. Never use GitHub update-branch or merge the default branch into the issue branch.`,
           "The recovery-state restriction below applies only to restoring local state. After that restoration, this merge-relaunch delivery is authorized subject to the repository's existing merge rules.",
+        ]
+      : []),
+    ...(inputResume
+      ? [
+          `Needs-input resume: continue ${inputResume.pullRequests.length ? inputResume.pullRequests.map((pr) => `PR #${pr.number} (${pr.state}, branch ${pr.headBranch})`).join(", ") : "the preserved issue work"}. Preserve the same PR, its reviews, owner answers and handoff context, and bring only this issue's work onto the current default branch under the delivery instructions above. Reopen an existing closed-unmerged PR when needed. Never open a replacement PR. If PR ownership or identity is uncertain, preserve work and record an owner handoff. Readiness, usage and merge authorization still apply. The recovery-state restriction below applies only to restoring local state; after restoration this continuation and delivery are authorized under the repository's merge rules.`,
         ]
       : []),
     ...(recovery

@@ -41,6 +41,14 @@ export type MergeRelaunch = Pick<
   "number" | "headCommit" | "baseBranch" | "createdAt"
 >;
 
+export type InputResume = {
+  since?: string;
+  pullRequests: Pick<
+    PullRequest,
+    "number" | "headBranch" | "state" | "createdAt"
+  >[];
+};
+
 export function repositoryPlatform(
   connection: Connection,
   labels: FactoryConfiguration["labels"],
@@ -157,18 +165,22 @@ export function repositoryPlatform(
   async function candidates(
     number: number,
     since?: string,
-  ): Promise<PullRequest[]> {
+  ): Promise<{ found: PullRequest[]; closing: Set<number> }> {
+    const closing = pullRequests.capabilities.closingReferences
+      ? await pullRequests.closing(number)
+      : [];
     const found = [
-      ...(pullRequests.capabilities.closingReferences
-        ? await pullRequests.closing(number)
-        : []),
+      ...closing,
       ...(await pullRequests.byHeadBranch(runBranch(number))),
     ].filter(
       (pr) =>
         !pr.crossRepository &&
         (since === undefined || Date.parse(pr.createdAt) >= Date.parse(since)),
     );
-    return [...new Map(found.map((pr) => [pr.number, pr])).values()];
+    return {
+      found: [...new Map(found.map((pr) => [pr.number, pr])).values()],
+      closing: new Set(closing.map((pr) => pr.number)),
+    };
   }
 
   function state(candidates: PullRequest[]): PullRequestState {
@@ -266,7 +278,7 @@ export function repositoryPlatform(
       number: number,
       since?: string,
     ): Promise<PullRequestState> {
-      return state(await candidates(number, since));
+      return state((await candidates(number, since)).found);
     },
 
     // A closing reference is observation, not delivery authorization. Only
@@ -276,9 +288,11 @@ export function repositoryPlatform(
       since?: string,
     ): Promise<{
       state: PullRequestState;
+      closesIssue?: true;
+      pullRequests: InputResume["pullRequests"];
       mergeCandidate?: MergeRelaunch;
     }> {
-      const found = await candidates(number, since);
+      const { found, closing } = await candidates(number, since);
       const open = found.filter((pr) => pr.state === "open");
       let viewer: Account | null = null;
       if (open.some((pr) => pr.headBranch !== runBranch(number))) {
@@ -297,6 +311,18 @@ export function repositoryPlatform(
       const pr = owned.length === 1 ? owned[0] : undefined;
       return {
         state: state(found),
+        pullRequests: found
+          .filter((pr) => typeof pr.number === "number")
+          .map(({ number, headBranch, state, createdAt }) => ({
+            number,
+            headBranch,
+            state,
+            createdAt,
+          })),
+        ...(state(found) === "merged" &&
+          found.some(
+            (pr) => pr.state === "merged" && closing.has(pr.number),
+          ) && { closesIssue: true as const }),
         ...(pr && {
           mergeCandidate: {
             number: pr.number,
@@ -336,6 +362,18 @@ export function repositoryPlatform(
         labels.paused,
         labels.needsInput,
       ]),
+
+    async complete(issue: number) {
+      // Clear failure before closure: closed-claim reconciliation can finish
+      // active-label cleanup after a partial write without a failed-label sweep.
+      await remove(issue, labels.failed);
+      await issueTracker.closeIssue(issue);
+      await transition(issue, null, [
+        labels.running,
+        labels.paused,
+        labels.needsInput,
+      ]);
+    },
 
     async fail(issue: number, comment: string) {
       await transition(issue, labels.failed, [labels.running, labels.paused]);
