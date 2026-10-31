@@ -166,6 +166,7 @@ type Pass = {
   configuration: FactoryConfiguration | null;
   hasReviewPolicy: boolean;
   releaseHold?: number[] | null;
+  releaseHeld: Map<number, number[]>;
 };
 
 export function createHost(
@@ -275,6 +276,7 @@ export function createHost(
       read: null,
       configuration: conventions.get(name) ?? null,
       hasReviewPolicy: false,
+      releaseHeld: new Map(),
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
     try {
@@ -397,6 +399,14 @@ export function createHost(
           run.releaseHoldSettled = true;
           record(run);
         }
+        // Historical marks survive temporary ineligibility; visible reasons
+        // concern only PRs that are still open and owned in this pass.
+        pass.releaseHeld.set(
+          run.issue,
+          (run.releaseHeld ?? []).filter((number) =>
+            observation.ownedPullRequests.includes(number),
+          ),
+        );
         const mergeCandidate = await readMergeCandidate(
           git,
           clone,
@@ -1253,11 +1263,9 @@ export function createHost(
             ? [{ key: decision.hold, reason: decision.reason }]
             : [],
         );
-        const held = runs.find(
-          (run) => run.repository === pass.name && run.issue === issue.number,
-        )?.releaseHeld;
+        const held = pass.releaseHeld.get(issue.number);
         if (
-          held !== undefined &&
+          held?.length &&
           !holds.some((hold) => hold.key === "release-hold")
         ) {
           const reason = releaseHoldReason(pass.releaseHold, held);

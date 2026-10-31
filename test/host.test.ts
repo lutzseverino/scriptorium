@@ -6601,3 +6601,32 @@ for (const unreadable of [false, true])
       "resumption still consumes the head once",
     );
   });
+
+test("closed historical held PRs do not keep the surviving release PR's hold comment active", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  const pr = publishedPR(bare);
+  issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+  run.github.releaseHolds["acme/widgets"] = [80];
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  const hold = () =>
+    issue.comments.find((c) => c.includes("scriptorium:hold:release-hold"));
+  assert.match(hold()!, /#80/);
+  issue.branchPullRequests[1].state = "closed";
+  run.github.releaseHolds["acme/widgets"] = [40];
+  run.configuration.providers["claude-code"]!.cap = 0;
+  await run.restart().tick();
+  assert.equal(
+    run.launched.length,
+    1,
+    "cap keeps the current held record without a new run",
+  );
+  assert.match(hold()!, /Resolved/, "a release PR never holds its own merge");
+});
