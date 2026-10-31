@@ -46,6 +46,7 @@ import {
   repositoryPlatform,
   runBranch,
   type RepositoryPlatform,
+  type MergeRelaunch,
 } from "./platform.ts";
 import {
   githubTokens,
@@ -115,6 +116,8 @@ type HostRun = Run & {
   // Successful awaiting-merge notice for this attempt, independent of the
   // ending observation refreshed on each pass and on startup.
   awaitingMergeNotified?: true;
+  // PR/head pairs whose automatic merge recovery has already launched.
+  mergeRelaunchHeads?: string[];
   launchResult?: LaunchResult;
   recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
@@ -344,7 +347,20 @@ export function createHost(
       )) {
         await run.finished;
         if (pausedEnding(run)) continue;
+        const observation = await platform.pullRequestObservation(
+          run.issue,
+          run.pullRequestSince,
+        );
+        const mergeCandidate = await readMergeCandidate(
+          git,
+          clone,
+          issues.find((issue) => issue.number === run.issue),
+          observation.mergeCandidate,
+          run.mergeRelaunchHeads ?? [],
+          pass,
+        );
         run.ended = {
+          ...(mergeCandidate && { mergeCandidate }),
           // Sandcastle's idle timeout can end a run at its limit before the
           // factory stops it, so the time it ran decides, not who ended it.
           timedOut:
@@ -352,10 +368,7 @@ export function createHost(
             run.exitedAt!.getTime() - Date.parse(run.startedAt) >=
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
-          pullRequest: await platform.pullRequestState(
-            run.issue,
-            run.pullRequestSince,
-          ),
+          pullRequest: observation.state,
         };
         const paths = await readUnpushableChanges(
           git,
@@ -377,6 +390,7 @@ export function createHost(
           platform,
           issues,
           pass.configuration.labels,
+          pass,
         ),
       };
     } catch (error) {
@@ -438,6 +452,7 @@ export function createHost(
     platform: RepositoryPlatform,
     issues: Issue[],
     labels: FactoryConfiguration["labels"],
+    pass: Pass,
   ): Promise<Claim[]> {
     const held = (number: number) =>
       runs.some((run) => run.repository === name && run.issue === number);
@@ -459,9 +474,20 @@ export function createHost(
       ports.git(await tokens.get(name), cwd, args);
     for (const number of numbers) {
       if (held(number)) continue;
+      const observation = await platform.pullRequestObservation(number);
+      const marker = readClaimMarker(name, number);
+      const mergeCandidate = await readMergeCandidate(
+        git,
+        clone,
+        issues.find((issue) => issue.number === number),
+        observation.mergeCandidate,
+        marker.mergeRelaunchHeads ?? [],
+        pass,
+      );
       const claim: Claim = {
         issue: number,
-        pullRequest: await platform.pullRequestState(number),
+        pullRequest: observation.state,
+        ...(mergeCandidate && { mergeCandidate }),
       };
       const paths = await readUnpushableChanges(
         git,
@@ -486,6 +512,65 @@ export function createHost(
 
   function claimNoticePath(repository: string, issue: number): string {
     return join(directory(repository).claims, `issue-${issue}.json`);
+  }
+
+  function readClaimMarker(
+    repository: string,
+    issue: number,
+  ): {
+    awaitingMergeNotified?: true;
+    mergeRelaunchHeads?: string[];
+  } {
+    const path = claimNoticePath(repository, issue);
+    return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+  }
+
+  // This is observation only. Delivery Git operations stay with the agent.
+  // rev-list is empty exactly when origin/HEAD is an ancestor of the head,
+  // including diverged histories without relying on a platform freshness fact.
+  async function readMergeCandidate(
+    git: Git,
+    clone: string,
+    issue: Issue | undefined,
+    candidate: MergeRelaunch | undefined,
+    consumed: string[],
+    pass: Pass,
+  ): Promise<MergeRelaunch | undefined> {
+    if (
+      !candidate ||
+      !issue ||
+      pass.paused !== null ||
+      issue.labels.includes(pass.configuration!.labels.needsInput) ||
+      issue.labels.includes(pass.configuration!.labels.failed) ||
+      consumed.includes(mergeHead(candidate))
+    )
+      return undefined;
+    const defaultRef = (
+      await git(clone, ["symbolic-ref", "refs/remotes/origin/HEAD"])
+    ).trim();
+    if (
+      candidate.baseBranch !== defaultRef.slice("refs/remotes/origin/".length)
+    )
+      return undefined;
+    await git(clone, [
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "origin",
+      candidate.headCommit,
+    ]);
+    const behind = (
+      await git(clone, [
+        "rev-list",
+        "--max-count=1",
+        `${candidate.headCommit}..refs/remotes/origin/HEAD`,
+      ])
+    ).trim();
+    return behind ? candidate : undefined;
+  }
+
+  function mergeHead(target: MergeRelaunch): string {
+    return `${target.number}:${target.headCommit}`;
   }
 
   // Earlier outcome rows settle without consulting the branch. Both runs
@@ -648,6 +733,13 @@ export function createHost(
       await ports.git(token, paths.clone, ["rev-parse", "HEAD"])
     ).trim();
     const previous = find(decision);
+    const marker = previous ?? readClaimMarker(repository, issue);
+    const mergeRelaunchHeads = [...(marker.mergeRelaunchHeads ?? [])];
+    if (
+      decision.mergeRelaunch &&
+      !mergeRelaunchHeads.includes(mergeHead(decision.mergeRelaunch))
+    )
+      mergeRelaunchHeads.push(mergeHead(decision.mergeRelaunch));
     const recovery = await readRecovery(
       async (cwd, args) => ports.git(await tokens.get(repository), cwd, args),
       paths.clone,
@@ -689,8 +781,15 @@ export function createHost(
       effort: decision.effort,
       attempt: decision.attempt,
       ...(decision.retry && { retry: decision.retry }),
+      ...(decision.mergeRelaunch && { mergeRelaunch: decision.mergeRelaunch }),
+      ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
+      ...(decision.relaunch &&
+        marker.awaitingMergeNotified && { awaitingMergeNotified: true }),
       startedAt,
-      pullRequestSince: previous?.pullRequestSince ?? startedAt,
+      pullRequestSince:
+        previous?.pullRequestSince ??
+        decision.mergeRelaunch?.createdAt ??
+        startedAt,
       log,
       ended: null,
       sandbox,
@@ -727,6 +826,7 @@ export function createHost(
           pass.hasReviewPolicy,
           decision.retry,
           recovery,
+          decision.mergeRelaunch,
         ),
         branch: runBranch(issue),
         log: raw,
@@ -966,6 +1066,7 @@ export function createHost(
           effort: run.effort,
           attempt: run.attempt,
           ...(run.retry && { retry: run.retry }),
+          ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
           startedAt: run.startedAt,
           log: run.log,
           ended: run.exited ? run.ended : null,
@@ -1014,6 +1115,7 @@ export function createHost(
                 redactor.redact(JSON.stringify(imageStorage)),
               ) as ImageStorageStatus)
             : undefined,
+          runs.filter((run) => !run.exited),
         ),
       );
     } catch (error) {
@@ -1073,6 +1175,7 @@ export function prompt(
   hasReviewPolicy: boolean,
   retry?: { failure: string; log: string },
   recovery?: Recovery,
+  mergeRelaunch?: MergeRelaunch,
 ): string {
   const start = template.replace(
     /\{(skillPrefix|issue)\}/g,
@@ -1086,6 +1189,12 @@ export function prompt(
     "Preserve committed, staged, unstaged and untracked work and existing PR, review and handoff context before changing history. Continuing a branch does not require retaining unrelated history or override an owner's explicit request to reconstruct the issue's changes on the current base. If ownership is uncertain or reconstruction has conflicts, preserve the work and hand off under the repository's owner-question rules. After any permission refusal, stop with an explicit owner handoff: no second push, credential discovery or identity switch. Do not assume broader App permissions are necessary; ask the owner how to proceed.",
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
     `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes still determine delivery.`,
+    ...(mergeRelaunch
+      ? [
+          `Merge relaunch: bring PR #${mergeRelaunch.number}, relaunched for head ${mergeRelaunch.headCommit}, onto the current default branch (${mergeRelaunch.baseBranch}); revalidate it; push; wait for current-head checks and reviews; then merge it through the repository's installed babysit under the existing merge authorization. Preserve this same PR, its reviews and handoff context and all dirty work. Where installed babysit supports branch-update recovery, follow it, including stale-base exit 4. Otherwise use the delivery-push instructions above to rebase or replay only this issue's changes and revalidate; babysit's other merge gates still apply. Conflicts, failed validation or checks, uncertain ownership and permission refusals require preserving work and a reasoned owner handoff without merging. Never use GitHub update-branch or merge the default branch into the issue branch.`,
+          "The recovery-state restriction below applies only to restoring local state. After that restoration, this merge-relaunch delivery is authorized subject to the repository's existing merge rules.",
+        ]
+      : []),
     ...(recovery
       ? [
           `Recovery state: ${JSON.stringify(recovery)}. Continue from this preserved branch and worktree, including committed, staged, unstaged and untracked changes, applying the delivery and reconstruction instructions above. Revalidate recovered work before publication. Recovery itself must not push, open a PR, merge, close the issue or grant readiness.`,

@@ -2584,3 +2584,127 @@ test("a reserve raise lifts the drain threshold for new claims only, up to the r
   });
   assert.equal(running[0].kind, "stop");
 });
+
+test("a merge relaunch retains its attempt and model and uses a cap slot at the pause gate", () => {
+  const mergeCandidate = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const ended = run(4, {
+    provider: "codex",
+    model: "gpt-5.5",
+    effort: "medium",
+    attempt: 2,
+    ended: { timedOut: false, pullRequest: "open", mergeCandidate },
+  });
+  const input = {
+    issues: [
+      issue(4, ["factory:running", "model:claude-opus-5-5"]),
+      issue(5, ["ready-for-agent", "model:codex/gpt-5.5"]),
+    ],
+    runs: [ended],
+    usage: { codex: 85 },
+    owners: { codex: { hold: { since: now, used: 85 }, reserve: null } },
+    settings: {
+      drainThreshold: 80,
+      pauseThreshold: 95,
+      caps: { codex: 1, "claude-code": 0 },
+    },
+  };
+  assert.deepEqual(launches(decide(input)), [
+    {
+      kind: "launch",
+      ...at(4),
+      provider: "codex",
+      model: "gpt-5.5",
+      effort: "medium",
+      attempt: 2,
+      relaunch: true,
+      mergeRelaunch: mergeCandidate,
+    },
+  ]);
+  assert.deepEqual(launches(decide({ ...input, usage: { codex: 95 } })), []);
+  assert.deepEqual(
+    launches(
+      decide({ ...input, runs: [ended, run(6, { provider: "codex" })] }),
+    ),
+    [],
+  );
+  for (const label of ["factory:needs-input", "factory:failed"])
+    assert.deepEqual(
+      launches(
+        decide({ ...input, issues: [issue(4, ["factory:running", label])] }),
+      ),
+      [],
+    );
+  assert.deepEqual(
+    launches(
+      decide({
+        ...input,
+        repositories: [
+          repository(widgets, input.issues, {
+            paused: "invalid configuration",
+          }),
+        ],
+      }),
+    ),
+    [],
+  );
+});
+
+test("merge delivery respects skip and failed labels and unresolved models after interruption", () => {
+  const mergeRelaunch = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  for (const ending of ["ended", "interrupted", "paused"]) {
+    const previous = run(4, {
+      mergeRelaunch,
+      ended:
+        ending === "paused"
+          ? {
+              paused: {
+                cause: "usage limit",
+                reset: null,
+                at: now,
+                until: now,
+              },
+              commented: true,
+            }
+          : ending === "interrupted"
+            ? { interrupted: true }
+            : {
+                timedOut: false,
+                pullRequest: "open",
+                mergeCandidate: mergeRelaunch,
+              },
+    });
+    const repo = repository(widgets, [
+      issue(4, ["factory:running", "owner:delivery"]),
+    ]);
+    repo.configuration.labels.skip = "owner:delivery";
+    assert.deepEqual(
+      launches(decide({ repositories: [repo], runs: [previous] })),
+      [],
+    );
+    repo.issues[0].labels = ["factory:running", "factory:failed"];
+    assert.deepEqual(
+      launches(decide({ repositories: [repo], runs: [previous] })),
+      [],
+    );
+    repo.issues[0].labels = ["factory:running"];
+    assert.deepEqual(
+      launches(
+        decideFactory(snapshot({ repositories: [repo], runs: [previous] }), {
+          ...registry,
+          resolveModel: () => ({ error: "recorded model unavailable" }),
+        }),
+      ),
+      [],
+    );
+  }
+});

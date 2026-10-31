@@ -3,7 +3,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ImageStorageStatus } from "./image-storage.ts";
-import type { Decision } from "./factory.ts";
+import type { Decision, Run } from "./factory.ts";
 import type { ProviderStatus } from "./events.ts";
 
 export type RepositoryStatus = {
@@ -13,6 +13,12 @@ export type RepositoryStatus = {
   reason?: string;
   // The issues the factory saw ready but did not launch, and why.
   held: { issue: number; reason: string }[];
+  // Active merge-delivery runs, distinct from pickup, retries and resumption.
+  mergeRelaunches?: {
+    issue: number;
+    pullRequest: number;
+    headCommit: string;
+  }[];
 };
 
 export type Status = {
@@ -30,6 +36,7 @@ export function hostStatus(
   decisions: Decision[],
   providers: ProviderStatus[] = [],
   imageStorage?: ImageStorageStatus,
+  runs: Run[] = [],
 ): Status {
   return {
     updatedAt,
@@ -40,6 +47,19 @@ export function hostStatus(
       ...(paused === null
         ? { state: "running" as const }
         : { state: "paused" as const, reason: paused }),
+      ...(runs.some((run) => run.repository === name && run.mergeRelaunch) && {
+        mergeRelaunches: runs.flatMap((run) =>
+          run.repository === name && run.mergeRelaunch
+            ? [
+                {
+                  issue: run.issue,
+                  pullRequest: run.mergeRelaunch.number,
+                  headCommit: run.mergeRelaunch.headCommit,
+                },
+              ]
+            : [],
+        ),
+      }),
       held: decisions.flatMap((decision) =>
         decision.kind === "skip" && decision.repository === name
           ? [{ issue: decision.issue, reason: decision.reason }]

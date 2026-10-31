@@ -3,6 +3,7 @@
 import type { FactoryConfiguration } from "./factory-configuration.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
+import type { MergeRelaunch } from "./platform.ts";
 import {
   closes,
   readinessExclusion,
@@ -67,6 +68,8 @@ export type Run = {
   attempt: 1 | 2;
   // The first attempt's failure and log a retry launched with.
   retry?: { failure: string; log: string };
+  // The delivery task, retained through interruptions and provider pauses.
+  mergeRelaunch?: MergeRelaunch;
   startedAt: string;
   log: string;
   ended:
@@ -77,6 +80,7 @@ export type Run = {
         timedOut: boolean;
         orphaned?: true;
         pullRequest: PullRequestState;
+        mergeCandidate?: MergeRelaunch;
         // Paths under the host's unpushable paths in commits the remote lacks.
         unpushedChanges?: string[];
       };
@@ -86,6 +90,7 @@ export type Run = {
 export type Claim = {
   issue: number;
   pullRequest: PullRequestState;
+  mergeCandidate?: MergeRelaunch;
   unpushedChanges?: string[];
 };
 
@@ -173,6 +178,7 @@ export type Launch = {
   retry?: { failure: string; log: string };
   // An interrupted or paused run launching again as the same attempt.
   relaunch?: true;
+  mergeRelaunch?: MergeRelaunch;
 };
 
 export type Decision = { repository: string; issue: number } & (
@@ -267,7 +273,41 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const resumed = held.get(key(repository.name, issue.number));
     if (resumed) {
       held.delete(key(repository.name, issue.number));
-      decisions.push(...resume(repository, issue, resumed, running, snapshot));
+      decisions.push(
+        ...resume(repository, issue, resumed, running, snapshot, models),
+      );
+      continue;
+    }
+    const previous = snapshot.runs.find(
+      (run) => run.repository === repository.name && run.issue === issue.number,
+    );
+    const claim = repository.claims.find(
+      (claim) => claim.issue === issue.number,
+    );
+    const mergeCandidate =
+      previous?.ended && "mergeCandidate" in previous.ended
+        ? previous.ended.mergeCandidate
+        : claim?.mergeCandidate;
+    if (
+      mergeCandidate &&
+      !snapshot.runs.some(
+        (run) =>
+          run.repository === repository.name &&
+          run.issue === issue.number &&
+          run.ended === null,
+      )
+    ) {
+      decisions.push(
+        ...mergeRelaunch(
+          repository,
+          issue,
+          mergeCandidate,
+          previous,
+          running,
+          snapshot,
+          models,
+        ),
+      );
       continue;
     }
     const retry = retries.get(key(repository.name, issue.number));
@@ -517,10 +557,22 @@ function resume(
   run: Run,
   running: Map<string, number>,
   snapshot: Snapshot,
+  models: Models,
 ): Decision[] {
   const at = { repository: repository.name, issue: issue.number };
   if (needsInputExclusion(issue, repository.configuration.labels))
     return [{ kind: "release", ...at }];
+  if (run.mergeRelaunch) {
+    const excluded = mergeExclusion(issue, repository.configuration.labels);
+    const model = models.resolveModel(
+      `${run.provider}/${run.model}@${run.effort}`,
+    );
+    const reason = excluded ?? ("error" in model ? model.error : null);
+    if (reason)
+      return [
+        { kind: "skip", ...at, reason: `merge relaunch waits: ${reason}` },
+      ];
+  }
   const pause = run.ended && "paused" in run.ended ? run.ended : null;
   if (pause && !pause.commented)
     return [{ kind: "pause", ...at, pause: pause.paused }];
@@ -541,9 +593,75 @@ function resume(
       effort: run.effort,
       attempt: run.attempt,
       ...(run.retry && { retry: run.retry }),
+      ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
       relaunch: true,
     },
   ];
+}
+
+// Stale-base delivery continues the same attempt and spends running-work
+// capacity. Readiness, the retry model and the drain gate don't restart it.
+function mergeRelaunch(
+  repository: Repository,
+  issue: Issue,
+  target: MergeRelaunch,
+  previous: Run | undefined,
+  running: Map<string, number>,
+  snapshot: Snapshot,
+  models: Models,
+): Decision[] {
+  const at = { repository: repository.name, issue: issue.number };
+  const { labels, modelLabelPrefix } = repository.configuration;
+  const excluded = mergeExclusion(issue, labels);
+  if (excluded)
+    return [
+      { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
+    ];
+  const model = previous
+    ? models.resolveModel(
+        `${previous.provider}/${previous.model}@${previous.effort}`,
+      )
+    : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
+  const reason =
+    "error" in model
+      ? model.error
+      : (paused(repository) ??
+        gate(model.provider, running, snapshot, "pause"));
+  if (reason)
+    return [{ kind: "skip", ...at, reason: `merge relaunch waits: ${reason}` }];
+  if ("error" in model) return [];
+  running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
+  return [
+    ...(issue.labels.includes(labels.paused)
+      ? [{ kind: "unpause" as const, ...at }]
+      : []),
+    {
+      kind: "launch",
+      ...at,
+      ...model,
+      attempt: previous?.attempt ?? 1,
+      ...(previous?.retry && { retry: previous.retry }),
+      relaunch: true,
+      mergeRelaunch: target,
+    },
+  ];
+}
+
+// A merge delivery never takes over an owner's question or a PR whose
+// continuation belongs outside the factory, including after interruption.
+function mergeExclusion(
+  issue: Issue,
+  labels: FactoryConfiguration["labels"],
+): string | null {
+  return (
+    needsInputExclusion(issue, labels) ??
+    (issue.labels.includes(labels.failed)
+      ? `labelled ${labels.failed}`
+      : null) ??
+    (labels.skip !== undefined && issue.labels.includes(labels.skip)
+      ? `labelled ${labels.skip}; delivered outside the factory`
+      : null)
+  );
 }
 
 function unretried({ run, failure }: Retry, reason: string): Decision {

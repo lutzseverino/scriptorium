@@ -63,7 +63,8 @@ type IssueSpec = {
   parent?: number;
   subIssues?: { number: number; state?: string }[];
   blockedBy?: { number: number; state: string }[];
-  pullRequests?: string[];
+  pullRequests?: (string | PullRequest)[];
+  branchPullRequests?: PullRequest[];
   comments?: string[];
   discussion?: Comment[] | Error;
   latestDeletion?: string | null | Error;
@@ -144,6 +145,7 @@ function fakePlatform(
           subIssues: [],
           blockedBy: [],
           pullRequests: [],
+          branchPullRequests: [],
           comments: [] as string[],
           discussion: [] as Comment[] | Error,
           latestDeletion: null as string | null | Error,
@@ -175,6 +177,7 @@ function fakePlatform(
   // Each port operation, as `[repository, operation, ...arguments]`.
   const calls: unknown[][] = [];
   const labels = new Map<string, Set<string>>();
+  const viewers: Record<string, Account | null | Error> = {};
 
   // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
@@ -342,17 +345,26 @@ function fakePlatform(
           await request("closing", number);
           return find(repository, number).pullRequests.map(
             (pullRequest) =>
-              ({
-                state: lower(pullRequest),
-                createdAt: "2026-10-09T12:00:00Z",
-                crossRepository: false,
-              }) as PullRequest,
+              (typeof pullRequest === "string"
+                ? {
+                    state: lower(pullRequest),
+                    createdAt: "2026-10-09T12:00:00Z",
+                    crossRepository: false,
+                  }
+                : pullRequest) as PullRequest,
           );
         },
         async byHeadBranch(branch) {
           await request("byHeadBranch", branch);
           assert.match(branch, /^factory\/issue-\d+$/);
-          return [];
+          return state[repository]
+            .flatMap((issue) => [
+              ...issue.branchPullRequests,
+              ...issue.pullRequests.filter(
+                (pr): pr is PullRequest => typeof pr !== "string",
+              ),
+            ])
+            .filter((pr) => pr.headBranch === branch);
         },
         pullRequest: unused,
         reviews: unused,
@@ -375,7 +387,15 @@ function fakePlatform(
           if (role instanceof Error) throw role;
           return role;
         },
-        viewer: unused,
+        async viewer() {
+          await request("viewer");
+          const viewer =
+            viewers[repository] === undefined
+              ? account("factory[bot]")
+              : viewers[repository];
+          if (viewer instanceof Error) throw viewer;
+          return viewer;
+        },
         async request(options) {
           assert.equal(options.path, "/graphql");
           const body = options.body as {
@@ -409,7 +429,7 @@ function fakePlatform(
     };
   }
 
-  return { connect, find, refused, failedRemovals, calls, labels };
+  return { connect, find, refused, failedRemovals, calls, labels, viewers };
 }
 
 // Sandcastle that records each run, with the token the sandbox would read,
@@ -604,6 +624,7 @@ function host(
   // Each image retention's current and running images, and each cache prune.
   const retentions: { current: string[]; running: string[] }[] = [];
   let prunes = 0;
+  const gitCalls: { cwd: string; args: string[] }[] = [];
   const ports: HostPorts = {
     connect(remote, options) {
       const name = Object.keys(remotes).find(
@@ -616,7 +637,10 @@ function host(
         );
       return github.connect(name, options);
     },
-    git: async (_token, cwd, args) => git(cwd, args),
+    git: async (_token, cwd, args) => {
+      gitCalls.push({ cwd, args });
+      return git(cwd, args);
+    },
     async token(repository) {
       tokenCommands.push(repository);
       const token = tokenOf[repository];
@@ -691,6 +715,7 @@ function host(
     restart: process,
     sandcastle: fake.control,
     events,
+    gitCalls,
     github,
     launched,
     builds,
@@ -5011,3 +5036,552 @@ test("a storage-held retry remains attempt two when storage recovers", async (t)
   assert.equal(run.launched[1].options.agent.name, "codex");
   assert.match(run.launched[1].options.prompt!, /First attempt failure/);
 });
+
+// A published head that the clone must fetch by SHA. The default branch can
+// advance independently, including to a divergent commit.
+function publishedPR(bare: string, branch = "factory/issue-4"): PullRequest {
+  const work = join(dirname(bare), "work");
+  git(work, ["checkout", "--quiet", "-B", branch]);
+  write(work, { "feature.txt": "issue work\n" });
+  git(work, ["add", "."]);
+  git(work, ["commit", "--quiet", "-m", "issue work"]);
+  git(work, ["push", "--quiet", bare, branch]);
+  const headCommit = git(work, ["rev-parse", "HEAD"]).trim();
+  git(work, ["checkout", "--quiet", "main"]);
+  return {
+    repository: "acme/widgets",
+    number: 40,
+    id: 40,
+    nodeId: "PR_40",
+    url: "https://platform.test/acme/widgets/pull/40",
+    state: "open",
+    title: "Issue work",
+    body: "Fixes #4",
+    author: { login: "factory[bot]", bot: true },
+    headBranch: branch,
+    headCommit,
+    baseBranch: "main",
+    crossRepository: false,
+    createdAt: "2026-10-09T12:00:00Z",
+  };
+}
+
+function advanceDefault(bare: string, text = "new base\n") {
+  const work = join(dirname(bare), "work");
+  git(work, ["checkout", "--quiet", "main"]);
+  write(work, { "base.txt": text });
+  git(work, ["add", "."]);
+  git(work, ["commit", "--quiet", "-m", "advance default"]);
+  git(work, ["push", "--quiet", bare, "main"]);
+}
+
+test("an orphan claim relaunches its behind PR once per head across passes and restarts", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = publishedPR(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 0, "current-base PR stays awaiting merge");
+  advanceDefault(bare);
+  const decisions = await run.tick();
+  const launch = decisions.find((d) => d.kind === "launch");
+  assert.ok(launch && launch.kind === "launch");
+  assert.equal(launch.mergeRelaunch?.headCommit, pr.headCommit);
+  assert.equal(launch.attempt, 1);
+  assert.equal(run.launched.length, 1);
+  assert.deepEqual(run.status().repositories[0].mergeRelaunches, [
+    { issue: 4, pullRequest: 40, headCommit: pr.headCommit },
+  ]);
+  const firstHead = pr.headCommit;
+  const prompt = run.launched[0].options.prompt!;
+  assert.match(prompt, /bring PR #40/i);
+  assert.ok(prompt.includes(pr.headCommit));
+  assert.match(prompt, /installed babysit/);
+  await run.tick();
+  assert.equal(
+    run.launched.length,
+    1,
+    "running sandbox blocks a second launch",
+  );
+  run.launched[0].finish();
+  await run.drain();
+  const restarted = run.restart();
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1, "consumption survives process restart");
+  const work = join(dirname(bare), "work");
+  git(work, ["checkout", "--quiet", pr.headBranch]);
+  write(work, { "another.txt": "new head\n" });
+  git(work, ["add", "."]);
+  git(work, ["commit", "--quiet", "-m", "new head"]);
+  git(work, ["push", "--quiet", bare, pr.headBranch]);
+  pr.headCommit = git(work, ["rev-parse", "HEAD"]).trim();
+  await restarted.tick();
+  assert.equal(
+    run.launched.length,
+    2,
+    "a changed behind head gets its own relaunch",
+  );
+  run.launched[1].finish();
+  await restarted.drain();
+  pr.headCommit = firstHead;
+  await restarted.tick();
+  assert.equal(
+    run.launched.length,
+    2,
+    "returning to a consumed head never resets its bound",
+  );
+});
+
+for (const scenario of [
+  "run branch",
+  "verified factory author",
+  "unrelated human",
+  "arbitrary bot",
+  "viewer failure on run branch",
+  "viewer failure on other branch",
+  "needs input",
+  "failed",
+  "another base",
+  "cross repository",
+  "two owned PRs",
+  "unrelated closing candidate",
+  "head only by SHA",
+  "ancestor head",
+])
+  test(`merge relaunch eligibility: ${scenario}`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const branch = [
+      "verified factory author",
+      "unrelated human",
+      "arbitrary bot",
+      "viewer failure on other branch",
+    ].includes(scenario)
+      ? "another-branch"
+      : "factory/issue-4";
+    const pr = publishedPR(bare, branch);
+    if (scenario === "unrelated human")
+      pr.author = { login: "person", bot: false };
+    if (scenario === "arbitrary bot")
+      pr.author = { login: "another[bot]", bot: true };
+    if (scenario === "another base") pr.baseBranch = "release";
+    if (scenario === "cross repository") pr.crossRepository = true;
+    if (scenario === "ancestor head") {
+      const work = join(dirname(bare), "work");
+      git(work, ["merge", "--ff-only", pr.headBranch]);
+    }
+    advanceDefault(bare);
+    if (scenario === "head only by SHA") {
+      git(bare, ["update-ref", "refs/pull/40/head", pr.headCommit]);
+      git(bare, ["update-ref", "-d", `refs/heads/${pr.headBranch}`]);
+    }
+    const labels = [
+      "factory:running",
+      ...(scenario === "needs input"
+        ? ["factory:needs-input"]
+        : scenario === "failed"
+          ? ["factory:failed"]
+          : []),
+    ];
+    const other = {
+      ...pr,
+      number: 41,
+      headBranch: "person-work",
+      author: { login: "person", bot: false },
+    };
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels,
+            pullRequests: [
+              pr,
+              ...(scenario === "two owned PRs" ? [{ ...pr, number: 41 }] : []),
+              ...([
+                "unrelated closing candidate",
+                "viewer failure on run branch",
+              ].includes(scenario)
+                ? [other]
+                : []),
+            ],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    if (scenario.startsWith("viewer failure"))
+      run.github.viewers["acme/widgets"] = new PlatformError(
+        "forbidden",
+        "Resource not accessible by integration",
+      );
+    const decisions = await run.tick();
+    const eligible = [
+      "run branch",
+      "verified factory author",
+      "viewer failure on run branch",
+      "unrelated closing candidate",
+      "head only by SHA",
+      "ancestor head",
+    ].includes(scenario);
+    assert.equal(run.launched.length, eligible ? 1 : 0);
+    assert.ok(
+      !run.status().repositories[0].reason,
+      "identity failure never pauses the repository",
+    );
+    assert.ok(
+      !run.github.find("acme/widgets", 4).labels.includes("factory:failed") ||
+        ["failed", "cross repository"].includes(scenario),
+    );
+    assert.ok(
+      scenario === "cross repository" ||
+        !decisions.some((d) => d.kind === "fail"),
+    );
+    assert.ok(
+      !run.gitCalls.some(({ args }) =>
+        ["push", "merge", "rebase"].includes(args[0]),
+      ),
+      "host never delivers Git changes",
+    );
+    if (eligible)
+      assert.ok(
+        run.gitCalls.some(
+          ({ args }) => args[0] === "fetch" && args.at(-1) === pr.headCommit,
+        ),
+        "fetch PR head by SHA",
+      );
+    if (scenario === "head only by SHA")
+      assert.equal(
+        git(run.clone("acme/widgets"), [
+          "for-each-ref",
+          "--format=%(refname)",
+          `refs/remotes/origin/${pr.headBranch}`,
+        ]).trim(),
+        "",
+      );
+  });
+
+test("a merge relaunch preserves the recorded retry, dirty work, PR history and policy across interruption", async (t) => {
+  const bare = remote(t, {
+    ...factoryFiles,
+    ".github/factory-review-policy.json":
+      '{"version":1,"author":"factory[bot]"}\n',
+  });
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  const previous = recordOf(run.state, 4, 2);
+  const pr = publishedPR(bare);
+  run.github.find("acme/widgets", 4).branchPullRequests.push(pr);
+  advanceDefault(bare);
+  const clone = run.clone("acme/widgets");
+  git(clone, ["fetch", "--quiet", "origin", pr.headCommit]);
+  const worktree = join(clone, ".sandcastle", "preserved");
+  git(clone, [
+    "worktree",
+    "add",
+    "--quiet",
+    "-b",
+    pr.headBranch,
+    worktree,
+    pr.headCommit,
+  ]);
+  write(worktree, { "staged.txt": "staged\n" });
+  git(worktree, ["add", "staged.txt"]);
+  write(worktree, {
+    "feature.txt": "unstaged\n",
+    "untracked.txt": "untracked\n",
+  });
+  const dirty = git(worktree, ["status", "--porcelain"]);
+  run.launched[1].finish();
+  await run.drain();
+  run.clock.now = new Date("2026-10-10T12:00:00Z");
+  await run.tick();
+  assert.equal(run.launched.length, 3);
+  const record = recordOf(run.state, 4, 2);
+  assert.equal(record.attempt, 2);
+  assert.equal(record.provider, previous.provider);
+  assert.equal(record.model, previous.model);
+  assert.equal(record.effort, previous.effort);
+  assert.equal(record.pullRequestSince, previous.pullRequestSince);
+  assert.deepEqual(record.retry, previous.retry);
+  const prompt = run.launched[2].options.prompt!;
+  assert.match(prompt, /app-author review policy/);
+  assert.match(
+    prompt,
+    /restriction below applies only to restoring local state/,
+  );
+  assert.match(prompt, /Recovery itself must not push/);
+  assert.match(prompt, /current-head checks and reviews/);
+  assert.match(
+    prompt,
+    /Conflicts, failed validation or checks, uncertain ownership and permission refusals.*reasoned owner handoff without merging/,
+  );
+  assert.match(
+    prompt,
+    /no second push, credential discovery or identity switch/,
+  );
+  assert.match(prompt, /Never use GitHub update-branch/);
+  assert.ok(prompt.includes(worktree));
+  assert.equal(git(worktree, ["status", "--porcelain"]), dirty);
+  run.interrupt();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 4);
+  assert.match(run.launched[3].options.prompt!, /bring PR #40/);
+  assert.equal(recordOf(run.state, 4, 2).mergeRelaunchHeads.length, 1);
+  assert.equal(git(worktree, ["status", "--porcelain"]), dirty);
+  run.launched[3].finish();
+  await restarted.drain();
+  run.github.find("acme/widgets", 4).labels.push("factory:needs-input");
+  await restarted.tick();
+  assert.equal(run.launched.length, 4, "owner handoff stays awaiting merge");
+});
+
+for (const orphan of [true, false])
+  test(`merge relaunch waits for the pause gate and repository resume without consuming a head, orphan: ${orphan}`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: orphan
+              ? ["factory:running", "model:codex/gpt-5.5@medium"]
+              : ["ready-for-agent"],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+      configuration: {
+        usage: {
+          drainThreshold: 80,
+          pauseThreshold: 95,
+          afterDrain: "auto-resume",
+        },
+      },
+      usage: { codex: 95, "claude-code": 0 },
+    });
+    if (!orphan) {
+      await run.tick();
+      run.launched[0].finish();
+      await run.drain();
+    }
+    const pr = publishedPR(bare);
+    run.github.find("acme/widgets", 4).branchPullRequests.push(pr);
+    advanceDefault(bare);
+    if (!orphan) run.usage["claude-code"] = 95;
+    await run.tick();
+    assert.equal(run.launched.length, orphan ? 0 : 1);
+    assert.match(
+      run.reports.join("\n"),
+      /merge relaunch waits.*pause threshold/,
+    );
+    const restarted = run.restart();
+    run.usage.codex = 85;
+    run.usage["claude-code"] = 85;
+    // A missing Dockerfile pauses the repository independently of provider usage.
+    const work = join(dirname(bare), "work");
+    git(work, ["rm", "--quiet", ".factory/Dockerfile"]);
+    git(work, ["commit", "--quiet", "-m", "pause repository"]);
+    git(work, ["push", "--quiet", bare, "main"]);
+    await restarted.tick();
+    assert.equal(run.launched.length, orphan ? 0 : 1);
+    write(work, { ".factory/Dockerfile": toolchain });
+    git(work, ["add", "."]);
+    git(work, ["commit", "--quiet", "-m", "resume repository"]);
+    git(work, ["push", "--quiet", bare, "main"]);
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      orphan ? 1 : 2,
+      "drain does not hold existing delivery",
+    );
+    const record = recordOf(run.state, 4, 1);
+    assert.equal(record.mergeRelaunchHeads.length, 1);
+    if (orphan) {
+      assert.equal(record.provider, "codex");
+      assert.equal(record.effort, "medium");
+    }
+  });
+
+test("an orphan merge relaunch with an unresolved model logs a skip and keeps its claim", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = publishedPR(bare);
+  advanceDefault(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          labels: ["factory:running", "model:unknown/model"],
+          branchPullRequests: [pr],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.match(run.reports.join("\n"), /merge relaunch waits:.*unknown/);
+  assert.ok(
+    run.github.find("acme/widgets", 4).labels.includes("factory:running"),
+  );
+  run.github.find("acme/widgets", 4).labels = ["factory:running"];
+  await run.tick();
+  assert.equal(
+    run.launched.length,
+    1,
+    "unresolved model did not consume the head",
+  );
+});
+
+test("a head recovered onto the current base becomes eligible after a later default advance", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = publishedPR(bare);
+  advanceDefault(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const work = join(dirname(bare), "work");
+  git(work, ["checkout", "--quiet", pr.headBranch]);
+  git(work, ["rebase", "main"]);
+  git(work, [
+    "push",
+    "--quiet",
+    `--force-with-lease=refs/heads/${pr.headBranch}:${pr.headCommit}`,
+    bare,
+    pr.headBranch,
+  ]);
+  pr.headCommit = git(work, ["rev-parse", "HEAD"]).trim();
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(
+    run.launched.length,
+    1,
+    "new current-base head stays awaiting merge",
+  );
+  advanceDefault(bare, "later base\n");
+  await run.tick();
+  assert.equal(
+    run.launched.length,
+    2,
+    "later base advancement can earn another recovery",
+  );
+});
+
+for (const reason of ["conflict", "failed checks", "permission refusal"])
+  test(`a merge relaunch ending with an owner handoff retains its work and does not retry: ${reason}`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const pr = publishedPR(bare);
+    advanceDefault(bare);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    const prompt = run.launched[0].options.prompt!;
+    assert.match(prompt, /reasoned owner handoff without merging/);
+    const clone = run.clone("acme/widgets");
+    git(clone, ["branch", pr.headBranch, pr.headCommit]);
+    const worktree = join(clone, ".sandcastle", "handoff");
+    git(clone, ["worktree", "add", "--quiet", worktree, pr.headBranch]);
+    write(worktree, { "unfinished.txt": `${reason}\n` });
+    const issue = run.github.find("acme/widgets", 4);
+    // The fake agent records the prescribed handoff. This tests host settlement,
+    // not a live model's ability to diagnose or deliver a PR.
+    issue.labels.push("factory:needs-input");
+    issue.comments.push(
+      `Owner handoff: ${reason}; preserved PR #40 and worktree.`,
+    );
+    run.launched[0].finish(new Error(reason));
+    await run.drain();
+    const restarted = run.restart();
+    await restarted.tick();
+    await restarted.tick();
+    assert.equal(run.launched.length, 1);
+    assert.ok(issue.labels.includes("factory:running"));
+    assert.ok(issue.labels.includes("factory:needs-input"));
+    assert.equal(pr.state, "open");
+    assert.equal(
+      readFileSync(join(worktree, "unfinished.txt"), "utf8"),
+      `${reason}\n`,
+    );
+    assert.ok(
+      !run.gitCalls.some(({ args }) =>
+        ["push", "rebase", "merge"].includes(args[0]),
+      ),
+    );
+  });
+
+for (const orphan of [false, true])
+  test(`the configured skip label reserves stale PR delivery for the orchestrating agent, orphan: ${orphan}`, async (t) => {
+    const bare = remote(t, {
+      ...factoryFiles,
+      ".factory/config.json": JSON.stringify({
+        ...conventions,
+        labels: { ...conventions.labels, skip: "owner:delivery" },
+      }),
+    });
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: orphan
+              ? ["factory:running", "owner:delivery"]
+              : ["ready-for-agent"],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    if (!orphan) {
+      await run.tick();
+      run.launched[0].finish();
+      await run.drain();
+    }
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr);
+    if (!issue.labels.includes("owner:delivery"))
+      issue.labels.push("owner:delivery");
+    advanceDefault(bare);
+    await run.tick();
+    assert.equal(run.launched.length, orphan ? 0 : 1);
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, orphan ? 0 : 1);
+    assert.ok(issue.labels.includes("owner:delivery"));
+    assert.ok(issue.labels.includes("factory:running"));
+    issue.labels = issue.labels.filter((label) => label !== "owner:delivery");
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      orphan ? 1 : 2,
+      "skipping did not consume the PR head",
+    );
+  });

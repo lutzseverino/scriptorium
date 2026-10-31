@@ -865,8 +865,16 @@ test("a run's pull request is its repository's own, opened since its first attem
     repository: { nameWithOwner: "acme/widgets" },
     ...details,
   });
-  const answers = (closing: unknown[], branch: unknown[]) =>
+  const answers = (closing: unknown[], branch: unknown[], viewerStatus = 200) =>
     github((request, body) => {
+      if (request === "GET /user")
+        return {
+          status: viewerStatus,
+          data:
+            viewerStatus === 200
+              ? { login: "factory", type: "User" }
+              : { message: "Resource not accessible by integration" },
+        };
       if (request === "PosternClosingPullRequests") {
         assert.equal(body.variables.number, 4);
         return {
@@ -893,6 +901,81 @@ test("a run's pull request is its repository's own, opened since its first attem
       answers(closing, branch).connection,
       labels,
     ).pullRequestState(4, since);
+  const observed = async (
+    closing: unknown[],
+    branch: unknown[],
+    viewerStatus = 200,
+  ) =>
+    repositoryPlatform(
+      answers(closing, branch, viewerStatus).connection,
+      labels,
+    ).pullRequestObservation(4);
+  const candidate = {
+    number: 2,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: "2026-10-09T12:00:00Z",
+  };
+  assert.deepEqual(
+    await observed(
+      [
+        pull(1, "OPEN", {
+          headRefName: "human",
+          author: { __typename: "User", login: "person" },
+        }),
+      ],
+      [pull(2, "OPEN")],
+    ),
+    { state: "open", mergeCandidate: candidate },
+    "count owned PRs, not all closing candidates",
+  );
+  assert.deepEqual(
+    await observed([pull(2, "OPEN")], [pull(2, "OPEN")]),
+    { state: "open", mergeCandidate: candidate },
+    "deduplicate candidates",
+  );
+  assert.deepEqual(
+    await observed([pull(2, "OPEN", { headRefName: "other" })], []),
+    { state: "open", mergeCandidate: candidate },
+    "verified factory author qualifies",
+  );
+  for (const author of ["person", "arbitrary[bot]"])
+    assert.deepEqual(
+      await observed(
+        [
+          pull(2, "OPEN", {
+            headRefName: "other",
+            author: { __typename: "Bot", login: author },
+          }),
+        ],
+        [],
+      ),
+      { state: "open" },
+    );
+  assert.deepEqual(
+    await observed([], [pull(2, "OPEN"), pull(3, "OPEN")]),
+    { state: "open" },
+    "two owned open PRs are ambiguous",
+  );
+  assert.deepEqual(
+    await observed(
+      [
+        pull(1, "OPEN", {
+          headRefName: "human",
+          author: { __typename: "User", login: "person" },
+        }),
+      ],
+      [pull(2, "OPEN")],
+      403,
+    ),
+    { state: "open", mergeCandidate: candidate },
+    "installation-token viewer failure preserves branch ownership",
+  );
+  assert.deepEqual(
+    await observed([pull(2, "OPEN", { headRefName: "other" })], [], 403),
+    { state: "open" },
+    "unreadable identity grants no author ownership",
+  );
   assert.equal(await state([], []), "none");
   assert.equal(await state([pull(1, "CLOSED")], [pull(2, "MERGED")]), "merged");
   assert.equal(await state([pull(1, "CLOSED")], [pull(2, "OPEN")]), "open");

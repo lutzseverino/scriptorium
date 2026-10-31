@@ -8,6 +8,7 @@ import {
   type Connection,
   type IssueReference,
   type LabelChange,
+  type PullRequest,
 } from "@lutzseverino/postern";
 import type { FactoryConfiguration } from "./factory-configuration.ts";
 import { renderComment } from "./comment-template.ts";
@@ -32,6 +33,13 @@ export const relationshipSections = {
 export function runBranch(issue: number): string {
   return `factory/issue-${issue}`;
 }
+
+// Identity needed to recover an open PR. Ownership and uniqueness are decided
+// here; the host checks its base and ancestry in the refreshed clone.
+export type MergeRelaunch = Pick<
+  PullRequest,
+  "number" | "headCommit" | "baseBranch" | "createdAt"
+>;
 
 export function repositoryPlatform(
   connection: Connection,
@@ -146,6 +154,30 @@ export function repositoryPlatform(
     for (const label of old) await remove(issue, label);
   }
 
+  async function candidates(
+    number: number,
+    since?: string,
+  ): Promise<PullRequest[]> {
+    const found = [
+      ...(pullRequests.capabilities.closingReferences
+        ? await pullRequests.closing(number)
+        : []),
+      ...(await pullRequests.byHeadBranch(runBranch(number))),
+    ].filter(
+      (pr) =>
+        !pr.crossRepository &&
+        (since === undefined || Date.parse(pr.createdAt) >= Date.parse(since)),
+    );
+    return [...new Map(found.map((pr) => [pr.number, pr])).values()];
+  }
+
+  function state(candidates: PullRequest[]): PullRequestState {
+    const states = candidates.map((pr) => pr.state);
+    if (states.includes("open")) return "open";
+    if (states.includes("merged")) return "merged";
+    return states.includes("closed") ? "closed" : "none";
+  }
+
   return {
     // An existing label is left as it is.
     async createStateLabels(): Promise<void> {
@@ -234,22 +266,46 @@ export function repositoryPlatform(
       number: number,
       since?: string,
     ): Promise<PullRequestState> {
-      const states = [
-        ...(pullRequests.capabilities.closingReferences
-          ? await pullRequests.closing(number)
-          : []),
-        ...(await pullRequests.byHeadBranch(runBranch(number))),
-      ]
-        .filter(
-          (pullRequest) =>
-            !pullRequest.crossRepository &&
-            (since === undefined ||
-              Date.parse(pullRequest.createdAt) >= Date.parse(since)),
-        )
-        .map((pullRequest) => pullRequest.state);
-      if (states.includes("open")) return "open";
-      if (states.includes("merged")) return "merged";
-      return states.includes("closed") ? "closed" : "none";
+      return state(await candidates(number, since));
+    },
+
+    // A closing reference is observation, not delivery authorization. Only
+    // the run branch or the supplied connection's verified identity owns a PR.
+    async pullRequestObservation(
+      number: number,
+      since?: string,
+    ): Promise<{
+      state: PullRequestState;
+      mergeCandidate?: MergeRelaunch;
+    }> {
+      const found = await candidates(number, since);
+      const open = found.filter((pr) => pr.state === "open");
+      let viewer: Account | null = null;
+      if (open.some((pr) => pr.headBranch !== runBranch(number))) {
+        try {
+          viewer = await access.viewer();
+        } catch {
+          /* Installation tokens need not support the viewer endpoint. */
+        }
+      }
+      const owned = open.filter(
+        (pr) =>
+          pr.headBranch === runBranch(number) ||
+          (viewer !== null &&
+            pr.author?.login.toLowerCase() === viewer.login.toLowerCase()),
+      );
+      const pr = owned.length === 1 ? owned[0] : undefined;
+      return {
+        state: state(found),
+        ...(pr && {
+          mergeCandidate: {
+            number: pr.number,
+            headCommit: pr.headCommit,
+            baseBranch: pr.baseBranch,
+            createdAt: pr.createdAt,
+          },
+        }),
+      };
     },
 
     // Closed issues carrying any active state label, including questions

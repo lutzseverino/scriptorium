@@ -147,7 +147,7 @@ test("the default close comment preserves local and cross-repository ticket refe
 test("awaiting-merge defaults and overrides render run facts and omit absent orphan details", () => {
   assert.equal(
     renderComment("awaitingMerge", undefined, { label: "working" }),
-    "The factory agent run has ended, but its pull request remains open.\n\nThe factory retains this issue's claim without a live agent. The owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Removing `working` alone does not resume the run, and merging the pull request does not always close the issue.",
+    "The factory agent run has ended, but its pull request remains open.\n\nThe factory retains this issue's claim without a live agent. A behind, factory-owned pull request targeting the default branch may get one merge relaunch per PR head, through the repository's installed babysit. Each advance of the default branch can earn another relaunch for a new head; an unchanged consumed head stays awaiting merge. Otherwise the owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Needs-input and failed issues do not get merge relaunches. Removing `working` alone does not authorize a relaunch, and merging the pull request does not always close the issue.",
   );
   assert.equal(
     renderComment(
