@@ -4155,7 +4155,7 @@ test("paused-labelled issues no run holds settle as orphaned claims and lose the
   const decisions = await run.tick();
   assert.deepEqual(
     decisions.map(({ kind, issue }) => `${kind} #${issue}`),
-    ["release #6", "fail #5", "unpause #4", "launch #4", "skip #5"],
+    ["release #6", "fail #5", "unpause #4", "launch #4"],
   );
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "ready-for-agent",
@@ -5662,6 +5662,29 @@ for (const state of ["open", "closed"] as const)
     assert.equal(run.launched.length, 1, "no duplicate sandbox or claim");
     run.launched[0].finish();
     await run.drain();
+    if (state === "closed") {
+      await restarted.tick();
+      assert.equal(run.launched.length, 2);
+      assert.match(
+        run.launched[1].options.prompt!,
+        /Needs-input resume: continue PR #40/,
+      );
+      assert.match(
+        run.launched[1].options.prompt!,
+        /Never open a replacement PR/,
+      );
+      restarted.interrupt();
+      const retryRestart = run.restart();
+      await retryRestart.tick();
+      assert.equal(run.launched.length, 3);
+      assert.equal(recordOf(run.state, 4, 2).attempt, 2);
+      assert.match(
+        run.launched[2].options.prompt!,
+        /Needs-input resume: continue PR #40/,
+      );
+      run.launched[2].finish();
+      await run.drain();
+    }
   });
 
 test("an ended run resumes its PR with committed and dirty work and retains PR history through interruption", async (t) => {
@@ -5806,3 +5829,41 @@ for (const failedLabel of [
     assert.deepEqual(issue.labels, []);
     assert.equal(run.launched.length, 0);
   });
+
+test("a needs-input removal resumes an orphan PR after failed claim release and restart", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = publishedPR(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          labels: ["ready-for-agent", "factory:running", "factory:needs-input"],
+          branchPullRequests: [pr],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  const key = "acme/widgets#4 factory:running";
+  run.github.failedRemovals.set(
+    key,
+    new PlatformError("unavailable", "temporary claim release failure"),
+  );
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.ok(issue.labels.includes("factory:running"));
+  run.github.failedRemovals.delete(key);
+  issue.labels = issue.labels.filter(
+    (label) => label !== "factory:needs-input",
+  );
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  assert.match(
+    run.launched[0].options.prompt!,
+    /Needs-input resume: continue PR #40/,
+  );
+  run.launched[0].finish();
+  await run.drain();
+});

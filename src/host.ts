@@ -488,6 +488,21 @@ export function createHost(
     for (const number of numbers) {
       if (held(number)) continue;
       const marker = readClaimMarker(name, number);
+      const issue = issues.find((issue) => issue.number === number);
+      if (
+        marker.inputResume &&
+        issue &&
+        !issue.labels.includes(labels.needsInput) &&
+        (issue.labels.includes(labels.running) ||
+          issue.labels.includes(labels.paused))
+      ) {
+        // A prior release may have failed after persisting its resume marker.
+        // No host run owns this claim; finish releasing it before pickup gates.
+        await platform.release(number);
+        issue.labels = issue.labels.filter(
+          (label) => label !== labels.running && label !== labels.paused,
+        );
+      }
       const observation = await platform.pullRequestObservation(
         number,
         marker.inputResume?.since,

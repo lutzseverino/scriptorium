@@ -431,7 +431,10 @@ function runningCounts(snapshot: Snapshot): Map<string, number> {
 }
 
 // A failed first run that may retry on the retry model.
-type SettlingRun = Pick<Run, "repository" | "issue" | "attempt"> & {
+type SettlingRun = Pick<
+  Run,
+  "repository" | "issue" | "attempt" | "inputResume"
+> & {
   log: string | null;
 };
 type Retry = { run: SettlingRun; failure: string; model: Model };
@@ -581,6 +584,7 @@ function relaunch(
       ...retry.model,
       attempt: 2,
       retry: { failure: retry.failure, log: retry.run.log ?? "" },
+      ...(retry.run.inputResume && { inputResume: retry.run.inputResume }),
     },
   ];
 }

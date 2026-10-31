@@ -2797,3 +2797,29 @@ test("a merged closing-reference PR completes runs and orphan claims without a r
   });
   assert.deepEqual(decisions, [{ kind: "complete", ...at(4) }]);
 });
+
+test("a failed needs-input continuation retains its PR context on the automatic retry", () => {
+  const inputResume = {
+    since: now,
+    pullRequests: [
+      {
+        number: 40,
+        headBranch: "factory/issue-4",
+        state: "closed" as const,
+        createdAt: now,
+      },
+    ],
+  };
+  const decisions = decide({
+    issues: [issue(4, claimed)],
+    runs: [
+      run(4, {
+        inputResume,
+        ended: { timedOut: false, pullRequest: "closed" },
+      }),
+    ],
+  });
+  const retry = launches(decisions)[0];
+  assert.equal(retry?.attempt, 2);
+  assert.deepEqual(retry?.inputResume, inputResume);
+});
