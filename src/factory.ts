@@ -822,7 +822,7 @@ function mergeRelaunch(
     return [
       { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
     ];
-  const hold = releaseHoldReason(repository.releaseHold, target.number);
+  const hold = releaseHoldReason(repository.releaseHold, [target.number]);
   if (hold)
     return [
       {
@@ -887,11 +887,12 @@ function mergeRelaunch(
 // requires a successful read before granting merge permission.
 export function releaseHoldReason(
   hold: Repository["releaseHold"],
-  own: number,
+  own: number[],
 ): string | null {
   if (hold === null)
     return "release hold state is unreadable; merging resumes after a successful read confirms no other labelled PR remains";
-  const others = hold?.filter((number) => number !== own) ?? [];
+  const others =
+    hold?.filter((number) => own.some((pr) => number !== pr)) ?? [];
   return others.length
     ? `release hold (${others.map((number) => `#${number}`).join(", ")}); merging resumes when the last labelled PR closes or loses the label`
     : null;

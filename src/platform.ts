@@ -360,6 +360,7 @@ export function repositoryPlatform(
       state: PullRequestState;
       closesIssue?: true;
       pullRequests: InputResume["pullRequests"];
+      ownedPullRequests: number[];
       mergeCandidate?: MergeRelaunch;
     }> {
       const { found, closing } = await candidates(number, since);
@@ -381,6 +382,7 @@ export function repositoryPlatform(
       const pr = owned.length === 1 ? owned[0] : undefined;
       return {
         state: state(found),
+        ownedPullRequests: owned.map((pr) => pr.number),
         pullRequests: found
           .filter((pr) => typeof pr.number === "number")
           .map(({ number, headBranch, state, createdAt }) => ({

@@ -123,8 +123,8 @@ type HostRun = Run & {
   // Labelled PRs observed during this run, retained even after the hold clears.
   releaseHoldObserved?: number[];
   releaseHoldSettled?: true;
-  // The run-owned PR whose merge this run deferred.
-  releaseHeld?: number;
+  // Run-owned PRs whose merges this run deferred, independent of eligibility.
+  releaseHeld?: number[];
   launchResult?: LaunchResult;
   recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
@@ -380,16 +380,16 @@ export function createHost(
           run.pullRequestSince,
         );
         if (!run.releaseHoldSettled) {
-          const own = observation.mergeCandidate?.number;
-          if (
-            own !== undefined &&
-            (pass.releaseHold === null ||
-              (run.releaseHoldObserved ?? []).some((number) => number !== own))
-          ) {
-            run.releaseHeld = own;
+          const held = observation.ownedPullRequests.filter(
+            (own) =>
+              pass.releaseHold === null ||
+              (run.releaseHoldObserved ?? []).some((number) => number !== own),
+          );
+          if (held.length) {
+            run.releaseHeld = held;
             // A merge attempt stopped by a release hold did not spend its
             // head's recovery opportunity. Other consumed heads stay bounded.
-            if (run.mergeRelaunch)
+            if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
               run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
                 (head) => head !== mergeHead(run.mergeRelaunch!),
               );
@@ -630,7 +630,7 @@ export function createHost(
     candidate: MergeRelaunch | undefined,
     consumed: string[],
     pass: Pass,
-    releaseHeld?: number,
+    releaseHeld?: number[],
   ): Promise<MergeRelaunch | undefined> {
     if (
       !candidate ||
@@ -648,7 +648,7 @@ export function createHost(
       candidate.baseBranch !== defaultRef.slice("refs/remotes/origin/".length)
     )
       return undefined;
-    if (releaseHeld === candidate.number) return candidate;
+    if (releaseHeld?.includes(candidate.number)) return candidate;
     await git(clone, [
       "fetch",
       "--quiet",

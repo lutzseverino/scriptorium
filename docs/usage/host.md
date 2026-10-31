@@ -587,7 +587,7 @@ while another open PR carries `labels.releaseHold`, or the hold cannot be read.
 It leaves implementation launches, retries and interrupted or paused runs
 under their usual gates. Release-held PRs resume after a successful clear read,
 waiving only the behind requirement below. Sticky per-run evidence and the
-release-held PR number persist in the run record; a merge run ended by a hold
+release-held PR numbers persist in the run record; a merge run ended by a hold
 does not consume its head. The issue's release-hold comment updates and resolves
 in place across restarts.
 

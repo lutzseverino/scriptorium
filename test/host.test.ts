@@ -6564,3 +6564,40 @@ test("a hold observed before interruption remains sticky after the same attempt 
     "hold evidence survives the interrupted continuation",
   );
 });
+
+for (const unreadable of [false, true])
+  test(`release-held classification survives two owned PRs at settlement, unreadable: ${unreadable}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+    run.github.releaseHolds["acme/widgets"] = unreadable
+      ? new PlatformError("invalidResponse", "unreadable")
+      : [80];
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.equal(run.launched.length, 1, "multiple owned PRs prevent launch");
+    const restarted = run.restart();
+    issue.branchPullRequests[1].state = "closed";
+    run.github.releaseHolds["acme/widgets"] = [];
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "the remaining current PR resumes after eligibility returns",
+    );
+    run.launched[1].finish();
+    await restarted.drain();
+    await run.restart().tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "resumption still consumes the head once",
+    );
+  });
