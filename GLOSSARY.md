@@ -66,9 +66,8 @@ factory stopped at its provider's pause threshold, which the factory labels
 paused and relaunches by itself as the same attempt once the provider's usage
 reads below every threshold, or once its deadline passes while the usage is
 unknown and no usage hold applies, instead of ending with a run outcome.
-Unlike a paused repository, which claims and launches nothing for a pass and
-never touches its issues, a paused run is one issue's run, marked on that
-issue.
+Unlike a paused repository, which claims and launches nothing for a pass,
+a paused run is one issue's run, marked on that issue.
 _Avoid_: Limited run, held run, failed run
 
 **Hosting platform**:

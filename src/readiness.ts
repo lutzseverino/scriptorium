@@ -47,9 +47,14 @@ export function readinessExclusion(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
-): ReadinessHold | null {
+): (ReadinessHold & { key?: string }) | null {
   const refused = refusal(issue, policy);
-  if (refused) return { ...refused, reason: `its readiness ${refused.reason}` };
+  if (refused)
+    return {
+      ...refused,
+      ...(!refused.waiting && { key: "readiness" }),
+      reason: `its readiness ${refused.reason}`,
+    };
   if (issue.subIssues.length > 0)
     return {
       reason:
@@ -64,6 +69,7 @@ export function readinessExclusion(
   return held
     ? {
         ...held,
+        ...(!held.waiting && !held.blocked && { key: "parent-readiness" }),
         reason: `sub-issue of ${reference(parent.number)}, ${held.reason}`,
       }
     : null;
@@ -131,7 +137,10 @@ function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
 
 // A parent's readiness releases its sub-issues while it counts, is newer than
 // the parent's latest sub-issue link, and no open blocker holds the parent.
-function parentHold(parent: Issue, policy: Policy): ReadinessHold | null {
+function parentHold(
+  parent: Issue,
+  policy: Policy,
+): (ReadinessHold & { blocked?: true }) | null {
   const { ready } = policy;
   const name = reference(parent.number);
   if (!parent.labels.includes(ready))
@@ -155,6 +164,7 @@ function parentHold(parent: Issue, policy: Policy): ReadinessHold | null {
     return {
       reason: `which is blocked by ${references(blockers)}; it waits until ${name}'s blockers close`,
       waiting: false,
+      blocked: true,
     };
   return null;
 }

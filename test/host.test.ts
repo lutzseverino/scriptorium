@@ -153,6 +153,10 @@ function fakePlatform(
         };
         return {
           ...issue,
+          discussion:
+            issue.discussion instanceof Error
+              ? issue.discussion
+              : structuredClone(issue.discussion),
           timeline: [
             ...issue.labels.map((label): TimelineEvent => ({
               event: "labeled",
@@ -176,6 +180,7 @@ function fakePlatform(
 
   // Each port operation, as `[repository, operation, ...arguments]`.
   const calls: unknown[][] = [];
+  const commentEdits = new Map<string, string[]>();
   const labels = new Map<string, Set<string>>();
   const viewers: Record<string, Account | null | Error> = {};
 
@@ -323,8 +328,20 @@ function fakePlatform(
         },
         async createComment(number, comment) {
           await request("createComment", number, comment);
-          edit(number).comments.push(comment);
-          return {} as Comment;
+          const issue = edit(number);
+          issue.comments.push(comment);
+          assert.ok(!(issue.discussion instanceof Error));
+          const created = {
+            nodeId: `IC_FACTORY_${issue.number}_${issue.comments.length}`,
+            id: issue.number * 10000 + issue.comments.length,
+            body: comment,
+            author: account("factory[bot]"),
+            createdAt: "2026-10-09T12:00:00Z",
+            updatedAt: "2026-10-09T12:00:00Z",
+            url: "https://platform.test/comment",
+          } satisfies Comment;
+          issue.discussion.push(created);
+          return created;
         },
         async comments(number) {
           await request("comments", number);
@@ -337,7 +354,26 @@ function fakePlatform(
           edit(number).state = "CLOSED";
         },
         issue: unused,
-        updateComment: unused,
+        async updateComment(id, body) {
+          await request("updateComment", id, body);
+          for (const issue of state[repository]) {
+            if (issue.discussion instanceof Error) continue;
+            const comment = issue.discussion.find(
+              (comment) => comment.id === id,
+            );
+            if (!comment) continue;
+            edit(issue.number);
+            const position = issue.comments.indexOf(comment.body);
+            if (position !== -1) issue.comments[position] = body;
+            commentEdits.set(comment.nodeId!, [
+              ...(commentEdits.get(comment.nodeId!) ?? [comment.body]),
+              body,
+            ]);
+            comment.body = body;
+            return comment;
+          }
+          throw new Error(`comment ${id} is absent`);
+        },
       },
       pullRequests: {
         capabilities: { closingReferences: true },
@@ -413,6 +449,37 @@ function fakePlatform(
             query: string;
             variables: { number: number };
           };
+          if (body.query.includes("FactoryCommentEdits")) {
+            const id = (body.variables as unknown as { id: string }).id;
+            const comment = state[repository]
+              .flatMap((issue) =>
+                issue.discussion instanceof Error ? [] : issue.discussion,
+              )
+              .find((comment) => comment.nodeId === id);
+            assert.ok(comment);
+            const history = commentEdits.get(id);
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  node: {
+                    body: comment.body,
+                    updatedAt: comment.updatedAt,
+                    lastEditedAt: history ? comment.updatedAt : null,
+                    includesCreatedEdit: true,
+                    userContentEdits: {
+                      nodes: (history ?? [comment.body]).map((diff) => ({
+                        diff,
+                        deletedAt: null,
+                      })),
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            };
+          }
           assert.match(body.query, /COMMENT_DELETED_EVENT/);
           await request("commentDeletions", body.variables.number);
           const deletion = find(
@@ -619,13 +686,17 @@ function host(
     imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
     ...configuration,
   };
-  const registry = createRegistry(resolved.providers, {
-    sandcastle,
-    fetch: () => {
-      throw new Error("the host reads usage through its port");
+  const registry = createRegistry(
+    resolved.providers,
+    {
+      sandcastle,
+      fetch: () => {
+        throw new Error("the host reads usage through its port");
+      },
+      codexExecutable: "/nonexistent/codex",
     },
-    codexExecutable: "/nonexistent/codex",
-  });
+    resolved.models.allowed,
+  );
   const builds: string[] = [];
   const reports: string[] = [];
   const tokenCommands: string[] = [];
@@ -2715,7 +2786,11 @@ for (const fault of [
     );
     assert.ok(status.held.some((held: { issue: number }) => held.issue === 3));
     assert.deepEqual(run.github.find("acme/widgets", 2).comments, []);
-    assert.deepEqual(run.github.find("acme/widgets", 3).comments, []);
+    assert.equal(run.github.find("acme/widgets", 3).comments.length, 1);
+    assert.match(
+      run.github.find("acme/widgets", 3).comments[0],
+      /scriptorium:hold:repository-configuration/,
+    );
     // Restoring the default branch resumes pickup on the next pass.
     git(work, ["revert", "--no-edit", "HEAD"]);
     git(work, ["push", "--quiet", bare, "main"]);
@@ -3030,7 +3105,11 @@ test("settlement after restart uses the last valid comment template while invali
   assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
     "ready-for-agent",
   ]);
-  assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
+  assert.equal(run.github.find("acme/widgets", 5).comments.length, 1);
+  assert.match(
+    run.github.find("acme/widgets", 5).comments[0],
+    /scriptorium:hold:repository-configuration/,
+  );
   assert.equal(run.launched.length, 1);
 });
 
@@ -3213,20 +3292,19 @@ test("readiness counts only from a user whose role, read once a pass, the host a
     "its readiness waits: the repository role of @morgan, who applied ready-for-agent, could not be read this pass",
   );
   assert.deepEqual(lookups(), ["owner", "casey", "morgan"]);
-  // Refused readiness writes nothing to GitHub.
+  // Refused readiness keeps labels intact and posts actionable comments only.
   assert.deepEqual(run.events, [
     "stop sandboxes",
     "add acme/widgets#1 factory:running",
     "add acme/widgets#6 factory:running",
   ]);
-  for (const number of [2, 3, 4, 5])
-    assert.deepEqual(
-      [
-        run.github.find("acme/widgets", number).labels,
-        run.github.find("acme/widgets", number).comments,
-      ],
-      [[ready], []],
-    );
+  for (const number of [2, 3, 4, 5]) {
+    const issue = run.github.find("acme/widgets", number);
+    assert.deepEqual(issue.labels, [ready]);
+    assert.equal(issue.comments.length, number === 5 ? 0 : 1);
+    if (number !== 5)
+      assert.match(issue.comments[0], /scriptorium:hold:readiness/);
+  }
   // The next pass reads every role again, so a lookup that failed and a role
   // that changed both count from then on.
   roles.morgan = "admin";
@@ -3468,7 +3546,11 @@ test("a parent's readiness releases its tickets and closes it only when it count
     "its readiness is refused: ready-for-agent was applied by @casey, whose repository role triage is not authorized; a person with the admin role must remove and re-apply ready-for-agent",
   );
   assert.equal(run.github.find("acme/widgets", 5).state, "OPEN");
-  assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
+  assert.equal(run.github.find("acme/widgets", 5).comments.length, 1);
+  assert.match(
+    run.github.find("acme/widgets", 5).comments[0],
+    /scriptorium:hold:readiness/,
+  );
   assert.equal(run.github.find("acme/widgets", 6).state, "CLOSED");
   assert.deepEqual(run.github.find("acme/widgets", 6).comments, [
     "All sub-issues are closed. Closing this parent.\n\n- #8",
@@ -4996,7 +5078,11 @@ test("storage holds admit no new tickets, preserve retries and provider state, a
   assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
     "ready-for-agent",
   ]);
-  assert.deepEqual(run.github.find("acme/widgets", 5).comments, []);
+  assert.equal(run.github.find("acme/widgets", 5).comments.length, 1);
+  assert.match(
+    run.github.find("acme/widgets", 5).comments[0],
+    /scriptorium:hold:repository-configuration/,
+  );
   // Closing the already-running ticket lets it settle during the hold.
   run.github.find("acme/widgets", 4).state = "CLOSED";
   run.launched[0].finish();
@@ -5042,7 +5128,11 @@ test("a storage-held retry remains attempt two when storage recovers", async (t)
     "factory:running",
     "ready-for-agent",
   ]);
-  assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+  assert.equal(run.github.find("acme/widgets", 4).comments.length, 1);
+  assert.match(
+    run.github.find("acme/widgets", 4).comments[0],
+    /scriptorium:hold:repository-configuration/,
+  );
   await run.tick();
   assert.equal(run.launched.length, 2);
   assert.equal(run.launched[1].options.agent.name, "codex");
@@ -5866,4 +5956,206 @@ test("a needs-input removal resumes an orphan PR after failed claim release and 
   );
   run.launched[0].finish();
   await run.drain();
+});
+
+test("an actionable hold comment is edited, resolved and reactivated across passes and restart", async (t) => {
+  const name = "acme/widgets";
+  const run = host(t, {
+    repositories: {
+      [name]: [{ number: 1, labels: ["ready-for-agent", "model:unknown"] }],
+    },
+    remotes: { [name]: remote(t, factoryFiles) },
+    caps: { "claude-code": 0, codex: 0 },
+  });
+  await run.tick();
+  const held = run.github.find(name, 1);
+  assert.equal(held.comments.length, 1);
+  assert.match(held.comments[0], /<!-- scriptorium:hold:model-label -->/);
+  assert.match(held.comments[0], /unknown/);
+  await run.tick();
+  assert.equal(held.comments.length, 1);
+  held.labels = ["ready-for-agent", "model:other"];
+  await run.tick();
+  assert.match(held.comments[0], /other/);
+  held.labels = ["ready-for-agent"];
+  await run.tick();
+  assert.match(held.comments[0], /Resolved/);
+  run.interrupt();
+  const restarted = run.restart();
+  held.labels = ["ready-for-agent", "model:again"];
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(held.comments.length, 1);
+  assert.match(held.comments[0], /again/);
+  assert.doesNotMatch(held.comments[0], /Resolved/);
+  assert.equal(run.launched.length, 0);
+});
+
+for (const reason of [
+  "readiness",
+  "parent-readiness",
+  "repository-configuration",
+])
+  test(`${reason} comments update and resolve without duplicates or state-label changes`, async (t) => {
+    const name = "acme/widgets";
+    const roles: Record<string, string | null | Error> = {
+      owner: "admin",
+      casey: "read",
+    };
+    const run = host(t, {
+      repositories: {
+        [name]: [
+          {
+            number: 1,
+            ...(reason === "readiness"
+              ? { timeline: [labelled("casey")] }
+              : reason === "parent-readiness"
+                ? { parent: 2 }
+                : {}),
+          },
+          ...(reason === "parent-readiness"
+            ? [
+                {
+                  number: 2,
+                  labels: [] as string[],
+                  subIssues: [{ number: 1 }],
+                },
+              ]
+            : []),
+        ],
+      },
+      remotes: { [name]: remote(t, factoryFiles) },
+      roles,
+      caps: { "claude-code": 0, codex: 0 },
+      imageFailures:
+        reason === "repository-configuration"
+          ? [
+              new Error("first configuration problem"),
+              new Error("changed configuration problem"),
+              null,
+              new Error("recurring problem"),
+            ]
+          : [],
+    });
+    await run.tick();
+    const held = run.github.find(name, 1);
+    assert.equal(held.comments.length, 1);
+    assert.match(held.comments[0], new RegExp(`scriptorium:hold:${reason}`));
+    const first = held.comments[0];
+    if (reason === "readiness") roles.casey = "triage";
+    if (reason === "parent-readiness") {
+      const parent = run.github.find(name, 2);
+      parent.labels = ["ready-for-agent"];
+      parent.timeline.push(labelled("casey"));
+    }
+    await run.tick();
+    assert.equal(held.comments.length, 1);
+    assert.notEqual(held.comments[0], first);
+    if (reason === "readiness" || reason === "parent-readiness")
+      roles.casey = "admin";
+    await run.tick();
+    assert.match(held.comments[0], /Resolved/);
+    if (reason === "readiness" || reason === "parent-readiness")
+      roles.casey = "read";
+    await run.tick();
+    assert.equal(held.comments.length, 1);
+    assert.doesNotMatch(held.comments[0], /Resolved/);
+    assert.deepEqual(held.labels, ["ready-for-agent"]);
+    assert.equal(run.launched.length, 0);
+  });
+
+for (const labels of [
+  ["model:gpt-unknown"],
+  ["model:gpt-5.5", "model:claude-sonnet-5-5"],
+  ["model:codex/gpt-unknown"],
+])
+  test(`model-label holds never launch a fallback for ${labels.join(", ")}`, async (t) => {
+    const name = "acme/widgets";
+    const run = host(t, {
+      repositories: {
+        [name]: [{ number: 1, labels: ["ready-for-agent", ...labels] }],
+      },
+      remotes: { [name]: remote(t, factoryFiles) },
+      configuration: {
+        models: {
+          default: "claude-sonnet-5-5",
+          retry: "gpt-5.5",
+          allowed: ["claude-sonnet-5-5", "gpt-5.5"],
+        },
+      },
+    });
+    await run.tick();
+    await run.tick();
+    const issue = run.github.find(name, 1);
+    assert.equal(run.launched.length, 0);
+    assert.equal(issue.comments.length, 1);
+    assert.match(issue.comments[0], /scriptorium:hold:model-label/);
+    issue.labels = ["ready-for-agent", "model:codex/gpt-5.5@low"];
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    assert.equal(run.launched[0].options.agent.name, "codex");
+    assert.match(issue.comments[0], /Resolved/);
+  });
+
+test("open blockers including a parent's blocker, provider holds, caps and factory states post no hold comments", async (t) => {
+  const name = "acme/widgets";
+  const run = host(t, {
+    repositories: {
+      [name]: [
+        { number: 1, blockedBy: [{ number: 10, state: "OPEN" }] },
+        { number: 2, parent: 3 },
+        {
+          number: 3,
+          subIssues: [{ number: 2 }],
+          blockedBy: [{ number: 10, state: "OPEN" }],
+        },
+        { number: 4, labels: ["ready-for-agent", "factory:needs-input"] },
+        {
+          number: 5,
+          labels: ["ready-for-agent", "factory:failed"],
+          timeline: [labelled("factory[bot]")],
+        },
+        { number: 6 },
+        { number: 7, labels: ["ready-for-agent", "factory:skip"] },
+      ],
+    },
+    remotes: {
+      [name]: remote(t, {
+        ...factoryFiles,
+        ".factory/config.json": JSON.stringify({
+          ...conventions,
+          labels: { ...conventions.labels, skip: "factory:skip" },
+        }),
+      }),
+    },
+    caps: { "claude-code": 0, codex: 0 },
+    usage: { "claude-code": 90 },
+  });
+  await run.tick();
+  await run.tick();
+  for (const number of [1, 2, 3, 4, 5, 6, 7])
+    assert.deepEqual(run.github.find(name, number).comments, []);
+  assert.equal(run.launched.length, 0);
+});
+
+test("unreadable hold comments do not prevent time-limit stops or independent launches", async (t) => {
+  const name = "acme/widgets";
+  const run = host(t, {
+    repositories: { [name]: [{ number: 1 }, { number: 2 }] },
+    remotes: { [name]: remote(t, factoryFiles) },
+    caps: { "claude-code": 1, codex: 1 },
+  });
+  await run.tick();
+  run.github.find(name, 1).discussion = new PlatformError(
+    "unavailable",
+    "Comments unavailable",
+  );
+  run.clock.now = new Date("2026-10-09T17:00:00Z");
+  await run.tick();
+  assert.equal(run.launched[0].options.signal?.aborted, true);
+  await settled();
+  run.github.find(name, 1).state = "CLOSED";
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(run.launched[1].options.name, `${name}#2`);
 });

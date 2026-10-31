@@ -554,7 +554,14 @@ test("a finished parent stays open while its readiness is refused or unread", ()
     });
     assert.deepEqual(
       decisions,
-      [{ kind: "skip", ...at(3), reason: `its readiness ${reason}` }],
+      [
+        {
+          kind: "skip",
+          ...at(3),
+          reason: `its readiness ${reason}`,
+          ...(!reason.startsWith("waits:") && { hold: "readiness" }),
+        },
+      ],
       reason,
     );
   }
@@ -999,12 +1006,14 @@ test("a paused repository claims and launches nothing while its runs keep settli
       kind: "skip",
       ...at(1, gadgets),
       reason: "acme/gadgets is paused: it has no .factory/Dockerfile",
+      hold: "repository-configuration",
     },
     {
       kind: "skip",
       ...at(2, gadgets),
       reason:
         "retry waits: acme/gadgets is paused: it has no .factory/Dockerfile",
+      hold: "repository-configuration",
     },
     {
       kind: "skip",
@@ -1502,6 +1511,7 @@ test("an interrupted run takes its issue's turn and waits for its gate and its r
       ...at(4),
       reason:
         "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
+      hold: "repository-configuration",
     },
   ]);
 });
@@ -1779,6 +1789,7 @@ test("a paused run also waits for its provider's cap and its repository", () => 
       ...at(4),
       reason:
         "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
+      hold: "repository-configuration",
     },
   ]);
 });
@@ -2822,4 +2833,131 @@ test("a failed needs-input continuation retains its PR context on the automatic 
   const retry = launches(decisions)[0];
   assert.equal(retry?.attempt, 2);
   assert.deepEqual(retry?.inputResume, inputResume);
+});
+
+test("actionable skips carry stable keys while blockers and transient roles stay log-only", () => {
+  const cases: [Issue, Partial<Repository>, string | undefined][] = [
+    [issue(1, undefined, { ready: null }), {}, "readiness"],
+    [issue(1, undefined, { nativeParent: 2 }), {}, "parent-readiness"],
+    [issue(1, ["ready-for-agent", "model:unknown"]), {}, "model-label"],
+    [issue(1), { paused: "invalid configuration" }, "repository-configuration"],
+    [
+      issue(1, undefined, { blockedBy: [{ number: 3, state: "open" }] }),
+      {},
+      undefined,
+    ],
+    [
+      issue(1, undefined, {
+        ready: { at: now, actor: { kind: "unreadable", login: "owner" } },
+      }),
+      {},
+      undefined,
+    ],
+    [
+      issue(1, undefined, { nativeParent: 2 }),
+      {
+        issues: [
+          issue(1, undefined, { nativeParent: 2 }),
+          issue(2, undefined, {
+            subIssues: [{ number: 1, state: "open" }],
+            blockedBy: [{ number: 3, state: "open" }],
+          }),
+        ],
+      },
+      undefined,
+    ],
+  ];
+  for (const [candidate, details, hold] of cases) {
+    const parent = issue(2, [], { subIssues: [{ number: 1, state: "open" }] });
+    const decisions = decide({
+      repositories: [repository(widgets, [candidate, parent], details)],
+    });
+    const skipped = decisions.find(
+      (decision) => decision.issue === 1 && decision.kind === "skip",
+    );
+    assert.ok(skipped?.kind === "skip");
+    assert.equal(skipped.hold, hold, skipped.reason);
+  }
+});
+
+test("unlisted labels hold pickup and retry without a fallback, and listed labels proceed", () => {
+  const models = createRegistry(
+    {
+      "claude-code": { credential: "/unused" },
+      codex: { credential: "/unused" },
+    },
+    fakePorts().ports,
+    ["claude-sonnet-5-5", "claude-opus-5-5", "gpt-listed"],
+  );
+  for (const runs of [
+    [],
+    [run(1, { ended: { timedOut: false, pullRequest: "none" } })],
+  ]) {
+    for (const label of [
+      "model:gpt-unlisted",
+      "model:gpt-listed@low",
+      "model:codex/gpt-listed@high",
+    ]) {
+      const decisions = decideFactory(
+        snapshot({ issues: [issue(1, ["ready-for-agent", label])], runs }),
+        models,
+      );
+      if (label === "model:gpt-unlisted") {
+        assert.deepEqual(launches(decisions), []);
+        assert.ok(
+          decisions.some(
+            (decision) =>
+              decision.kind === "skip" && decision.hold === "model-label",
+          ),
+        );
+      } else assert.equal(launches(decisions).length, 1);
+    }
+  }
+});
+
+test("interrupted, paused and merge relaunches hold a recorded model removed from the allowed list", () => {
+  const models = createRegistry(
+    { "claude-code": { credential: "/unused" } },
+    fakePorts().ports,
+    ["claude-opus-5-5"],
+  );
+  for (const ended of [
+    { interrupted: true as const },
+    {
+      paused: {
+        cause: "usage limit" as const,
+        reset: null,
+        at: now,
+        until: now,
+      },
+      commented: true,
+    },
+    {
+      timedOut: false,
+      pullRequest: "open" as const,
+      mergeCandidate: {
+        number: 10,
+        headCommit: "a".repeat(40),
+        baseBranch: "main",
+        createdAt: now,
+      },
+    },
+  ]) {
+    const decisions = decideFactory(
+      snapshot({
+        issues: [issue(1, ["ready-for-agent", "factory:running"])],
+        runs: [run(1, { ended })],
+        usage: { "claude-code": 0 },
+        settings: { defaultModel: "claude-opus-5-5" },
+      }),
+      models,
+    );
+    assert.deepEqual(launches(decisions), []);
+    assert.ok(
+      decisions.some(
+        (decision) =>
+          decision.kind === "skip" && decision.hold === "model-label",
+      ),
+    );
+  }
 });

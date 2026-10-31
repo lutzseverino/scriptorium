@@ -15,7 +15,7 @@ export type HostConfiguration = {
   // Each repository the factory serves, as `<owner>/<name>`.
   repositories: string[];
   providers: Record<string, ProviderSettings & { cap: number }>;
-  models: { default: string; retry: string };
+  models: { default: string; retry: string; allowed?: string[] };
   timeLimitMinutes: number;
   usage: UsagePolicy;
   pollSeconds: number;
@@ -243,7 +243,14 @@ function hostConfigurationProblems(value: unknown): string[] {
             ? null
             : `has no adapter; choose ${adapterNames.join(" or ")}`,
       ),
-      models: object({ default: text(), retry: text() }),
+      models: object(
+        {
+          default: text(),
+          retry: text(),
+          allowed: list(text(), { nonEmpty: true }),
+        },
+        ["allowed"],
+      ),
       // Both durations become timers, which wait at most 2^31 - 1 milliseconds.
       timeLimitMinutes: number(
         (minutes) => timer(minutes * 60_000),
@@ -368,8 +375,30 @@ function hostConfigurationProblems(value: unknown): string[] {
   }
   if (problems.length === 0) {
     const configuration = value as HostConfiguration;
-    const registry = createRegistry(configuration.providers);
-    for (const [field, model] of Object.entries(configuration.models)) {
+    const unrestricted = createRegistry(configuration.providers);
+    const seen = new Set<string>();
+    configuration.models.allowed?.forEach((value, index) => {
+      const path = `models.allowed[${index}]`;
+      if (value.includes("@")) {
+        problems.push(`${path}: must not specify an effort`);
+        return;
+      }
+      const resolved = unrestricted.resolveModel(value);
+      if ("error" in resolved) problems.push(`${path}: ${resolved.error}`);
+      else {
+        const identity = `${resolved.provider}/${resolved.model}`;
+        if (seen.has(identity)) problems.push(`${path}: repeats ${identity}`);
+        seen.add(identity);
+      }
+    });
+    if (problems.length > 0) return problems;
+    const registry = createRegistry(
+      configuration.providers,
+      undefined,
+      configuration.models.allowed,
+    );
+    for (const field of ["default", "retry"] as const) {
+      const model = configuration.models[field];
       const resolved = registry.resolveModel(model);
       if ("error" in resolved)
         problems.push(`models.${field}: ${resolved.error}`);

@@ -102,40 +102,52 @@ and nothing comes from environment variables.
 }
 ```
 
-| Field                                   | Value                                                                                                                                                                                                                   |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `repositories`                          | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                                                   |
-| `providers.<name>`                      | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                                                         |
-| `providers.<name>.cap`                  | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                    |
-| `providers.<name>.credential`           | The absolute path of the launch credential: the Claude Code setup-token file, or the Codex login (`auth.json`). Claude also uses it for usage reads when `usageCredential` is omitted.                                  |
-| `providers.claude-code.usageCredential` | Optional absolute path of a host-renewed Claude interactive-login copy, used only for usage reads. A configured but unusable copy never falls back to the launch token. See [Claude usage login](#claude-usage-login).  |
-| `models.default`                        | The model an issue without a model label runs on.                                                                                                                                                                       |
-| `models.retry`                          | The model a failed first attempt retries on.                                                                                                                                                                            |
-| `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                             |
-| `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                       |
-| `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                        |
-| `usage.afterDrain`                      | What reopens a drained provider's claims: `auto-resume`, a reading below the drain threshold, or `owner-resume`, only the owner's [resume command](#owner-holds-and-resume). Optional; the default is `auto-resume`.    |
-| `pollSeconds`                           | The wait between passes.                                                                                                                                                                                                |
-| `platforms.<name>`                      | One entry per [hosting platform](#hosting-platform) the served repositories are on; `github` is the only one. A repository on a platform without an entry isn't served.                                                 |
-| `platforms.<name>.tokenCommand`         | The executable and leading arguments that print a token for a repository on that platform. See [token command](#token-command).                                                                                         |
-| `platforms.<name>.authorizedRoles`      | The platform's role names whose holders' [readiness](#readiness) the factory accepts. On `github`: `admin`, `maintain`, `write`, `triage` or `read`.                                                                    |
-| `platforms.<name>.neverAuthorize`       | Accounts, by the login the platform reports, whose readiness never counts, whatever their role. Optional where the platform marks bots, as GitHub does; required where it doesn't.                                      |
-| `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes). |
-| `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                    |
-| `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                         |
-| `imageBuilder`                          | Where sandbox images build: `daemon`, the Docker daemon's own builder, or `factory`, the [factory builder](#the-factory-builder), whose old cache the factory then prunes. Optional; the default is `daemon`.           |
-| `imageRetention.obsoletePairs`          | The whole number of obsolete sandbox image pairs kept across every repository, newest first; pairs in use stay beyond it. Optional; the default is 3. See [image retention](#sandbox-image-retention).                  |
-| `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned, when `imageBuilder` is `factory`. Optional; the default is 24.                                                 |
-| `imageRetention.cacheMaximumBytes`      | Optional positive whole-byte target for the factory builder's cache, independently of age. No default. Ignored in daemon mode.                                                                                          |
-| `imageStorage`                          | Optional storage admission policy; omitted means no filesystem reserve. See [storage admission](#image-build-storage-admission).                                                                                        |
-| `imageStorage.storePaths`               | Nonempty list of absolute existing directories identifying every local Docker content/snapshot store's filesystem.                                                                                                      |
-| `imageStorage.cachePath`                | Absolute existing directory on the filesystem backing the factory builder's cache; required when storage admission and the factory builder are selected.                                                                |
-| `imageStorage.reserveBytes`             | Positive whole-byte minimum available space required before starting each new build.                                                                                                                                    |
-| `imageStorage.resumeBytes`              | Positive whole-byte recovery threshold, strictly greater than the reserve; required to release a storage hold.                                                                                                          |
+| Field                                   | Value                                                                                                                                                                                                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repositories`                          | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                                                                                |
+| `providers.<name>`                      | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                                                                                      |
+| `providers.<name>.cap`                  | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                                                 |
+| `providers.<name>.credential`           | The absolute path of the launch credential: the Claude Code setup-token file, or the Codex login (`auth.json`). Claude also uses it for usage reads when `usageCredential` is omitted.                                                               |
+| `providers.claude-code.usageCredential` | Optional absolute path of a host-renewed Claude interactive-login copy, used only for usage reads. A configured but unusable copy never falls back to the launch token. See [Claude usage login](#claude-usage-login).                               |
+| `models.default`                        | The model an issue without a model label runs on.                                                                                                                                                                                                    |
+| `models.allowed`                        | Optional non-empty list of unique model names, without efforts. Every entry must resolve through a configured provider. Default and retry must be listed; provider and model are compared, ignoring effort. Without it, no membership check applies. |
+| `models.retry`                          | The model a failed first attempt retries on.                                                                                                                                                                                                         |
+| `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                                                          |
+| `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                                                    |
+| `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                                                     |
+| `usage.afterDrain`                      | What reopens a drained provider's claims: `auto-resume`, a reading below the drain threshold, or `owner-resume`, only the owner's [resume command](#owner-holds-and-resume). Optional; the default is `auto-resume`.                                 |
+| `pollSeconds`                           | The wait between passes.                                                                                                                                                                                                                             |
+| `platforms.<name>`                      | One entry per [hosting platform](#hosting-platform) the served repositories are on; `github` is the only one. A repository on a platform without an entry isn't served.                                                                              |
+| `platforms.<name>.tokenCommand`         | The executable and leading arguments that print a token for a repository on that platform. See [token command](#token-command).                                                                                                                      |
+| `platforms.<name>.authorizedRoles`      | The platform's role names whose holders' [readiness](#readiness) the factory accepts. On `github`: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                                 |
+| `platforms.<name>.neverAuthorize`       | Accounts, by the login the platform reports, whose readiness never counts, whatever their role. Optional where the platform marks bots, as GitHub does; required where it doesn't.                                                                   |
+| `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes).                              |
+| `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                                                 |
+| `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                                                      |
+| `imageBuilder`                          | Where sandbox images build: `daemon`, the Docker daemon's own builder, or `factory`, the [factory builder](#the-factory-builder), whose old cache the factory then prunes. Optional; the default is `daemon`.                                        |
+| `imageRetention.obsoletePairs`          | The whole number of obsolete sandbox image pairs kept across every repository, newest first; pairs in use stay beyond it. Optional; the default is 3. See [image retention](#sandbox-image-retention).                                               |
+| `imageRetention.cacheMinimumAgeHours`   | The positive whole number of hours since its last use after which the factory builder's cache is pruned, when `imageBuilder` is `factory`. Optional; the default is 24.                                                                              |
+| `imageRetention.cacheMaximumBytes`      | Optional positive whole-byte target for the factory builder's cache, independently of age. No default. Ignored in daemon mode.                                                                                                                       |
+| `imageStorage`                          | Optional storage admission policy; omitted means no filesystem reserve. See [storage admission](#image-build-storage-admission).                                                                                                                     |
+| `imageStorage.storePaths`               | Nonempty list of absolute existing directories identifying every local Docker content/snapshot store's filesystem.                                                                                                                                   |
+| `imageStorage.cachePath`                | Absolute existing directory on the filesystem backing the factory builder's cache; required when storage admission and the factory builder are selected.                                                                                             |
+| `imageStorage.reserveBytes`             | Positive whole-byte minimum available space required before starting each new build.                                                                                                                                                                 |
+| `imageStorage.resumeBytes`              | Positive whole-byte recovery threshold, strictly greater than the reserve; required to release a storage hold.                                                                                                                                       |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
 [providers](#providers) section describes the grammar.
+
+The host operator maintains `models.allowed` in the host configuration, for
+example `["claude-sonnet-5-5", "codex/gpt-5.5"]`. Names use the same provider
+routing as `models.default`, without `@<effort>`; aliases resolving to the
+same provider and model count as duplicates. Add every default, retry and
+label-selected model the host should run, and restart the host after editing.
+An unlisted `model:` label holds the issue with a comment instead of falling
+back to another model. Pickup and retry launch nothing until the label is
+fixed or the operator lists that model. Interrupted, paused and merge
+relaunches also wait if their recorded model has been removed from the list.
+Omitting the list preserves unrestricted model selection.
 
 Host configurations from before `platforms` set
 `"readiness": { "authorizedRoles": [...] }` and
@@ -415,8 +427,26 @@ The Brief check also gates retries, child release and readiness-dependent
 parent closure. Parent link-time and native-blocker checks still apply.
 
 Refused readiness is a skip with its reason in the process log and the
-[status file](#status-file). The factory never writes the ready label and
-never comments about readiness.
+[status file](#status-file). The factory never writes the ready label.
+
+### Hold comments
+
+The factory comments on actionable holds: refused readiness (the actor, a
+missing role, an edit after readiness or an unapproved current Agent Brief),
+a parent not ready under the parent rules above, a model-label error (several
+labels, an unresolvable label or an unlisted model), and a repository paused
+for its configuration. Each reason has one marker-keyed comment on the held
+issue. Changed details update it in place; a cleared reason edits it to say
+it is resolved. Recurrence reuses that comment, including after a host restart.
+Comments are never deleted.
+
+Open blockers, including a parent's blockers, usage drains and owner holds,
+provider caps and states already carrying labels or notices (running, paused,
+needs-input, failed and skip) stay log-only. A transient unreadable role lookup
+also stays log-only. Existing awaiting-merge, failure, pause and close notices
+keep their own wording and lifecycle. If no valid repository configuration is
+cached, including after a restart, the host cannot read its issues and posts
+no hold comment.
 
 Where the factory skips the edit or link check, as it would on Forgejo, the
 repository's issue-contract trigger removes readiness when a ready issue's body
@@ -1159,8 +1189,9 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 
 Its ended runs keep settling while its platform reads succeed, and the other
 repositories continue. A repository pause is no [paused run](#paused-runs): it
-never adds the paused label or posts on an issue, and its reason appears only
-in the process log and the status file. A run whose sandbox is still running counts against its
+never adds the paused label. Its reason appears in the process log and the
+status file, and an actionable configuration hold gets a [hold comment](#hold-comments)
+on affected issues when the host can read them using a valid configuration. A run whose sandbox is still running counts against its
 provider's cap and time limit even while its repository can't be read.
 
 ## Status file

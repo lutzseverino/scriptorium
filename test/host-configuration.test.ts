@@ -476,3 +476,28 @@ test("storage admission and dedicated cache targets are opt-in and validated in 
     assert.throws(() => read(path), /cacheMaximumBytes/);
   }
 });
+
+test("allowed models resolve uniquely without efforts and include default and retry", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const allowed = ["claude-sonnet-5-5", "claude-code/claude-opus-5-5"];
+  writeFileSync(
+    path,
+    JSON.stringify({ ...base, models: { ...base.models, allowed } }),
+  );
+  assert.deepEqual(read(path).configuration.models.allowed, allowed);
+  for (const [entries, problem] of [
+    [[], /models.allowed: is empty/],
+    [[...allowed, "claude-opus-5-5"], /models.allowed\[2\]: repeats/],
+    [[...allowed, "gpt-5.5@high"], /models.allowed\[2\]:.*effort/],
+    [[...allowed, "unknown/model"], /models.allowed\[2\]:.*not configured/],
+    [["claude-sonnet-5-5"], /models.retry:.*not in models.allowed/],
+    [["claude-opus-5-5"], /models.default:.*not in models.allowed/],
+  ] as const) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, models: { ...base.models, allowed: entries } }),
+    );
+    assert.throws(() => read(path), problem);
+  }
+});
