@@ -12,6 +12,7 @@ export type FactoryConfiguration = {
     paused: string;
     skip?: string;
     releaseHold?: string;
+    hold?: string;
   };
   modelLabelPrefix: string;
   skill: string;
@@ -86,8 +87,9 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
       const labels = object(root.labels, fields, "labels.", [
         "skip",
         "releaseHold",
+        "hold",
       ]);
-      fields.push("skip", "releaseHold");
+      fields.push("skip", "releaseHold", "hold");
       if (labels)
         for (const name of fields)
           if (Object.hasOwn(labels, name)) text(labels[name], `labels.${name}`);
