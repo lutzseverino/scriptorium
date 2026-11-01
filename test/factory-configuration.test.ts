@@ -268,3 +268,29 @@ test("a release-hold label is optional, trimmed and distinct in version 2", (t) 
     assert.throws(() => readFactoryConfiguration(path), /labels.releaseHold:/);
   }
 });
+
+test("a factory hold label is optional, trimmed and distinct from every other label in version 2", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(readFactoryConfiguration(path).labels.hold, undefined);
+  configuration.labels.skip = "manual";
+  configuration.labels.releaseHold = "release-hold";
+  configuration.labels.hold = "factory:hold";
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(readFactoryConfiguration(path), configuration);
+  for (const value of [
+    "",
+    " hold",
+    "hold ",
+    null,
+    9,
+    ...Object.values(configuration.labels)
+      .slice(0, -1)
+      .map((label) => String(label).toUpperCase()),
+  ]) {
+    configuration.labels.hold = value;
+    writeFileSync(path, JSON.stringify(configuration));
+    assert.throws(() => readFactoryConfiguration(path), /labels\.hold:/);
+  }
+});

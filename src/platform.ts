@@ -191,74 +191,107 @@ export function repositoryPlatform(
     return states.includes("closed") ? "closed" : "none";
   }
 
-  return {
-    // Postern has no label-filtered PR listing port. Keep this GitHub fact
-    // on its authenticated transport, including every page of the labelled set.
-    async readReleaseHold(): Promise<number[]> {
-      if (labels.releaseHold === undefined) return [];
-      const [owner, name] = path.split("/");
-      const numbers = new Set<number>();
-      let after: string | null = null;
-      const cursors = new Set<string>();
-      for (;;) {
-        const response = await access.request({
-          method: "POST",
-          path: "/graphql",
-          body: {
-            query: `query FactoryReleaseHold($owner: String!, $name: String!, $label: String!, $after: String) {
+  // The numbers of open items of one kind carrying `label`. Postern has no
+  // label-filtered listing port, so this GitHub fact stays on its
+  // authenticated transport, including every page of the labelled set. An
+  // incomplete or malformed set never reads as a smaller one.
+  async function readLabelled(
+    operation: string,
+    kind: "issues" | "pullRequests",
+    label: string,
+    hold: string,
+  ): Promise<number[]> {
+    const [owner, name] = path.split("/");
+    const numbers = new Set<number>();
+    let after: string | null = null;
+    const cursors = new Set<string>();
+    for (;;) {
+      const response = await access.request({
+        method: "POST",
+        path: "/graphql",
+        body: {
+          query: `query ${operation}($owner: String!, $name: String!, $label: String!, $after: String) {
               repository(owner: $owner, name: $name) {
-                pullRequests(first: 100, after: $after, states: OPEN, labels: [$label]) {
+                ${kind}(first: 100, after: $after, states: OPEN, labels: [$label]) {
                   totalCount
                   nodes { number }
                   pageInfo { hasNextPage endCursor }
                 }
               }
             }`,
-            variables: { owner, name, label: labels.releaseHold, after },
-          },
-        });
-        const result = response.data as {
-          errors?: unknown;
-          data?: {
-            repository?: {
-              pullRequests?: {
-                totalCount?: number;
-                nodes?: { number?: number }[];
-                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-              };
-            };
-          };
-        } | null;
-        const page = result?.data?.repository?.pullRequests;
-        const invalid = () =>
-          new PlatformError(
-            "invalidResponse",
-            "Release hold could not be read completely",
-          );
-        if (
-          result?.errors ||
-          !page ||
-          !Number.isInteger(page.totalCount) ||
-          page.totalCount! < 0 ||
-          !Array.isArray(page.nodes) ||
-          typeof page.pageInfo?.hasNextPage !== "boolean"
-        )
+          variables: { owner, name, label, after },
+        },
+      });
+      type Page = {
+        totalCount?: number;
+        nodes?: { number?: number }[];
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+      };
+      const result = response.data as {
+        errors?: unknown;
+        data?: { repository?: Partial<Record<typeof kind, Page>> };
+      } | null;
+      const page = result?.data?.repository?.[kind];
+      const invalid = () =>
+        new PlatformError(
+          "invalidResponse",
+          `${hold} could not be read completely`,
+        );
+      if (
+        result?.errors ||
+        !page ||
+        !Number.isInteger(page.totalCount) ||
+        page.totalCount! < 0 ||
+        !Array.isArray(page.nodes) ||
+        typeof page.pageInfo?.hasNextPage !== "boolean"
+      )
+        throw invalid();
+      for (const node of page.nodes) {
+        if (!Number.isInteger(node?.number) || node.number! <= 0)
           throw invalid();
-        for (const node of page.nodes) {
-          if (!Number.isInteger(node?.number) || node.number! <= 0)
-            throw invalid();
-          numbers.add(node.number!);
-        }
-        if (!page.pageInfo.hasNextPage) {
-          if (numbers.size !== page.totalCount) throw invalid();
-          return [...numbers].sort((a, b) => a - b);
-        }
-        const cursor = page.pageInfo.endCursor;
-        if (typeof cursor !== "string" || !cursor || cursors.has(cursor))
-          throw invalid();
-        cursors.add(cursor);
-        after = cursor;
+        numbers.add(node.number!);
       }
+      if (!page.pageInfo.hasNextPage) {
+        if (numbers.size !== page.totalCount) throw invalid();
+        return [...numbers].sort((a, b) => a - b);
+      }
+      const cursor = page.pageInfo.endCursor;
+      if (typeof cursor !== "string" || !cursor || cursors.has(cursor))
+        throw invalid();
+      cursors.add(cursor);
+      after = cursor;
+    }
+  }
+
+  return {
+    // The open PRs carrying the release hold label.
+    async readReleaseHold(): Promise<number[]> {
+      if (labels.releaseHold === undefined) return [];
+      return readLabelled(
+        "FactoryReleaseHold",
+        "pullRequests",
+        labels.releaseHold,
+        "Release hold",
+      );
+    },
+
+    // The open issues and PRs carrying the factory hold label. Issues and
+    // PRs share one number space.
+    async readHold(): Promise<number[]> {
+      if (labels.hold === undefined) return [];
+      const issues = await readLabelled(
+        "FactoryHoldIssues",
+        "issues",
+        labels.hold,
+        "Factory hold",
+      );
+      const pullRequests = await readLabelled(
+        "FactoryHoldPullRequests",
+        "pullRequests",
+        labels.hold,
+        "Factory hold",
+      );
+      return [...new Set([...issues, ...pullRequests])].sort((a, b) => a - b);
     },
 
     // An existing label is left as it is.

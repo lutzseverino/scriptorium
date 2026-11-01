@@ -32,6 +32,7 @@ import {
 } from "./factory-configuration.ts";
 import {
   decideFactory,
+  factoryHoldReason,
   releaseHoldReason,
   type Claim,
   type Decision,
@@ -120,10 +121,12 @@ type HostRun = Run & {
   awaitingMergeNotified?: true;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
-  // Labelled PRs observed during this run, retained even after the hold clears.
+  // Items carrying the release or factory hold label observed during this
+  // run, retained even after the hold clears. Both holds defer merges.
   releaseHoldObserved?: number[];
   releaseHoldSettled?: true;
-  // Run-owned PRs whose merges this run deferred, independent of eligibility.
+  // Run-owned PRs whose merges this run deferred for either hold,
+  // independent of eligibility.
   releaseHeld?: number[];
   launchResult?: LaunchResult;
   recovery?: Recovery;
@@ -166,6 +169,8 @@ type Pass = {
   configuration: FactoryConfiguration | null;
   hasReviewPolicy: boolean;
   releaseHold?: number[] | null;
+  // Open issues and PRs carrying `labels.hold`; null when the read failed.
+  hold?: number[] | null;
   releaseHeld: Map<number, number[]>;
 };
 
@@ -358,14 +363,23 @@ export function createHost(
         report(`${name} relaunch waits: release hold read failed: ${error}`);
       }
     }
+    if (pass.configuration.labels.hold !== undefined) {
+      try {
+        pass.hold = await platform.readHold();
+      } catch (error) {
+        pass.hold = null;
+        report(`${name} is held: factory hold read failed: ${error}`);
+      }
+    }
     // Persist before settlement or launch decisions: a later clear read must
     // not erase a hold that affected a still-running attempt.
+    const observed = [...(pass.releaseHold ?? []), ...(pass.hold ?? [])];
     for (const run of runs.filter(
       (run) => run.repository === name && !run.releaseHoldSettled,
     )) {
-      if (pass.releaseHold?.length) {
+      if (observed.length) {
         run.releaseHoldObserved = [
-          ...new Set([...(run.releaseHoldObserved ?? []), ...pass.releaseHold]),
+          ...new Set([...(run.releaseHoldObserved ?? []), ...observed]),
         ];
         record(run);
       }
@@ -385,11 +399,12 @@ export function createHost(
           const held = observation.ownedPullRequests.filter(
             (own) =>
               pass.releaseHold === null ||
+              pass.hold === null ||
               (run.releaseHoldObserved ?? []).some((number) => number !== own),
           );
           if (held.length) {
             run.releaseHeld = held;
-            // A merge attempt stopped by a release hold did not spend its
+            // A merge attempt stopped by a hold did not spend its
             // head's recovery opportunity. Other consumed heads stay bounded.
             if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
               run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
@@ -446,6 +461,7 @@ export function createHost(
         ...(pass.releaseHold !== undefined && {
           releaseHold: pass.releaseHold,
         }),
+        ...(pass.hold !== undefined && { hold: pass.hold }),
         claims: await readClaims(
           name,
           platform,
@@ -905,6 +921,7 @@ export function createHost(
             ? (previous.releaseHoldObserved ?? [])
             : []),
           ...(pass.releaseHold ?? []),
+          ...(pass.hold ?? []),
         ]),
       ],
       ...(decision.relaunch &&
@@ -961,6 +978,7 @@ export function createHost(
           decision.mergeRelaunch,
           decision.inputResume,
           pass.configuration!.labels.releaseHold,
+          pass.configuration!.labels.hold,
         ),
         branch: runBranch(issue),
         log: raw,
@@ -1252,9 +1270,12 @@ export function createHost(
       owners: owner.pass(readings, holds),
       settings,
     };
-    for (const pass of passes)
+    for (const pass of passes) {
       if (pass.paused !== null)
         report(`${pass.name} is paused: ${pass.paused}`);
+      const held = factoryHeld(pass);
+      if (held !== null) report(`${pass.name} is held: ${held}`);
+    }
     const decisions = decideFactory(snapshot, registry);
     // Hold comments retry independently; their availability never prevents
     // a time-limit stop or settlement of existing work.
@@ -1277,6 +1298,18 @@ export function createHost(
         ) {
           const reason = releaseHoldReason(pass.releaseHold, held);
           if (reason) holds.push({ key: "release-hold", reason });
+        }
+        if (
+          held?.length &&
+          pass.configuration?.labels.hold !== undefined &&
+          !holds.some((hold) => hold.key === "factory-hold")
+        ) {
+          const reason = factoryHoldReason(
+            pass.configuration.labels.hold,
+            pass.hold,
+            held,
+          );
+          if (reason) holds.push({ key: "factory-hold", reason });
         }
         try {
           await pass.platform.reconcileHolds(issue.number, holds);
@@ -1313,7 +1346,10 @@ export function createHost(
         join(configuration.stateDirectory, "status.json"),
         hostStatus(
           snapshot.now,
-          passes,
+          passes.map((pass) => ({
+            name: pass.name,
+            paused: pass.paused ?? factoryHeld(pass),
+          })),
           decisions,
           providers,
           imageStorage
@@ -1365,6 +1401,14 @@ export function createHost(
     }
   }
 
+  // Why the repository's factory hold pauses it this pass, or null.
+  function factoryHeld(pass: Pass): string | null {
+    const label = pass.configuration?.labels.hold;
+    return label === undefined || pass.hold === undefined
+      ? null
+      : factoryHoldReason(label, pass.hold, []);
+  }
+
   // After launches have been stopped or finished, wait for their log and
   // record writes, including runs a later pass has already forgotten.
   async function drain(): Promise<void> {
@@ -1382,6 +1426,7 @@ export function prompt(
   mergeRelaunch?: MergeRelaunch,
   inputResume?: InputResume,
   releaseHoldLabel?: string,
+  holdLabel?: string,
 ): string {
   const guidance = [
     "Unattended execution:",
@@ -1394,6 +1439,11 @@ export function prompt(
       ? []
       : [
           `Release hold: before any merge, check for open PRs carrying the label ${JSON.stringify(releaseHoldLabel)}, other than your own PR. While any exists, do not merge: finish implementation, validation and review, leave your PR open and end the run. The factory resumes merging after the hold ends. Installed babysit's merge check (repo-canon #742) supplies the mid-run guard and its release-hold exit; the prompt alone cannot prevent a release PR opened mid-run from racing a merge.`,
+        ]),
+    ...(holdLabel === undefined
+      ? []
+      : [
+          `Factory hold: before any merge, check for open issues and PRs carrying the label ${JSON.stringify(holdLabel)}, other than your own PR. While any exists, do not merge: finish implementation, validation and review, leave your PR open and end the run. The factory resumes merging after the hold ends. Installed babysit's merge check (repo-canon #789) supplies the mid-run guard and its hold exit; the prompt alone cannot stop a merge already under way.`,
         ]),
     ...(mergeRelaunch
       ? [

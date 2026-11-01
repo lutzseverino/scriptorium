@@ -187,6 +187,11 @@ function fakePlatform(
   const labels = new Map<string, Set<string>>();
   const viewers: Record<string, Account | null | Error> = {};
   const releaseHolds: Record<string, number[] | Error> = {};
+  // Open issue and PR numbers carrying the factory hold label.
+  const factoryHolds: Record<
+    string,
+    { issues: number[]; pullRequests: number[] } | Error
+  > = {};
 
   // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
@@ -499,6 +504,35 @@ function fakePlatform(
               },
             };
           }
+          if (
+            body.query.includes("FactoryHoldIssues") ||
+            body.query.includes("FactoryHoldPullRequests")
+          ) {
+            const kind = body.query.includes("FactoryHoldIssues")
+              ? "issues"
+              : "pullRequests";
+            await request("hold", kind);
+            const held = factoryHolds[repository] ?? {
+              issues: [],
+              pullRequests: [],
+            };
+            if (held instanceof Error) throw held;
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  repository: {
+                    [kind]: {
+                      totalCount: held[kind].length,
+                      nodes: held[kind].map((number) => ({ number })),
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            };
+          }
           if (body.query.includes("FactoryCommentEdits")) {
             const id = (body.variables as unknown as { id: string }).id;
             const comment = state[repository]
@@ -566,6 +600,7 @@ function fakePlatform(
     labels,
     viewers,
     releaseHolds,
+    factoryHolds,
   };
 }
 
@@ -6764,4 +6799,167 @@ test("closed historical held PRs do not keep the surviving release PR's hold com
     "cap keeps the current held record without a new run",
   );
   assert.match(hold()!, /Resolved/, "a release PR never holds its own merge");
+});
+
+const factoryHoldFiles = {
+  ...factoryFiles,
+  ".factory/config.json": JSON.stringify({
+    ...conventions,
+    labels: { ...conventions.labels, hold: "factory:hold" },
+  }),
+};
+
+const holdComments = (comments: string[]) =>
+  comments.filter((c) => c.includes("scriptorium:hold:factory-hold"));
+
+test("a factory hold set mid-run lets the run finish, stops pickup and its merge, and resumes both once removed across restart", async (t) => {
+  const name = "acme/widgets";
+  const bare = remote(t, factoryHoldFiles);
+  const run = host(t, {
+    repositories: { [name]: [{ number: 4 }, { number: 5, labels: [] }] },
+    remotes: { [name]: bare },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const prompt = run.launched[0].options.prompt!;
+  assert.match(prompt, /Factory hold: before any merge/);
+  assert.match(prompt, /"factory:hold", other than your own PR/);
+  run.github.factoryHolds[name] = { issues: [9], pullRequests: [] };
+  const ready = run.github.find(name, 5);
+  ready.labels = ["ready-for-agent"];
+  ready.timeline.push(labelled("owner"));
+  await run.tick();
+  assert.equal(run.launched.length, 1, "no new pickup while held");
+  assert.equal(
+    run.launched[0].options.signal?.aborted,
+    false,
+    "the running sandbox keeps running",
+  );
+  assert.equal(holdComments(ready.comments).length, 1);
+  assert.match(
+    holdComments(ready.comments)[0],
+    /factory hold \(#9 carries `factory:hold`\)/,
+  );
+  assert.deepEqual(
+    (run.status() as { repositories: { state: string; reason?: string }[] })
+      .repositories[0].state,
+    "paused",
+  );
+  const issue = run.github.find(name, 4);
+  issue.branchPullRequests.push(publishedPR(bare));
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(run.launched.length, 1, "the deferred merge waits");
+  assert.equal(holdComments(issue.comments).length, 1);
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1, "the hold survives a restart");
+  run.github.factoryHolds[name] = { issues: [], pullRequests: [] };
+  await restarted.tick();
+  assert.deepEqual(
+    run.launched.slice(1).map((launch) => launch.options.name),
+    [`${name}#4`, `${name}#5`],
+    "the current PR gets its deferred merge relaunch and pickup resumes",
+  );
+  assert.match(run.launched[1].options.prompt!, /Merge relaunch: bring PR #40/);
+  for (const comments of [issue.comments, ready.comments]) {
+    assert.equal(holdComments(comments).length, 1);
+    assert.match(holdComments(comments)[0], /Resolved/);
+  }
+  assert.equal(
+    (run.status() as { repositories: { state: string }[] }).repositories[0]
+      .state,
+    "running",
+  );
+});
+
+for (const others of [[], [6]])
+  test(`a factory PR that alone carries the hold gets its merge relaunch, and its merge ends the hold, other labelled items: ${others.length}`, async (t) => {
+    const name = "acme/widgets";
+    const bare = remote(t, factoryHoldFiles);
+    const pr = publishedPR(bare);
+    advanceDefault(bare);
+    const run = host(t, {
+      repositories: {
+        [name]: [
+          { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+          { number: 5 },
+        ],
+      },
+      remotes: { [name]: bare },
+    });
+    run.github.factoryHolds[name] = { issues: others, pullRequests: [40] };
+    await run.tick();
+    const issue = run.github.find(name, 4);
+    if (others.length) {
+      assert.equal(run.launched.length, 0);
+      assert.match(holdComments(issue.comments)[0], /#6 carries/);
+      assert.doesNotMatch(holdComments(issue.comments)[0], /#40/);
+      return;
+    }
+    assert.deepEqual(
+      run.launched.map((launch) => launch.options.name),
+      [`${name}#4`],
+      "only the labelled PR's merge relaunch launches",
+    );
+    assert.deepEqual(holdComments(issue.comments), []);
+    assert.match(
+      holdComments(run.github.find(name, 5).comments)[0],
+      /#40 carries/,
+    );
+    pr.state = "merged";
+    issue.state = "CLOSED";
+    run.github.factoryHolds[name] = { issues: [], pullRequests: [] };
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.deepEqual(
+      run.launched.map((launch) => launch.options.name),
+      [`${name}#4`, `${name}#5`],
+      "the merge ended the hold",
+    );
+    assert.match(
+      holdComments(run.github.find(name, 5).comments)[0],
+      /Resolved/,
+    );
+  });
+
+test("a failed factory hold read holds the repository until the next successful read releases it", async (t) => {
+  const name = "acme/widgets";
+  const run = host(t, {
+    repositories: { [name]: [{ number: 4 }] },
+    remotes: { [name]: remote(t, factoryHoldFiles) },
+  });
+  run.github.factoryHolds[name] = new PlatformError(
+    "invalidResponse",
+    "hold read unavailable",
+  );
+  await run.tick();
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.match(run.reports.join("\n"), /factory hold read failed/);
+  const issue = run.github.find(name, 4);
+  assert.equal(holdComments(issue.comments).length, 1);
+  assert.match(
+    holdComments(issue.comments)[0],
+    /factory hold state is unreadable/,
+  );
+  run.github.factoryHolds[name] = { issues: [], pullRequests: [] };
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(holdComments(issue.comments).length, 1);
+  assert.match(holdComments(issue.comments)[0], /Resolved/);
+});
+
+test("without a factory hold label the factory reads no hold", async (t) => {
+  const name = "acme/widgets";
+  const run = host(t, {
+    repositories: { [name]: [{ number: 4 }] },
+    remotes: { [name]: remote(t, factoryFiles) },
+  });
+  run.github.factoryHolds[name] = new PlatformError("invalidResponse", "x");
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.doesNotMatch(run.launched[0].options.prompt!, /Factory hold/);
 });

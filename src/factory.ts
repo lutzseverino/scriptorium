@@ -106,7 +106,8 @@ export type Claim = {
 
 // One repository the host configuration lists, as this pass read it: its open
 // issues and its claims. A paused repository claims and launches nothing,
-// while its runs keep settling.
+// while its runs keep settling, and so does a factory-held one, except that a
+// merge relaunch whose target PR alone carries the hold label launches.
 export type Repository = {
   name: string;
   configuration: FactoryConfiguration;
@@ -118,6 +119,9 @@ export type Repository = {
   claims: Claim[];
   // Open labelled PR numbers; null means the configured hold read failed.
   releaseHold?: number[] | null;
+  // Open issue and PR numbers carrying `labels.hold`; null means the
+  // configured hold read failed.
+  hold?: number[] | null;
 };
 
 export type Settings = {
@@ -377,7 +381,8 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       )
         ? "a factory run for it is still on the host"
         : null) ??
-      paused(repository);
+      paused(repository) ??
+      factoryHold(repository, []);
     if (reason) {
       decisions.push({
         kind: "skip",
@@ -387,7 +392,9 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
           ? { hold: excluded.key }
           : reason === paused(repository)
             ? { hold: "repository-configuration" }
-            : {}),
+            : reason === factoryHold(repository, [])
+              ? { hold: "factory-hold" }
+              : {}),
       });
       continue;
     }
@@ -498,6 +505,9 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
             key: "repository-configuration",
             reason: configuration,
           });
+        const target = mergeTarget(previous, claim);
+        const held = factoryHold(repository, target ? [target.number] : []);
+        if (held) holds.push({ key: "factory-hold", reason: held });
       }
       for (const hold of holds)
         if (
@@ -696,14 +706,16 @@ function relaunch(
     ];
   const { provider } = retry.model;
   const gated =
-    paused(repository) ?? gate(provider, running, snapshot, "drain");
+    paused(repository) ??
+    factoryHold(repository, []) ??
+    gate(provider, running, snapshot, "drain");
   if (gated)
     return [
       {
         kind: "skip",
         ...at,
         reason: `retry waits: ${gated}`,
-        ...(repository.paused !== null && { hold: "repository-configuration" }),
+        ...repositoryHoldKey(repository, []),
       },
     ];
   running.set(provider, (running.get(provider) ?? 0) + 1);
@@ -778,8 +790,11 @@ function resume(
         { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
       ];
   }
+  // An interrupted or paused merge relaunch is still delivery of its target.
+  const own = run.mergeRelaunch ? [run.mergeRelaunch.number] : [];
   const gated =
     paused(repository) ??
+    factoryHold(repository, own) ??
     (pause && limited(run.provider, pause.paused, snapshot)) ??
     gate(run.provider, running, snapshot, "pause");
   if (gated)
@@ -788,7 +803,7 @@ function resume(
         kind: "skip",
         ...at,
         reason: `relaunch waits: ${gated}`,
-        ...(repository.paused !== null && { hold: "repository-configuration" }),
+        ...repositoryHoldKey(repository, own),
       },
     ];
   running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
@@ -855,6 +870,7 @@ function mergeRelaunch(
     "error" in model
       ? model.error
       : (paused(repository) ??
+        factoryHold(repository, [target.number]) ??
         gate(model.provider, running, snapshot, "pause"));
   if (reason)
     return [
@@ -864,9 +880,7 @@ function mergeRelaunch(
         reason: `merge relaunch waits: ${reason}`,
         ...("error" in model
           ? { hold: "model-label" }
-          : repository.paused !== null
-            ? { hold: "repository-configuration" }
-            : {}),
+          : repositoryHoldKey(repository, [target.number])),
       },
     ];
   if ("error" in model) return [];
@@ -888,18 +902,51 @@ function mergeRelaunch(
   ];
 }
 
-// The labelled PR itself never holds its own delivery. An unreadable set
-// requires a successful read before granting merge permission.
+// The labelled items that hold the delivery of `own`, the PRs being merged,
+// or "unreadable" when the set could not be read: a labelled PR never holds
+// its own merge. Without PRs of its own, every labelled item holds.
+function labelHold(
+  hold: number[] | null | undefined,
+  own: number[],
+): number[] | "unreadable" {
+  if (hold === null) return "unreadable";
+  return (
+    hold?.filter(
+      (number) => own.length === 0 || own.some((pr) => number !== pr),
+    ) ?? []
+  );
+}
+
+const numbered = (numbers: number[]) =>
+  numbers.map((number) => `#${number}`).join(", ");
+
+// The release hold holds merges only. An unreadable set requires a
+// successful read before granting merge permission.
 export function releaseHoldReason(
   hold: Repository["releaseHold"],
   own: number[],
 ): string | null {
-  if (hold === null)
+  const others = labelHold(hold, own);
+  if (others === "unreadable")
     return "release hold state is unreadable; merging resumes after a successful read confirms no other labelled PR remains";
-  const others =
-    hold?.filter((number) => own.some((pr) => number !== pr)) ?? [];
   return others.length
-    ? `release hold (${others.map((number) => `#${number}`).join(", ")}); merging resumes when the last labelled PR closes or loses the label`
+    ? `release hold (${numbered(others)}); merging resumes when the last labelled PR closes or loses the label`
+    : null;
+}
+
+// The factory hold pauses the repository as a whole: pickup, retries,
+// relaunches, resumes and merges. `own` names the PR a merge relaunch
+// delivers, which its own label never holds.
+export function factoryHoldReason(
+  label: string,
+  hold: Repository["hold"],
+  own: number[],
+): string | null {
+  const others = labelHold(hold, own);
+  if (others === "unreadable")
+    return `factory hold state is unreadable; pickup and merging resume after a successful read confirms no open issue or PR carries \`${label}\``;
+  return others.length
+    ? `factory hold (${numbered(others)} ${others.length === 1 ? "carries" : "carry"} \`${label}\`); pickup and merging resume when the last labelled issue or PR closes or loses the label`
     : null;
 }
 
@@ -1058,6 +1105,40 @@ function paused(repository: Repository): string | null {
   return repository.paused === null
     ? null
     : `${repository.name} is paused: ${repository.paused}`;
+}
+
+function factoryHold(repository: Repository, own: number[]): string | null {
+  const { hold } = repository.configuration.labels;
+  return hold === undefined
+    ? null
+    : factoryHoldReason(hold, repository.hold, own);
+}
+
+// The hold comment key for a launch the repository itself holds, when it
+// does: its configuration pause first, then its factory hold.
+function repositoryHoldKey(
+  repository: Repository,
+  own: number[],
+): { hold?: string } {
+  if (repository.paused !== null) return { hold: "repository-configuration" };
+  return factoryHold(repository, own) ? { hold: "factory-hold" } : {};
+}
+
+// The PR a continuing issue's next launch would deliver: an ended run's or
+// orphaned claim's merge candidate, or an interrupted or paused merge
+// relaunch's target.
+function mergeTarget(
+  previous: Run | undefined,
+  claim: Claim | undefined,
+): MergeRelaunch | undefined {
+  if (previous?.ended && "mergeCandidate" in previous.ended)
+    return previous.ended.mergeCandidate;
+  if (
+    previous?.ended &&
+    ("interrupted" in previous.ended || "paused" in previous.ended)
+  )
+    return previous.mergeRelaunch;
+  return claim?.inputResume ? undefined : claim?.mergeCandidate;
 }
 
 // A launch needs fewer running sandboxes than the provider's cap, and its

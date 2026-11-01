@@ -3335,3 +3335,189 @@ test("a release hold permits pickup, retries, interrupted and paused relaunches 
     );
   }
 });
+
+// A repository whose configuration names the factory hold label.
+function factoryHeld(
+  name: string,
+  issues: Issue[],
+  details: Partial<Repository> = {},
+): Repository {
+  const repo = repository(name, issues, details);
+  repo.configuration.labels.hold = "factory:hold";
+  return repo;
+}
+
+const holdsOf = (decisions: Decision[], number: number) =>
+  decisions
+    .flatMap((decision) =>
+      decision.kind === "skip" && decision.issue === number && decision.hold
+        ? [decision.hold]
+        : [],
+    )
+    .sort();
+
+test("a factory hold stops pickup, retries, interrupted and paused relaunches, needs-input resumes and merge relaunches in its own repository", () => {
+  const target = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const scenarios: { runs?: Run[]; claims?: Claim[]; labels?: string[] }[] = [
+    {},
+    { runs: [run(4, { ended: none })], labels: claimed },
+    { runs: [run(4, { ended: { interrupted: true } })], labels: claimed },
+    {
+      runs: [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
+      labels: claimed,
+    },
+    {
+      runs: [
+        run(4, {
+          ended: {
+            paused: {
+              cause: "usage limit",
+              reset: null,
+              at: "2026-10-08T00:00:00Z",
+              until: "2026-10-08T01:00:00Z",
+            },
+            commented: true,
+          },
+        }),
+      ],
+      labels: ["factory:paused"],
+    },
+    {
+      claims: [
+        { issue: 4, pullRequest: "open", inputResume: { pullRequests: [] } },
+      ],
+    },
+    {
+      claims: [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
+      labels: claimed,
+    },
+  ];
+  for (const scenario of scenarios)
+    for (const hold of [[12], [12, 40], null]) {
+      const repo = factoryHeld(widgets, [issue(4, scenario.labels)], {
+        hold,
+        claims: scenario.claims ?? [],
+      });
+      const decisions = decide({
+        repositories: [repo, repository(gadgets, [issue(5)])],
+        runs: scenario.runs,
+      });
+      assert.deepEqual(
+        launches(decisions).map((d) => d.repository),
+        [gadgets],
+        JSON.stringify({ scenario, hold }),
+      );
+      assert.deepEqual(holdsOf(decisions, 4), ["factory-hold"]);
+      assert.match(
+        skipOf(decisions, 4)!,
+        hold === null
+          ? /factory hold state is unreadable; pickup and merging resume after a successful read confirms no open issue or PR carries `factory:hold`/
+          : /factory hold \(#12(, #40 carry|\s+carries) `factory:hold`\); pickup and merging resume when the last labelled issue or PR closes or loses the label/,
+      );
+      // Clearing the hold resumes the same launch on the next pass.
+      repo.hold = [];
+      assert.equal(
+        launches(decide({ repositories: [repo], runs: scenario.runs })).length,
+        1,
+        JSON.stringify(scenario),
+      );
+    }
+});
+
+test("a merge relaunch whose target PR alone carries the factory hold launches", () => {
+  const target = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  for (const [hold, launched] of [
+    [[40], true],
+    [[], true],
+    [[4, 40], false],
+    [[40, 41], false],
+    [null, false],
+  ] as const)
+    for (const runs of [
+      [] as Run[],
+      [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
+    ]) {
+      const repo = factoryHeld(widgets, [issue(4, claimed), issue(6)], {
+        hold: hold === null ? null : [...hold],
+        claims: runs.length
+          ? []
+          : [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
+      });
+      const decisions = decide({ repositories: [repo], runs });
+      assert.equal(
+        launches(decisions).some((d) => d.issue === 4),
+        launched,
+        JSON.stringify({ hold, runs: runs.length }),
+      );
+      assert.deepEqual(holdsOf(decisions, 4), launched ? [] : ["factory-hold"]);
+      // Pickup stays held while any item carries the label, including the
+      // merging PR itself.
+      assert.equal(
+        launches(decisions).some((d) => d.issue === 6),
+        hold !== null && hold.length === 0,
+      );
+      if (!launched)
+        assert.doesNotMatch(skipOf(decisions, 4)!, /#40(?!\d)(?!, #41)/);
+    }
+});
+
+test("a factory hold lets existing runs settle and stop, and other gates keep their own holds", () => {
+  const decisions = decide({
+    repositories: [
+      factoryHeld(
+        widgets,
+        [issue(2, claimed), issue(3, ["ready-for-agent", "model:unknown"])],
+        { hold: [9] },
+      ),
+    ],
+    runs: [
+      run(1, { ended: { timedOut: false, pullRequest: "merged" } }),
+      run(2, { startedAt: "2026-10-09T00:00:00Z" }),
+    ],
+    settings: { timeLimitMinutes: 60 },
+  });
+  assert.deepEqual(
+    decisions
+      .filter((d) => d.kind !== "skip")
+      .map((d) => `${d.kind}:${d.issue}`)
+      .sort(),
+    ["release:1", "stop:2"],
+  );
+  assert.deepEqual(launches(decisions), []);
+  assert.deepEqual(holdsOf(decisions, 3), ["factory-hold", "model-label"]);
+});
+
+test("a merge relaunch blocked by another gate gets no factory-hold reason from its own label", () => {
+  const target = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const repo = factoryHeld(widgets, [issue(4, claimed)], {
+    hold: [40],
+    claims: [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
+  });
+  const decisions = decide({
+    repositories: [repo],
+    settings: { caps: { "claude-code": 0, codex: 0 } },
+  });
+  assert.deepEqual(launches(decisions), []);
+  assert.match(skipOf(decisions, 4)!, /cap of 0/);
+  assert.deepEqual(holdsOf(decisions, 4), []);
+});
+
+test("a factory hold read without a configured label holds nothing", () => {
+  const repo = repository(widgets, [issue(4)], { hold: null });
+  assert.equal(launches(decide({ repositories: [repo] })).length, 1);
+});

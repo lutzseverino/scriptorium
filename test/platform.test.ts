@@ -1384,3 +1384,117 @@ test("unreadable or incomplete release holds never imply no hold", async () => {
     );
   }
 });
+
+test("a factory hold reads every open labelled issue and PR through authenticated pages", async () => {
+  const answered: Record<string, number[][]> = {
+    FactoryHoldIssues: [[12], [7, 30]],
+    FactoryHoldPullRequests: [[30, 41]],
+  };
+  const { connection, requests } = github((request, body) => {
+    const pages = answered[request];
+    assert.ok(pages, `no ${request} read`);
+    const kind = request === "FactoryHoldIssues" ? "issues" : "pullRequests";
+    assert.match(body.query, new RegExp(`${kind}\\(first: 100`));
+    assert.match(body.query, /states: OPEN/);
+    assert.match(body.query, /labels: \[\$label\]/);
+    const index = requests.filter((name) => name === request).length - 1;
+    assert.deepEqual(body.variables, {
+      owner: "acme",
+      name: "widgets",
+      label: "factory:hold",
+      after: index === 0 ? null : `next-${index}`,
+    });
+    const more = index < pages.length - 1;
+    return {
+      status: 200,
+      data: {
+        data: {
+          repository: {
+            [kind]: {
+              totalCount: pages.flat().length,
+              nodes: pages[index].map((number) => ({ number })),
+              pageInfo: {
+                hasNextPage: more,
+                endCursor: more ? `next-${index + 1}` : null,
+              },
+            },
+          },
+        },
+      },
+    };
+  });
+  assert.deepEqual(await repositoryPlatform(connection, labels).readHold(), []);
+  assert.equal(requests.length, 0);
+  assert.deepEqual(
+    await repositoryPlatform(connection, {
+      ...labels,
+      releaseHold: "release-hold",
+      hold: "factory:hold",
+    }).readHold(),
+    [7, 12, 30, 41],
+  );
+  assert.deepEqual(requests, [
+    "FactoryHoldIssues",
+    "FactoryHoldIssues",
+    "FactoryHoldPullRequests",
+  ]);
+});
+
+test("an unreadable or incomplete factory hold never implies no hold", async () => {
+  const valid = {
+    totalCount: 0,
+    nodes: [],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  };
+  for (const failing of ["FactoryHoldIssues", "FactoryHoldPullRequests"])
+    for (const broken of [
+      { status: 503, data: {} },
+      { status: 200, data: { errors: [{ message: "unavailable" }] } },
+      { status: 200, data: { data: { repository: null } } },
+      ...[
+        { totalCount: 1, nodes: [], pageInfo: { hasNextPage: false } },
+        {
+          totalCount: 1,
+          nodes: [{ number: "40" }],
+          pageInfo: { hasNextPage: false },
+        },
+        {
+          totalCount: 1,
+          nodes: [{ number: 40 }],
+          pageInfo: { hasNextPage: true, endCursor: null },
+        },
+      ].map((connection) => ({
+        status: 200,
+        data: {
+          data: {
+            repository: {
+              [failing === "FactoryHoldIssues" ? "issues" : "pullRequests"]:
+                connection,
+            },
+          },
+        },
+      })),
+    ]) {
+      const { connection } = github((request) =>
+        request === failing
+          ? broken
+          : {
+              status: 200,
+              data: {
+                data: {
+                  repository: {
+                    [request === "FactoryHoldIssues" ? "issues" : "pullRequests"]:
+                      valid,
+                  },
+                },
+              },
+            },
+      );
+      await assert.rejects(
+        repositoryPlatform(connection, {
+          ...labels,
+          hold: "factory:hold",
+        }).readHold(),
+      );
+    }
+});
