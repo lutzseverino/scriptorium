@@ -1483,8 +1483,9 @@ test("an unreadable or incomplete factory hold never implies no hold", async () 
               data: {
                 data: {
                   repository: {
-                    [request === "FactoryHoldIssues" ? "issues" : "pullRequests"]:
-                      valid,
+                    [request === "FactoryHoldIssues"
+                      ? "issues"
+                      : "pullRequests"]: valid,
                   },
                 },
               },

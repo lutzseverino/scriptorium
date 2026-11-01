@@ -8,7 +8,7 @@ arguments have no defaults. Optional comment templates default to the factory's 
 
 ## Schema
 
-The fields in this example are required. `labels.skip`, `labels.releaseHold`, `comments` and its
+The fields in this example are required. `labels.skip`, `labels.releaseHold`, `labels.hold`, `comments` and its
 individual entries are optional. Unknown fields at any level, malformed
 values and versions other than numeric `2` are invalid.
 
@@ -38,6 +38,7 @@ values and versions other than numeric `2` are invalid.
 | `labels.paused`      | The label the factory swaps in for the running label when it pauses a run: the factory paused the run and resumes it by itself; leave it alone. |
 | `labels.skip`        | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
 | `labels.releaseHold` | Optional repository-owned label on open release PRs that holds merges in this repository. The factory never creates or changes it.              |
+| `labels.hold`        | Optional repository-owned label on open issues or PRs that pauses the factory in this repository. The factory never creates or changes it.      |
 | `modelLabelPrefix`   | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
 | `skill`              | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
 | `arguments`          | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
@@ -51,11 +52,11 @@ compatibility layer. For example, `"prompt": "{skillPrefix}ship #{issue}"` becom
 
 Label names and the model label prefix must be non-empty strings without
 leading or trailing whitespace. All configured label names, including the
-optional skip and release-hold labels, must be distinct, ignoring case, so a state label can
+optional skip, release-hold and hold labels, must be distinct, ignoring case, so a state label can
 never write readiness or the skip label. The factory creates
 or updates the four state labels (running, failed, needs input and paused) with
-its state descriptions and colors on every pass, leaving the ready, skip and release-hold
-labels to the repository.
+its state descriptions and colors on every pass, leaving the ready, skip, release-hold
+and hold labels to the repository.
 
 When `labels.skip` is configured, a ready issue carrying that label is not
 picked up for a new run, including a fresh attempt after the failed or needs
@@ -111,13 +112,57 @@ The host's default model applies when an issue has no model label. Multiple
 model labels, an unknown provider or model, and an unsupported effort hold
 that issue with a reason; see the [provider grammar](host.md#providers).
 
+## Factory hold
+
+When `labels.hold` is set, a person can pause the factory in this repository:
+while any open issue or PR carries the label, new pickups and merges stop, and
+runs already started finish. Every pass reads the numbers of open issues and
+PRs carrying it through Postern's authenticated GraphQL transport, as it reads
+the release hold. Repo Canon's configuration sets `"hold": "factory:hold"`.
+
+While the hold is set, the repository is paused as a
+[repository pause](host.md#repository-pauses) pauses it, and other
+repositories continue normally. The factory claims and launches nothing there:
+no new claim, retry, interrupted or paused relaunch, needs-input resume or
+merge relaunch starts. Runs whose sandboxes are already running finish, and
+ended runs keep settling. A labelled PR never holds its own merge: a merge
+relaunch whose target PR is the only open item carrying the label still
+launches, including an interrupted or paused merge relaunch, so the change
+that needs the pause can carry the label and merge, which ends the hold. An
+unreadable hold holds the repository for that pass, and the hold ends only
+once a successful read finds no labelled issue or PR. Removing the label, or
+closing what carries it, resumes pickup and merging on the next pass. Omitting
+the key leaves behavior unchanged and keeps configuration version `2`.
+
+Every run's prompt names the label and directs the agent to check for open
+issues and PRs carrying it, other than its own PR, before any merge. While the
+label is set, it finishes implementation, validation and review, leaves its PR
+open, and ends its run without merging. The prompt alone cannot stop a merge
+already under way: installed babysit's merge check from
+[Repo Canon #789](https://github.com/lutzseverino/repo-canon/issues/789)
+supplies the mid-run guard. That companion change is required for the mid-run
+guard; this host change does not install it.
+
+A run that observes the hold while it runs records it as it records a
+release hold: it remembers the labelled items across passes and restarts, even
+if the hold clears before settlement, and an unreadable hold at settlement
+marks its open run-owned PR held too. Once the hold ends, that PR
+gets one merge relaunch, even when current with the default branch, under
+every other merge-relaunch eligibility and launch gate.
+
+Each held issue has one factory-hold comment stating the reason, under its own
+hold key, distinct from the configuration pause's. It names the labelled
+issues and PRs, or says the hold is unreadable, updates in place as the set
+changes, and is marked resolved when the hold ends. The status file reports
+the repository as `paused` with the hold's reason while it holds new pickups.
+
 ## Skill invocations and retries
 
 For the example above, issue 4 starts with `/ship #4` on Claude Code or
 `$ship #4` on Codex. The host substitutes `{issue}` in `arguments`, and each
 provider adapter renders the skill invocation in its own syntax. The factory
-appends its unattended execution guidance, including the release-hold instruction
-when configured, after that invocation. A retry uses the current invocation
+appends its unattended execution guidance, including the release-hold and
+factory-hold instructions when configured, after that invocation. A retry uses the current invocation
 followed by the factory's fixed context block: the first attempt's failure and, when
 readable, the end of its log (at most 200 lines and 16 KiB). The branch
 `factory/issue-<n>`, retry context and `.factory/Dockerfile` path are fixed by

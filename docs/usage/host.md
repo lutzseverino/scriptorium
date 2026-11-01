@@ -440,7 +440,8 @@ The factory comments on actionable holds: refused readiness (the actor, a
 missing role, an edit after readiness or an unapproved current Agent Brief),
 a parent not ready under the parent rules above, a model-label error (several
 labels, an unresolvable label or an unlisted model), and a repository paused
-for its configuration, and a release hold on merging. Each reason has one
+for its configuration, a [factory hold](factory-configuration.md#factory-hold),
+and a release hold on merging. Each reason has one
 marker-keyed comment on the held
 issue. Changed details update it in place; a cleared reason edits it to say
 it is resolved. Recurrence reuses that comment, including after a host restart.
@@ -590,7 +591,8 @@ babysitting or retry attempt by itself and changes no outcome precedence.
 An optional [release hold](factory-configuration.md) makes merge relaunches wait
 while another open PR carries `labels.releaseHold`, or the hold cannot be read.
 It leaves implementation launches, retries and interrupted or paused runs
-under their usual gates. Release-held PRs resume after a successful clear read,
+under their usual gates; a [factory hold](factory-configuration.md#factory-hold)
+also holds those, and defers merges the same way. Release-held PRs resume after a successful clear read,
 waiving only the behind requirement below. Sticky per-run evidence and the
 release-held PR numbers persist in the run record; a merge run ended by a hold
 does not consume its head. The issue's release-hold comment updates and resolves
@@ -1200,7 +1202,10 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - it has no `.factory/Dockerfile`, its sandbox image does not build, or storage admission holds a new build;
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
-- its platform reads fail.
+- its platform reads fail;
+- an open issue or PR carries its [factory hold](factory-configuration.md#factory-hold)
+  label, or that hold cannot be read. A merge relaunch whose target PR alone
+  carries the label still launches.
 
 Its ended runs keep settling while its platform reads succeed, and the other
 repositories continue. A repository pause is no [paused run](#paused-runs): it
