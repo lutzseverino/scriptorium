@@ -8,6 +8,10 @@
     "paused": "waiting",
     "other": "ignored"
   },
+  "contractResult": {
+    "marker": "contract:result",
+    "author": "validator[bot]"
+  },
   "modelLabelPrefix": "agent:",
   "fallback": true,
   "skill": "ship",

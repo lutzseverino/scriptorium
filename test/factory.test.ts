@@ -73,6 +73,10 @@ function repository(
         needsInput: "factory:needs-input",
         paused: "factory:paused",
       },
+      contractResult: {
+        marker: "repo-canon:issue-contract-state",
+        author: "github-actions[bot]",
+      },
       modelLabelPrefix: "model:",
       skill: "implement",
       arguments: "#{issue}",
@@ -385,19 +389,11 @@ test("a failed role lookup holds the issue for that pass only", () => {
   ]);
 });
 
-test("readiness must be strictly newer than the body's last edit", () => {
+// Whether a body edit cancels a running issue's readiness is the validator's
+// decision, which reaches the core as its contract hold.
+test("a body edit after readiness leaves the decision to the contract result", () => {
   const readyAt = "2026-10-09T10:00:00Z";
-  for (const editedAt of ["2026-10-09T10:00:01Z", readyAt]) {
-    const decisions = decide({
-      issues: [issue(4, undefined, { ...readyBy(owner, readyAt), editedAt })],
-    });
-    assert.deepEqual(launches(decisions), [], `edited at ${editedAt}`);
-    assert.equal(
-      skipOf(decisions, 4),
-      `its readiness is refused: ready-for-agent was applied at ${readyAt}, not after the body's last edit at ${editedAt}; review the edit, then remove and re-apply ready-for-agent`,
-    );
-  }
-  for (const editedAt of ["2026-10-09T09:59:59Z", null])
+  for (const editedAt of ["2026-10-09T10:00:01Z", readyAt, null])
     assert.deepEqual(
       launched(
         decide({
@@ -411,10 +407,10 @@ test("readiness must be strictly newer than the body's last edit", () => {
     );
 });
 
-test("a current Brief hold gates pickup, retry, child release and parent closure", () => {
+test("a contract result hold gates pickup, retry, child release and parent closure", () => {
   for (const waiting of [false, true]) {
     const contractHold = {
-      reason: `${waiting ? "waits" : "is refused"}: the current Agent Brief needs review`,
+      reason: `${waiting ? "waits" : "is refused"}: the validator's contract result needs attention`,
       waiting,
     };
     assert.deepEqual(
@@ -435,7 +431,7 @@ test("a current Brief hold gates pickup, retry, child release and parent closure
     assert.deepEqual(launches(children), []);
     assert.match(
       skipOf(children, 5)!,
-      /sub-issue of #3, whose readiness.*current Agent Brief/,
+      /sub-issue of #3, whose readiness.*contract result needs attention/,
     );
     const closing = decide({
       issues: [
@@ -1523,21 +1519,33 @@ test("a retry whose issue is no longer eligible fails it instead", () => {
   );
 });
 
-test("a retry fails once its body was edited after its readiness", () => {
-  const editedAt = "2026-10-09T11:30:00Z";
+test("a retry that meets a stale contract result waits, and launches once a newer result approves", () => {
+  const stale = {
+    reason:
+      "waits: the issue changed after the validator's latest contract result at 2026-10-09T11:00:00Z; the validator's next result decides it",
+    waiting: true,
+  };
   assert.deepEqual(
     decide({
-      issues: [issue(4, claimed, { editedAt })],
+      issues: [issue(4, claimed, { contractHold: stale })],
       runs: [run(4, { ended: none })],
     }),
     [
       {
-        kind: "fail",
+        kind: "skip",
         ...at(4),
-        failure: `the run ended without an open pull request, and its retry did not launch: its readiness is refused: ready-for-agent was applied at 2026-10-04T00:00:00Z, not after the body's last edit at ${editedAt}; review the edit, then remove and re-apply ready-for-agent`,
-        log: log(4),
+        reason: `retry waits: its readiness ${stale.reason}`,
       },
     ],
+  );
+  assert.deepEqual(
+    launched(
+      decide({
+        issues: [issue(4, claimed, { editedAt: "2026-10-09T11:30:00Z" })],
+        runs: [run(4, { ended: none })],
+      }),
+    ),
+    ["acme/widgets#4"],
   );
 });
 
@@ -2076,6 +2084,10 @@ test("each repository uses its own labels and model label prefix", () => {
               failed: "broken",
               needsInput: "question",
               paused: "waiting",
+            },
+            contractResult: {
+              marker: "repo-canon:issue-contract-state",
+              author: "github-actions[bot]",
             },
             modelLabelPrefix: "agent:",
             skill: "ship",

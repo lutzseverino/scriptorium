@@ -7,7 +7,6 @@ import {
   type Account,
   type ConnectionWithLinkAdditions,
   type IssueReference,
-  type LabelChange,
   type PullRequest,
 } from "@lutzseverino/postern";
 import type { FactoryConfiguration } from "./factory-configuration.ts";
@@ -15,13 +14,8 @@ import { reconcileHolds } from "./hold-comments.ts";
 import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
-import { commentHistory } from "./comment-history.ts";
 import type { PullRequestState } from "./run-outcome.ts";
-import {
-  briefReadiness,
-  hasBriefContract,
-  briefHistoryCandidates,
-} from "./contract.ts";
+import { contractResultHold, type ContractFacts } from "./contract-result.ts";
 
 // The body sections a platform without native links reads an issue's parent
 // and blockers from. Only Postern's adapter reads them.
@@ -52,9 +46,12 @@ export type InputResume = {
 
 export function repositoryPlatform(
   connection: ConnectionWithLinkAdditions,
-  labels: FactoryConfiguration["labels"],
-  closeTemplate?: string,
+  configuration: Pick<
+    FactoryConfiguration,
+    "labels" | "contractResult" | "comments"
+  >,
 ) {
+  const { labels } = configuration;
   const { issueTracker, pullRequests, access } = connection;
   const path = connection.repository.path;
   // An issue as the decision core identifies it: its number in this
@@ -69,8 +66,8 @@ export function repositoryPlatform(
   });
 
   // Postern's authenticated fallback for a GitHub fact its neutral comment
-  // port does not expose. Deleted text is unavailable, so a newer deletion
-  // prevents proving that the surviving Brief was never superseded.
+  // port does not expose. A deletion newer than the validator's result is a
+  // change it has not evaluated.
   // https://docs.github.com/en/graphql/reference/issues#commentdeletedevent
   async function latestCommentDeletion(number: number): Promise<string | null> {
     const [owner, name] = path.split("/");
@@ -114,32 +111,27 @@ export function repositoryPlatform(
     return nodes.length === 0 ? null : (nodes[0].createdAt as string);
   }
 
-  async function readBrief(
+  // The validator's decision on a ready issue, checked against the issue's
+  // comments and latest comment deletion, read here, and its other facts.
+  async function readContractResult(
     number: number,
-    ready: LabelChange,
+    facts: Omit<ContractFacts, "comments" | "latestDeletion">,
   ): Promise<ReadinessHold | null> {
     try {
       const comments = await issueTracker.comments(number);
-      const deletion =
+      const latestDeletion =
         connection.repository.platform === "github"
           ? await latestCommentDeletion(number)
-          : null;
-      const histories: string[][] = [];
-      if (connection.repository.platform === "github")
-        for (const comment of briefHistoryCandidates(comments, ready))
-          histories.push(await commentHistory(access, comment));
-      return briefReadiness(
-        comments,
-        ready,
-        connection.repository.platform,
-        deletion,
-        histories,
+          : undefined;
+      return contractResultHold(
+        { ...facts, comments, latestDeletion },
+        configuration,
       );
     } catch (error) {
       if (!(error instanceof PlatformError)) throw error;
       return {
         reason:
-          "waits: the current Agent Brief, validator approval or comment history could not be read this pass; restore comment access and retry",
+          "waits: the issue-contract validator's result or the issue's comment history could not be read this pass; restore comment access and retry",
         waiting: true,
       };
     }
@@ -356,10 +348,15 @@ export function repositoryPlatform(
             ? { at: ready.time, actor: await actor(ready.actor) }
             : null,
           editedAt: capabilities.bodyEditTime ? issue.bodyEditTime : null,
-          contractHold:
-            ready && hasBriefContract(issue.labels, changes)
-              ? await readBrief(issue.number, ready)
-              : null,
+          contractHold: ready
+            ? await readContractResult(issue.number, {
+                ready,
+                labelChanges: changes,
+                bodyEditTime: capabilities.bodyEditTime
+                  ? issue.bodyEditTime
+                  : undefined,
+              })
+            : null,
           nativeParent: issue.parent && id(issue.parent),
           // The platform reports when the latest sub-issue was linked, not
           // which.
@@ -521,7 +518,7 @@ export function repositoryPlatform(
     async close(issue: number, tickets: IssueId[]) {
       await issueTracker.createComment(
         issue,
-        renderComment("close", closeTemplate, {
+        renderComment("close", configuration.comments?.close, {
           tickets: tickets.map(reference),
         }),
       );

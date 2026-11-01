@@ -2,8 +2,8 @@
 
 Each repository names its conventions in `.factory/config.json`. The factory
 reads it from the repository's default branch on every pass, alongside
-`.factory/Dockerfile`. Labels, the model-label prefix, the skill and its
-arguments have no defaults. Optional comment templates default to the factory's own wording; see
+`.factory/Dockerfile`. Labels, the contract result, the model-label prefix,
+the skill and its arguments have no defaults. Optional comment templates default to the factory's own wording; see
 [the ownership decision](../adr/0005-default-the-factorys-own-comment-wording.md).
 
 ## Schema
@@ -22,32 +22,40 @@ values and versions other than numeric `2` are invalid.
     "needsInput": "question",
     "paused": "waiting"
   },
+  "contractResult": {
+    "marker": "contract:result",
+    "author": "validator[bot]"
+  },
   "modelLabelPrefix": "agent:",
   "skill": "ship",
   "arguments": "#{issue}"
 }
 ```
 
-| Field                | Value                                                                                                                                           |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`            | Numeric `2`, the factory configuration schema version.                                                                                          |
-| `labels.ready`       | The repository's ready label. The repository creates it; the factory never creates, adds or removes it.                                         |
-| `labels.running`     | The label the factory adds when it claims an issue and removes when it releases, pauses or fails the claim.                                     |
-| `labels.failed`      | The label the factory adds after a final failure. Remove it to allow another run.                                                               |
-| `labels.needsInput`  | The label an agent adds when it needs an answer. After answering, remove it to allow a fresh first attempt.                                     |
-| `labels.paused`      | The label the factory swaps in for the running label when it pauses a run: the factory paused the run and resumes it by itself; leave it alone. |
-| `labels.skip`        | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
-| `labels.releaseHold` | Optional repository-owned label on open release PRs that holds merges in this repository. The factory never creates or changes it.              |
-| `labels.hold`        | Optional repository-owned label on open issues or PRs that pauses the factory in this repository. The factory never creates or changes it.      |
-| `modelLabelPrefix`   | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
-| `skill`              | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
-| `arguments`          | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
-| `comments`           | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
+| Field                   | Value                                                                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`               | Numeric `2`, the factory configuration schema version.                                                                                          |
+| `labels.ready`          | The repository's ready label. The repository creates it; the factory never creates, adds or removes it.                                         |
+| `labels.running`        | The label the factory adds when it claims an issue and removes when it releases, pauses or fails the claim.                                     |
+| `labels.failed`         | The label the factory adds after a final failure. Remove it to allow another run.                                                               |
+| `labels.needsInput`     | The label an agent adds when it needs an answer. After answering, remove it to allow a fresh first attempt.                                     |
+| `labels.paused`         | The label the factory swaps in for the running label when it pauses a run: the factory paused the run and resumes it by itself; leave it alone. |
+| `labels.skip`           | Optional repository-owned label that prevents pickup for a new run. The factory never creates, adds, removes or recolours it.                   |
+| `labels.releaseHold`    | Optional repository-owned label on open release PRs that holds merges in this repository. The factory never creates or changes it.              |
+| `labels.hold`           | Optional repository-owned label on open issues or PRs that pauses the factory in this repository. The factory never creates or changes it.      |
+| `contractResult.marker` | The marker of the issue-contract validator's state line, `<!-- <marker> {…} -->`. See [contract result](#contract-result).                      |
+| `contractResult.author` | The account the validator posts its result as. A marked comment by any other account is not a result.                                           |
+| `modelLabelPrefix`      | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
+| `skill`                 | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
+| `arguments`             | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
+| `comments`              | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
 
-Version 1 configurations and the old `prompt` field are refused. Migrate by
-setting `version` to `2`, replacing `prompt` with `skill` and `arguments`, and
-removing `{skillPrefix}`: the provider owns the invocation syntax. There is no
-compatibility layer. For example, `"prompt": "{skillPrefix}ship #{issue}"` becomes
+Version 1 configurations, the old `prompt` field, and version 2
+configurations without `contractResult` are refused, each with the fields at
+fault. Migrate by setting `version` to `2`, replacing `prompt` with `skill`
+and `arguments`, removing `{skillPrefix}`, since the provider owns the
+invocation syntax, and adding `contractResult`. There is no compatibility
+layer. For example, `"prompt": "{skillPrefix}ship #{issue}"` becomes
 `"skill": "ship", "arguments": "#{issue}"`.
 
 Label names and the model label prefix must be non-empty strings without
@@ -111,6 +119,28 @@ paused the run and resumes it by itself; see
 The host's default model applies when an issue has no model label. Multiple
 model labels, an unknown provider or model, and an unsupported effort hold
 that issue with a reason; see the [provider grammar](host.md#providers).
+
+## Contract result
+
+`contractResult` names where the repository's issue-contract validator posts
+its decision, which the factory reads instead of interpreting implementation
+contracts; see [readiness](host.md#readiness). Both fields are required, with
+no default. A Repo Canon adopter uses its validator's values:
+
+```json
+"contractResult": {
+  "marker": "repo-canon:issue-contract-state",
+  "author": "github-actions[bot]"
+}
+```
+
+The result is the latest comment by `author`, ignoring case, with a line
+`<!-- <marker> {…} -->` whose JSON object is in format
+`repo-canon/issue-contract-state/v1`. The factory reads `format`, `status`,
+`label`, `reviewEventId` and `source`, and checks them against the issue's
+platform facts. A result in another format, including an earlier line without
+`format`, holds the issue with a hold comment until the validator and the
+factory share a format.
 
 ## Factory hold
 

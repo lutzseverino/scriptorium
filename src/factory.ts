@@ -31,10 +31,11 @@ export type Issue = {
   // null when it doesn't or no event applying it was found.
   ready: Readiness | null;
   // When the body was last edited, or null when it never was. Title and
-  // ordinary discussion changes don't count. Agent Briefs have their own gate.
+  // ordinary discussion changes don't count. Only a parent's readiness reads
+  // it.
   editedAt: string | null;
-  // The selected Agent Brief's revision binding, or null for an approved
-  // Brief or a directly authored body contract.
+  // Why the issue-contract validator's posted result doesn't approve the
+  // current readiness, or null when it does or the issue isn't ready.
   contractHold: ReadinessHold | null;
   // Its parent, or null when it has none.
   nativeParent: IssueId | null;

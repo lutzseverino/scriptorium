@@ -25,6 +25,7 @@ test("a repository's factory configuration is read without convention defaults",
       needsInput: "question",
       paused: "waiting",
     },
+    contractResult: { marker: "contract:result", author: "validator[bot]" },
     modelLabelPrefix: "agent:",
     skill: "ship",
     arguments: "#{issue}",
@@ -35,7 +36,46 @@ test("the configuration this repository uses is accepted", () => {
   const configured = fileURLToPath(
     new URL(`../${factoryConfigurationPath}`, import.meta.url),
   );
-  assert.equal(readFactoryConfiguration(configured).version, 2);
+  const configuration = readFactoryConfiguration(configured);
+  assert.equal(configuration.version, 2);
+  assert.deepEqual(configuration.contractResult, {
+    marker: "repo-canon:issue-contract-state",
+    author: "github-actions[bot]",
+  });
+});
+
+test("the contract result's marker and author are required, with no default", (t) => {
+  const path = join(directory(t), "config.json");
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  // A version 2 configuration from before the contract result was required.
+  delete configuration.contractResult;
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.throws(() => readFactoryConfiguration(path), {
+    message: `The factory configuration ${path} is invalid:\n- contractResult: is missing`,
+  });
+  for (const [contractResult, problems] of [
+    [
+      {},
+      [
+        "contractResult.marker: is missing",
+        "contractResult.author: is missing",
+      ],
+    ],
+    [
+      { marker: "", author: " validator[bot]", other: true },
+      [
+        "contractResult.other: is not a factory configuration field",
+        "contractResult.marker: is not a non-empty trimmed string",
+        "contractResult.author: is not a non-empty trimmed string",
+      ],
+    ],
+    ["contract:result", ["contractResult.: is not an object"]],
+  ] as const) {
+    writeFileSync(path, JSON.stringify({ ...configuration, contractResult }));
+    assert.throws(() => readFactoryConfiguration(path), {
+      message: `The factory configuration ${path} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+    });
+  }
 });
 
 test("version 1 prompt configurations are refused without a compatibility layer", (t) => {
@@ -112,7 +152,7 @@ test("a skip label is optional, trimmed and distinct from every other label", (t
 
 test("missing fields are refused instead of supplied from defaults", () => {
   assert.throws(() => readFactoryConfiguration(fixture("missing")), {
-    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.needsInput: is missing\n- labels.paused: is missing`,
+    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- contractResult: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.needsInput: is missing\n- labels.paused: is missing`,
   });
 });
 
@@ -124,7 +164,7 @@ test("unknown fields at either level are invalid", () => {
 
 test("malformed fields and an unsupported version are invalid", () => {
   assert.throws(() => readFactoryConfiguration(fixture("malformed")), {
-    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 2\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
+    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 2\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- contractResult.marker: is not a non-empty trimmed string\n- contractResult.author: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
   });
 });
 
