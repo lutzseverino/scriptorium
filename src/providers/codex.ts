@@ -32,7 +32,7 @@ export function codexAdapter(
     efforts,
     defaultEffort: "high",
     vendorPrefixes: ["gpt-"],
-    skillPrefix: "$",
+    renderInvocation: (skill, args) => `$${skill}${args ? ` ${args}` : ""}`,
     // The login is mounted read-only as it stands at this launch; the rest of
     // the Codex home stays writable and private to the sandbox.
     async launch(request: LaunchRequest) {

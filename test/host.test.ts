@@ -876,7 +876,7 @@ function host(
 }
 
 const conventions = {
-  version: 1,
+  version: 2,
   labels: {
     ready: "ready-for-agent",
     running: "factory:running",
@@ -885,7 +885,8 @@ const conventions = {
     paused: "factory:paused",
   },
   modelLabelPrefix: "model:",
-  prompt: "{skillPrefix}implement #{issue}",
+  skill: "implement",
+  arguments: "#{issue}",
 };
 const factoryFiles = {
   ".factory/config.json": JSON.stringify(conventions),
@@ -1990,7 +1991,7 @@ test("an incomplete run records recovery identities and a retry revalidates pres
   assert.deepEqual(run.github.find("acme/widgets", 4).pullRequests, []);
 });
 
-test("custom prompts and retries retain the unattended execution and completion contract", async (t) => {
+test("custom skill invocations and retries retain the unattended execution and completion contract", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },
     remotes: {
@@ -1998,7 +1999,8 @@ test("custom prompts and retries retain the unattended execution and completion 
         ...factoryFiles,
         ".factory/config.json": JSON.stringify({
           ...JSON.parse(factoryFiles[".factory/config.json"]),
-          prompt: "{skillPrefix}ship #{issue}",
+          skill: "ship",
+          arguments: "#{issue}",
         }),
       }),
     },
@@ -2685,9 +2687,9 @@ test("the repository's skip label holds fresh attempts without factory label wri
     ]);
 });
 
-test("the configured template and state labels drive first attempts, retries and failures", async (t) => {
+test("the configured skill, arguments and state labels drive first attempts, retries and failures", async (t) => {
   const configuration = {
-    version: 1,
+    version: 2,
     labels: {
       ready: "queued",
       running: "working",
@@ -2696,7 +2698,8 @@ test("the configured template and state labels drive first attempts, retries and
       paused: "waiting",
     },
     modelLabelPrefix: "agent:",
-    prompt: "Handle #{issue} using {skillPrefix}ship; issue={issue}",
+    skill: "ship",
+    arguments: "#{issue}; issue={issue}",
     comments: {
       failure:
         "{failure}: {provider}/{model}@{effort} #{attempt}{#log} log={log}{/log}; {label}{#unpushableCount} blocked={unpushableCount}{/unpushableCount}",
@@ -2717,10 +2720,7 @@ test("the configured template and state labels drive first attempts, retries and
     },
   });
   await run.tick();
-  assert.equal(
-    invocation(run.launched[0].options.prompt),
-    "Handle #4 using $ship; issue=4",
-  );
+  assert.equal(invocation(run.launched[0].options.prompt), "$ship #4; issue=4");
   assert.deepEqual(
     run.github.labels.get("acme/widgets"),
     new Set(["working", "broken", "question", "waiting"]),
@@ -2738,7 +2738,7 @@ test("the configured template and state labels drive first attempts, retries and
   assert.equal(
     invocation(run.launched[1].options.prompt),
     [
-      "Handle #4 using /ship; issue=4",
+      "/ship #4; issue=4",
       "First attempt failure: the run ended without an open pull request",
       "First attempt log tail:\nfailure details\n",
     ].join("\n\n"),
@@ -2888,7 +2888,7 @@ test("a repository without configuration at startup pauses without guessing conv
   );
 });
 
-test("prompt edits on the default branch apply on the next pass, ignoring run branches", async (t) => {
+test("skill edits on the default branch apply on the next pass, ignoring run branches", async (t) => {
   const bare = remote(t, factoryFiles);
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },
@@ -2899,10 +2899,11 @@ test("prompt edits on the default branch apply on the next pass, ignoring run br
   write(work, {
     ".factory/config.json": JSON.stringify({
       ...conventions,
-      prompt: "{skillPrefix}ship #{issue}",
+      skill: "ship",
+      arguments: "#{issue}",
     }),
   });
-  git(work, ["commit", "--quiet", "-am", "new prompt"]);
+  git(work, ["commit", "--quiet", "-am", "new skill"]);
   git(work, ["push", "--quiet", bare, "main"]);
   git(work, ["checkout", "--quiet", "-b", "factory/issue-4"]);
   write(work, { ".factory/config.json": "{}" });
@@ -2929,7 +2930,8 @@ test("configuration follows a changed remote default branch on the next pass", a
   write(work, {
     ".factory/config.json": JSON.stringify({
       ...conventions,
-      prompt: "{skillPrefix}ship #{issue}",
+      skill: "ship",
+      arguments: "#{issue}",
     }),
   });
   git(work, ["commit", "--quiet", "-am", "new default configuration"]);

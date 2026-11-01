@@ -64,7 +64,7 @@ function repository(
   return {
     name,
     configuration: {
-      version: 1,
+      version: 2,
       labels: {
         ready: "ready-for-agent",
         running: "factory:running",
@@ -73,7 +73,8 @@ function repository(
         paused: "factory:paused",
       },
       modelLabelPrefix: "model:",
-      prompt: "{skillPrefix}implement #{issue}",
+      skill: "implement",
+      arguments: "#{issue}",
     },
     authorization: {
       authorizedRoles: ["admin", "maintain"],
@@ -2067,7 +2068,7 @@ test("each repository uses its own labels and model label prefix", () => {
         ],
         {
           configuration: {
-            version: 1,
+            version: 2,
             labels: {
               ready: "queued",
               running: "working",
@@ -2076,7 +2077,8 @@ test("each repository uses its own labels and model label prefix", () => {
               paused: "waiting",
             },
             modelLabelPrefix: "agent:",
-            prompt: "{skillPrefix}ship #{issue}",
+            skill: "ship",
+            arguments: "#{issue}",
           },
         },
       ),

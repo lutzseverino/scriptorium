@@ -1,6 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "labels": {},
   "modelLabelPrefix": "agent:",
-  "prompt": "{skillPrefix}ship #{issue}"
+  "skill": "ship",
+  "arguments": "#{issue}"
 }

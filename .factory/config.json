@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "labels": {
     "ready": "ready-for-agent",
     "skip": "factory:skip",
@@ -9,5 +9,6 @@
     "paused": "factory:paused"
   },
   "modelLabelPrefix": "model:",
-  "prompt": "{skillPrefix}implement #{issue}"
+  "skill": "implement",
+  "arguments": "#{issue}"
 }

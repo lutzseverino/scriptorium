@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "labels": {
     "ready": "queued",
     "running": "working",
@@ -9,6 +9,7 @@
     "other": "ignored"
   },
   "modelLabelPrefix": "agent:",
-  "prompt": "Handle #{issue} using {skillPrefix}ship",
-  "fallback": true
+  "fallback": true,
+  "skill": "ship",
+  "arguments": "#{issue}"
 }
