@@ -1,8 +1,7 @@
 // The readiness module: whether an issue's ready label counts, decided from
-// its ready-label changes, its body's last edit, current Agent Brief approval,
-// its links and its blockers,
-// as the platform reports them. It knows no issue template and reads no
-// issue body.
+// its ready-label changes, the issue-contract validator's decision, a parent's
+// body edits and links, and its blockers, as the platform reports them. It
+// knows no issue template and reads no issue body.
 import type { Issue, IssueId } from "./factory.ts";
 
 // Who last applied an issue's ready label. Only a user authorizes, by their
@@ -92,10 +91,11 @@ export function readinessExclusions(
 // Why a ready-labelled issue's readiness doesn't count, as a clause after
 // "its readiness" or "whose readiness", or null when it counts: the label's
 // latest actor must be a user the host doesn't exclude, holding an authorized
-// role now, and the label must be newer than the body's last edit when the
-// platform reports it. A triaged request also needs its current Agent Brief's
-// revision binding. `on` names the issue to re-apply it on when that is
-// another issue.
+// role now, and the validator's current result must approve the label's
+// event. A parent's label must also be newer than its body's last edit when
+// the platform reports it; whether an edit cancels a running issue's
+// readiness is the validator's decision. `on` names the issue to re-apply it
+// on when that is another issue.
 function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
   const { ready } = policy;
   const reapply = `remove and re-apply ${ready}${on}`;
@@ -112,7 +112,11 @@ function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
     on,
   );
   if (refused) return refused;
-  if (issue.editedAt !== null && Date.parse(at) <= Date.parse(issue.editedAt))
+  if (
+    issue.subIssues.length > 0 &&
+    issue.editedAt !== null &&
+    Date.parse(at) <= Date.parse(issue.editedAt)
+  )
     return {
       reason: `is refused: ${ready} was applied at ${at}, not after the body's last edit at ${issue.editedAt}; review the edit, then ${reapply}`,
       waiting: false,

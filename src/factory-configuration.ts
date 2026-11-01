@@ -14,6 +14,9 @@ export type FactoryConfiguration = {
     releaseHold?: string;
     hold?: string;
   };
+  // Where the repository's issue-contract validator posts its result: the
+  // marker of its state line and the account it posts as.
+  contractResult: { marker: string; author: string };
   modelLabelPrefix: string;
   skill: string;
   arguments: string;
@@ -67,7 +70,14 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
   };
   const root = object(
     value,
-    ["version", "labels", "modelLabelPrefix", "skill", "arguments"],
+    [
+      "version",
+      "labels",
+      "contractResult",
+      "modelLabelPrefix",
+      "skill",
+      "arguments",
+    ],
     "",
     ["comments"],
   );
@@ -105,6 +115,17 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
             `labels.${name}: must differ from labels.${same}, ignoring case`,
           );
       });
+    }
+    if (Object.hasOwn(root, "contractResult")) {
+      const contractResult = object(
+        root.contractResult,
+        ["marker", "author"],
+        "contractResult.",
+      );
+      if (contractResult)
+        for (const name of ["marker", "author"])
+          if (Object.hasOwn(contractResult, name))
+            text(contractResult[name], `contractResult.${name}`);
     }
     if (Object.hasOwn(root, "modelLabelPrefix"))
       text(root.modelLabelPrefix, "modelLabelPrefix");

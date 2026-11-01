@@ -8,6 +8,10 @@
     "needsInput": "factory:needs-input",
     "paused": "factory:paused"
   },
+  "contractResult": {
+    "marker": "repo-canon:issue-contract-state",
+    "author": "github-actions[bot]"
+  },
   "modelLabelPrefix": "model:",
   "skill": "implement",
   "arguments": "#{issue}"

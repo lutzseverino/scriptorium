@@ -156,24 +156,28 @@ each account's repository role and the platform's capability flags, so the
 host tests drive the platform module's readiness reads, including platforms
 without bot marking, edit times or link times, and a remote no platform serves.
 `test/platform.test.ts` drives that module through Postern's real GitHub
-adapter over a fake `fetch`, without network access. Platform and host fixtures
-cover edited, replaced, deleted and freshly reviewed Agent Briefs, stale or
-untrusted validator feedback, category removal, comment deletion history,
-unreadable comments and parent readiness. GitHub deletion facts not exposed by
-the neutral comment port, and complete edit histories for potentially erased
-replacement Brief headings, use Postern's authenticated `access.request` fallback;
-the factory still makes the revision decision. The
-factory recognizes Brief headings with Marked, pinned to the validator's
-parser version, and computes the published
-`repo-canon/issue-contract-revision/v1` fingerprint itself; it imports no
-validator implementation at runtime. `test/contract-fixture.ts` records a
-known approval produced by the pinned validator. Keep selection and revision
-format compatibility when that validator changes. The platform tests fail each state
-transition part way. `test/boundary.test.ts` checks that the package imports
-nothing from outside itself but Node.js, Sandcastle, Postern and the Brief's
-Markdown parser, and that the platform projection and decision modules read no
-issue body. Agent Brief text is comment content, read through Postern; contract
-recognition and readiness authorization stay in the factory.
+adapter over a fake `fetch`, without network access. Platform fixtures cover
+approving, missing, untrusted, unknown-format, unreadable and non-approving
+contract results, results made stale by comments, edits, deletions and label
+changes, the factory's own hold comments and label writes, changed or deleted
+contract sources, unreadable comments and parent readiness. The host fake
+stands in for the validator: unless an issue opts out, its comment list ends
+with a current result approving the latest ready-label event, so host tests
+that opt out drive missing, stale and newer results across passes. GitHub
+deletion facts not exposed by the neutral comment port use Postern's
+authenticated `access.request` fallback. `src/contract-result.ts` reads the
+`repo-canon/issue-contract-state/v1` format that
+[Repo Canon v0.21.0 publishes](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result);
+it imports no validator implementation. `test/contract-result-fixture.ts`
+copies a state line that release's validator posted, and the tests derive
+approvals from it. A new result format is a new version the factory accepts
+or refuses explicitly. The platform tests fail each state transition part
+way. `test/boundary.test.ts` checks that the package declares and imports
+nothing from outside itself but Node.js, Sandcastle and Postern, so no
+Markdown parser, and that the platform projection and decision modules read
+no issue body. The validator's result is comment content, read through
+Postern; readiness authorization stays in the factory and contract decisions
+are the validator's.
 The token tests drive the cache with a fake token command and clock; the one
 that runs the GitHub CLI against the sandbox's token file skips when `gh` is
 not installed. The run log's tests rely on file watching, which the published

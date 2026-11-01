@@ -366,9 +366,10 @@ and leaves an existing label's color and description as they are.
 
 ## Readiness
 
-The factory decides pickup itself from an issue's ready-label changes, its
-body's last edit, its current Agent Brief approval, its links and its blockers,
-as the platform reports them. It reads no issue body. On GitHub its links and
+The factory decides pickup itself from an issue's ready-label changes, the
+repository's issue-contract validator's posted result, a parent's body edits
+and links, and its blockers, as the platform reports them. It reads no issue
+body and interprets no implementation contract. On GitHub its links and
 blockers are native; on a platform without native links Postern reads them
 from the issue's `Parent` and `Blocked by` sections, which the factory names.
 
@@ -378,41 +379,50 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   once per account and repository. Readiness a bot or app applied never
   counts, nor does readiness from an account in `neverAuthorize`, whatever its
   role, or from an account without a role. A role it can't read holds the
-  issue for that pass.
-- **Body revision binding.** The ready label must be newer than the issue body's
-  last edit, to the second. A title change or ordinary discussion doesn't count. After
-  reviewing an edit, remove and re-apply the label. On a platform that
-  doesn't report the body's last edit, the factory skips this check.
-- **Agent Brief revision binding.** For requests carrying `bug` or
-  `enhancement` now or in their label history, the factory reads comments
-  through Postern and selects the
-  top-level Markdown Agent Brief heading in the highest-ID comment, as the
-  repository contract validator does. Wayfinder maps and children keep their
-  existing behavior. On GitHub, the validator notice from the bot account
-  `github-actions[bot]` must approve the selected Brief's exact text, comment
-  identity and edit time, and bind it to the current ready-label event and
-  reviewer. The ready label must follow the Brief's edit time. An edit,
-  replacement or deletion holds pickup even when stale readiness and approval
-  survive; it never selects an older approved Brief or the intake body instead.
-  Missing or mismatching approval requires publishing and reviewing the current
-  Brief, then removing and re-applying readiness. An unreadable comment list
-  waits for access to recover. Arbitrary approval-like discussion grants
-  nothing. Platforms without this evidence hold triaged requests rather than
-  skipping the Brief check. Directly authored body contracts retain the body
-  check above. This is a pickup-snapshot guarantee, not an atomic lock against
-  a contract edit after pickup.
-  Removing a category cannot bypass this check. The factory also reads GitHub's
-  latest comment-deletion event through Postern. A deletion at or after the
-  ready event holds pickup until fresh review and readiness, even if an old
-  Brief and its matching approval survive. GitHub does not retain the deleted
-  text, so the factory cannot establish whether that comment superseded the
-  Brief; this can also hold after ordinary discussion is deleted. Unreadable
-  deletion history waits for access to recover. Direct contracts with no
-  triage-category history need neither comment nor deletion-history access.
-  A newer comment edited after review also needs its complete edit history:
-  erasing a replacement Brief's heading cannot restore an older approval.
-  A history containing only ordinary discussion does not change the contract;
-  missing or redacted history holds pickup with a reason.
+  issue for that pass. The validator applies its own role rule as well, so a
+  host can narrow who starts runs but never widen it; a refusal names the
+  role.
+- **Contract result.** Whether readiness is bound to the issue's
+  implementation contract is the validator's decision, which it posts on the
+  issue. The factory reads, through Postern, the latest comment by the
+  [configured](factory-configuration.md#contract-result) trusted author that
+  carries a line `<!-- <marker> {…} -->` under the configured marker, and
+  parses that line's JSON object. It reads format
+  `repo-canon/issue-contract-state/v1`, as
+  [Repo Canon v0.21.0](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result)
+  publishes it. The ready label counts only when the result:
+  - has that format;
+  - is `approved`, names the ready label, and names the current ready-label
+    event as its `reviewEventId`;
+  - is newer than every comment created or edited on the issue, its body's
+    last edit, its latest comment deletion and every label change, to the
+    second. The factory's own hold comments, known by their exact marker and
+    wording, and changes to the labels its configuration names, other than the ready label, don't count, so neither
+    a hold comment nor the running label written at pickup makes a result
+    stale;
+  - names a contract source, an Agent Brief comment or the issue body, that
+    the platform still reports with the edit time the result records.
+
+  A missing result, one whose format the factory doesn't read, an unreadable
+  one, and one that doesn't approve the current ready-label event hold the
+  issue with a hold comment. A result older than a change, or whose source has
+  changed or gone, waits for the validator's next result, without a comment:
+  the validator evaluates every comment, edit and label event, so its next
+  result follows. So a triaged request whose body is edited after readiness
+  runs once the validator posts a newer approving result, and a category label
+  removed after an approving result holds the issue until the validator posts
+  again. Comment deletions are GitHub facts the neutral comment port doesn't
+  expose, read through Postern's authenticated `access.request`. An unreadable
+  comment list or deletion history waits for access to recover. A platform
+  that doesn't report body edit or comment deletion times can't show a result
+  current, so it holds every ready issue. This is a pickup-snapshot guarantee,
+  not an atomic lock against a contract edit after pickup.
+
+- **Parent body revision binding.** A parent's ready label must be newer than
+  its body's last edit, to the second. A title change or ordinary discussion
+  doesn't count. After reviewing an edit, remove and re-apply the label.
+  Whether an edit cancels another issue's readiness is the validator's
+  decision.
 - **Parents.** An open issue with native sub-issues in the same repository is
   a parent, and it never launches. Its sub-issue runs only while the parent's
   readiness counts and the parent has no open native blocker. With complete
@@ -428,8 +438,10 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   sub-issue and every sub-issue closed, in any repository, is closed with a
   comment listing them.
 
-The Brief check also gates retries, child release and readiness-dependent
-parent closure. Parent link-time and native-blocker checks still apply.
+The contract result also gates retries, resumes after a needs-input answer,
+child release and readiness-dependent parent closure. A retry that meets a
+stale result waits instead of failing. Parent link-time and native-blocker
+checks still apply.
 
 Refused readiness is a skip with its reason in the process log and the
 [status file](#status-file). The factory never writes the ready label.
@@ -437,7 +449,8 @@ Refused readiness is a skip with its reason in the process log and the
 ### Hold comments
 
 The factory comments on actionable holds: refused readiness (the actor, a
-missing role, an edit after readiness or an unapproved current Agent Brief),
+missing role, a parent's edit after readiness, or a missing, unknown-format,
+unreadable or non-approving contract result),
 a parent not ready under the parent rules above, a model-label error (several
 labels, an unresolvable label or an unlisted model), and a repository paused
 for its configuration, a [factory hold](factory-configuration.md#factory-hold),
@@ -449,16 +462,17 @@ Comments are never deleted.
 
 Open blockers, including a parent's blockers, usage drains and owner holds,
 provider caps and states already carrying labels or notices (running, paused,
-needs-input, failed and skip) stay log-only. A transient unreadable role lookup
-also stays log-only. Existing awaiting-merge, failure, pause and close notices
+needs-input, failed and skip) stay log-only. A transient unreadable role
+lookup, a stale contract result and an unreadable comment list also stay
+log-only. Existing awaiting-merge, failure, pause and close notices
 keep their own wording and lifecycle. If no valid repository configuration is
 cached, including after a restart, the host cannot read its issues and posts
 no hold comment.
 
-Where the factory skips the edit or link check, as it would on Forgejo, the
-repository's issue-contract trigger removes readiness when a ready issue's body
-is edited or a ticket links to a ready parent. A missed event leaves stale
-readiness in place; that weaker guarantee is accepted.
+Where the factory skips a parent's link check, on a platform that doesn't
+report link times, the repository's issue-contract trigger removes readiness
+when a ticket links to a ready parent. A missed event leaves stale readiness
+in place; that weaker guarantee is accepted.
 
 ## Sandbox GitHub access
 

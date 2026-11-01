@@ -343,11 +343,7 @@ export function createHost(
       pause(served.refused);
       return pass;
     }
-    const platform = repositoryPlatform(
-      served.connection,
-      pass.configuration.labels,
-      pass.configuration.comments?.close,
-    );
+    const platform = repositoryPlatform(served.connection, pass.configuration);
     pass.platform = platform;
     try {
       await platform.createStateLabels();

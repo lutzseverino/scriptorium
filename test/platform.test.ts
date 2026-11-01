@@ -9,7 +9,13 @@ import {
 } from "@lutzseverino/postern";
 import { relationshipSections, repositoryPlatform } from "../src/platform.ts";
 import { readinessExclusion } from "../src/readiness.ts";
-import { briefComment, approvalComment } from "./contract-fixture.ts";
+import {
+  briefComment,
+  contractResult,
+  recordedLine,
+  resultComment,
+  resultState,
+} from "./contract-result-fixture.ts";
 
 // One repository's platform reads and writes, through Postern's GitHub
 // adapter over a fake `fetch` that answers as GitHub's API, and through a
@@ -21,6 +27,7 @@ const labels = {
   needsInput: "factory:needs-input",
   paused: "factory:paused",
 };
+const configuration = { labels, contractResult };
 
 type Answer = { status: number; data?: unknown };
 
@@ -120,55 +127,26 @@ function restComment(comment: Comment) {
   };
 }
 
-async function briefIssues(
+// One ready triaged request, issue 1, with `comments`, or a comment read
+// failing with that status, as the validator's result is read from them. The
+// owner labelled it `bug` on October 1 and applied readiness in event 42 on
+// October 5; `events` follow those. `deletion` is the latest comment
+// deletion, or the status that read fails with.
+async function resultIssues(
   comments: Comment[] | number,
-  details: Record<string, unknown> = {},
-  eventId = 42,
-  role = "admin",
-  deletion: string | null | number = null,
-  categorized = true,
-  histories: Record<string, string[] | number | null> = {},
+  {
+    details = {},
+    events = [],
+    deletion = null,
+    role = "admin",
+  }: {
+    details?: Readonly<Record<string, unknown>>;
+    events?: readonly unknown[];
+    deletion?: string | null | number;
+    role?: string;
+  } = {},
 ) {
-  const { connection } = github((request, body) => {
-    if (request === "FactoryCommentEdits") {
-      const comment =
-        typeof comments === "number"
-          ? undefined
-          : comments.find((comment) => comment.nodeId === body.variables.id);
-      assert.ok(comment);
-      const history = histories[comment.nodeId!] ?? [comment.body];
-      const offset = Number(body.variables.after ?? 0);
-      return typeof history === "number"
-        ? { status: history, data: { message: "History unavailable" } }
-        : {
-            status: 200,
-            data: {
-              data: {
-                node: {
-                  body: comment.body,
-                  updatedAt: comment.updatedAt,
-                  lastEditedAt:
-                    comment.nodeId! in histories ||
-                    comment.updatedAt !== comment.createdAt
-                      ? comment.updatedAt
-                      : null,
-                  includesCreatedEdit: histories[comment.nodeId!] !== null,
-                  userContentEdits: {
-                    // One revision per API page, so a superseding Brief in
-                    // an older edit cannot be missed after the first page.
-                    nodes: history
-                      .slice(offset, offset + 1)
-                      .map((diff) => ({ diff, deletedAt: null })),
-                    pageInfo: {
-                      hasNextPage: offset + 1 < history.length,
-                      endCursor: String(offset + 1),
-                    },
-                  },
-                },
-              },
-            },
-          };
-    }
+  const { connection } = github((request) => {
     if (request === "FactoryCommentDeletions")
       return typeof deletion === "number"
         ? {
@@ -209,18 +187,9 @@ async function briefIssues(
       return {
         status: 200,
         data: [
-          ...(categorized
-            ? [labeled(40, user("owner"), "2026-10-01T00:00:00Z", "bug")]
-            : []),
-          labeled(eventId, user("owner"), "2026-10-05T00:00:00Z"),
-          ...(categorized
-            ? [
-                {
-                  ...labeled(44, user("owner"), "2026-10-06T00:00:00Z", "bug"),
-                  event: "unlabeled",
-                },
-              ]
-            : []),
+          labeled(40, user("owner"), "2026-10-01T00:00:00Z", "bug"),
+          labeled(42, user("owner"), "2026-10-05T00:00:00Z"),
+          ...events,
         ],
       };
     if (request.endsWith("/permission"))
@@ -233,7 +202,7 @@ async function briefIssues(
         ? { status: comments, data: { message: "Comments unavailable" } }
         : { status: 200, data: comments.map(restComment) };
   });
-  return repositoryPlatform(connection, labels).readIssues();
+  return repositoryPlatform(connection, configuration).readIssues();
 }
 
 const policy = {
@@ -242,384 +211,419 @@ const policy = {
   neverAuthorize: [],
 };
 
-test("an edited Agent Brief holds pickup despite its old approval and ready label", async () => {
-  const issues = await briefIssues([
-    {
-      ...briefComment,
-      body: briefComment.body.replace("Keep pickup", "Change pickup"),
-      updatedAt: "2026-10-06T00:00:00Z",
-    },
-    approvalComment,
-  ]);
-  assert.match(
-    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
-    /current Agent Brief/,
+const held = async (...args: Parameters<typeof resultIssues>) =>
+  (await resultIssues(...args))[0].contractHold;
+
+const later = "2026-10-06T00:00:00Z";
+const refused = (reason: RegExp) => ({ reason, waiting: false });
+
+function assertHold(
+  actual: { reason: string; waiting: boolean } | null,
+  expected: { reason: RegExp; waiting: boolean },
+  message?: string,
+) {
+  assert.ok(actual, message);
+  assert.match(actual.reason, expected.reason, message);
+  assert.equal(actual.waiting, expected.waiting, message);
+}
+
+test("a current result approving the ready-label event lets readiness count, for a Brief or an issue body", async () => {
+  const issues = await resultIssues([briefComment, resultComment()]);
+  assert.equal(issues[0].contractHold, null);
+  assert.equal(readinessExclusion(issues[0], issues, policy), null);
+  // Platform logins ignore case.
+  assert.equal(
+    await held([
+      briefComment,
+      resultComment(undefined, {
+        author: { login: "GitHub-Actions[bot]", bot: true },
+      }),
+    ]),
+    null,
   );
+  // A directly authored ticket's body, never edited or edited before review.
+  for (const editedAt of [null, "2026-10-04T00:00:00Z"])
+    assert.equal(
+      await held(
+        [
+          resultComment(
+            resultState({
+              kind: "implementation ticket",
+              source: { type: "issue-body", editedAt },
+            }),
+          ),
+        ],
+        { details: { lastEditedAt: editedAt } },
+      ),
+      null,
+      `body edited at ${editedAt}`,
+    );
 });
 
-test("approval binds the current Brief text, identity, edit time, reviewer and readiness event", async (t) => {
-  const changedApproval = (from: string, to: string) => ({
-    ...approvalComment,
-    body: approvalComment.body.replace(from, to),
-  });
-  for (const [name, comments, eventId] of [
+test("a missing result holds with a hold comment; only the configured author's marked line is a result", async () => {
+  const missing = refused(
+    /^is refused: no contract result from @github-actions\[bot\] was found on the issue; remove and re-apply ready-for-agent once the issue-contract validator has evaluated the issue$/,
+  );
+  for (const [name, comments] of [
+    ["no comments", []],
+    ["a Brief alone", [briefComment]],
     [
-      "text edited before the label",
+      "a person's copy",
       [
-        { ...briefComment, body: briefComment.body + "Changed.\n" },
-        approvalComment,
-      ],
-    ],
-    [
-      "edit time changed with the same text",
-      [{ ...briefComment, updatedAt: "2026-10-04T00:00:00Z" }, approvalComment],
-    ],
-    [
-      "newest Brief replaces an approved one",
-      [
-        { ...briefComment, id: 12, nodeId: "IC_12" },
-        approvalComment,
         briefComment,
+        resultComment(undefined, { author: { login: "owner", bot: false } }),
       ],
     ],
-    ["deletion cannot select the intake", [approvalComment]],
     [
-      "deletion cannot select an older Brief",
-      [{ ...briefComment, id: 9, nodeId: "IC_9" }, approvalComment],
+      "another bot's copy",
+      [
+        briefComment,
+        resultComment(undefined, {
+          author: { login: "other[bot]", bot: true },
+        }),
+      ],
     ],
-    ["approval absent", [briefComment]],
     [
-      "approval unreadable",
+      "the feedback marker without a state line",
       [
         briefComment,
         {
-          ...approvalComment,
-          body: approvalComment.body.replace('"approved"', "broken JSON"),
+          ...resultComment(),
+          body: "<!-- repo-canon:issue-contract-feedback -->\nApproved.",
         },
       ],
     ],
     [
-      "revision awaiting review",
-      [briefComment, changedApproval('"approved"', '"awaiting-review"')],
-    ],
-    [
-      "different label",
-      [
-        briefComment,
-        changedApproval(
-          '"label":"ready-for-agent"',
-          '"label":"ready-for-human"',
-        ),
-      ],
-    ],
-    [
-      "different reviewer",
-      [
-        briefComment,
-        changedApproval('"reviewer":"owner"', '"reviewer":"casey"'),
-      ],
-    ],
-    ["different readiness event", [briefComment, approvalComment], 43],
-    [
-      "approval-like human discussion",
-      [
-        briefComment,
-        { ...approvalComment, author: { login: "owner", bot: false } },
-      ],
-    ],
-    [
-      "approval-like bot discussion",
-      [
-        briefComment,
-        { ...approvalComment, author: { login: "other[bot]", bot: true } },
-      ],
-    ],
-    [
-      "unmarked validator account",
+      "a state line inside other text",
       [
         briefComment,
         {
-          ...approvalComment,
-          author: { login: "github-actions[bot]", bot: null },
+          ...resultComment(),
+          body: `Quoted: ${resultComment().body.split("\n")[1]}`,
         },
-      ],
-    ],
-    [
-      "newer validator feedback replaces approval",
-      [
-        briefComment,
-        { ...changedApproval('"approved"', '"awaiting-review"'), id: 12 },
-        approvalComment,
       ],
     ],
   ] as const)
-    await t.test(name, async () => {
-      const issues = await briefIssues([...comments], {}, eventId);
-      assert.match(
-        readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
-        /current Agent Brief/,
-      );
-    });
+    assertHold(await held([...comments]), missing, name);
+  const issues = await resultIssues([]);
+  assert.equal(readinessExclusion(issues[0], issues, policy)?.key, "readiness");
 });
 
-test("the reviewed Brief is eligible; discussion, title edits and untrusted markers change no contract", async () => {
-  const discussion = {
-    ...briefComment,
-    id: 12,
-    nodeId: "IC_12",
-    updatedAt: "2026-10-06T00:00:00Z",
-  };
-  const comments = [
-    briefComment,
-    approvalComment,
-    ...[
-      "Ordinary discussion",
-      "```md\n## Agent Brief\n```",
-      "> ## Agent Brief",
-      "<!--\n## Agent Brief\n-->",
-      "<h2>Agent Brief</h2>",
-    ].map((body, index) => ({
-      ...discussion,
-      id: 12 + index,
-      nodeId: `IC_${12 + index}`,
-      body,
-    })),
-    {
-      ...approvalComment,
-      id: 20,
-      nodeId: "IC_20",
-      author: { login: "other[bot]", bot: true },
-      body: "<!-- repo-canon:issue-contract-feedback -->\ninvalid",
-    },
-  ];
-  const issues = await briefIssues(comments, { title: "New title" });
-  assert.equal(readinessExclusion(issues[0], issues, policy), null);
-});
-
-test("comment read failures wait with an actionable reason", async () => {
-  for (const status of [403, 502]) {
-    const issues = await briefIssues(status);
-    const hold = readinessExclusion(issues[0], issues, policy);
-    assert.equal(hold?.waiting, true);
-    assert.match(hold!.reason, /could not be read.*restore comment access/);
-  }
-});
-
-test("replacement Brief selection follows the validator's Markdown heading forms", async () => {
-  for (const heading of [
-    "# Agent Brief",
-    "### **AGENT** `BRIEF`",
-    "Agent Brief\n---",
-    "## Agent <span>Brief</span>",
-  ]) {
-    const replacement = {
-      ...briefComment,
-      id: 12,
-      nodeId: "IC_12",
-      body: heading + "\n\nReplacement work.",
-    };
-    const issues = await briefIssues([
-      replacement,
-      briefComment,
-      approvalComment,
-    ]);
-    assert.match(
-      readinessExclusion(issues[0], issues, policy)!.reason,
-      /not bound to the current Agent Brief/,
-      heading,
-    );
-  }
-});
-
-test("fresh review of the actual edited Brief restores eligibility without bypassing the current role", async () => {
-  const comments = [
-    { ...briefComment, updatedAt: "2026-10-04T00:00:00Z" },
-    {
-      ...approvalComment,
-      body: approvalComment.body.replaceAll(
-        "e4a84a2dd9caf78e1d4dbf78e73f2a81004dc935cca474dbbc65aee038195c37",
-        "04b85db999bfe31b6deb0e33630ac3558e3168c30d4ed53a8ab0a6dfc04e7758",
-      ),
-    },
-  ];
-  const issues = await briefIssues(comments);
-  assert.equal(readinessExclusion(issues[0], issues, policy), null);
-  const demoted = await briefIssues(comments, {}, 42, "read");
-  assert.match(
-    readinessExclusion(demoted[0], demoted, policy)!.reason,
-    /role read is not authorized/,
-  );
-  const replacement = await briefIssues([
-    {
-      ...briefComment,
-      id: 12,
-      nodeId: "IC_12",
-      updatedAt: "2026-10-04T00:00:00Z",
-    },
-    {
-      ...approvalComment,
-      body: approvalComment.body.replaceAll(
-        "e4a84a2dd9caf78e1d4dbf78e73f2a81004dc935cca474dbbc65aee038195c37",
-        "7a09a6067627e4fff97cdb28b650e95db8b8cdd3122bfefc58fec0ad5fafca65",
-      ),
-    },
-    briefComment,
-  ]);
-  assert.equal(readinessExclusion(replacement[0], replacement, policy), null);
-});
-
-test("Wayfinder contracts retain their readiness behavior without Brief evidence", async () => {
-  for (const label of [
-    "wayfinder:map",
-    "wayfinder:research",
-    "wayfinder:prototype",
-    "wayfinder:grilling",
-    "wayfinder:task",
-  ]) {
-    const issues = await briefIssues(502, {
-      labels: page([{ name: labels.ready }, { name: "bug" }, { name: label }]),
-    });
-    assert.equal(readinessExclusion(issues[0], issues, policy), null);
-  }
-});
-
-test("deleting an unrecorded replacement cannot revive an older approved Brief", async () => {
-  // Brief 12 was posted and deleted before validator cleanup. Only Brief 10
-  // and its still-matching old approval survive in the comments endpoint.
-  const issues = await briefIssues(
-    [briefComment, approvalComment],
-    {},
-    42,
-    "admin",
-    "2026-10-06T00:00:00Z",
-  );
-  assert.match(
-    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
-    /deleted comment/,
-  );
-});
-
-test("removing the category label cannot bypass current Brief protection", async () => {
-  const issues = await briefIssues(
+test("an unknown format version or an unreadable result holds with a hold comment", async () => {
+  for (const [state, reason] of [
     [
-      { ...briefComment, body: briefComment.body + "Changed scope.\n" },
-      approvalComment,
-    ],
-    { labels: page([{ name: labels.ready }]) },
-  );
-  assert.match(
-    readinessExclusion(issues[0], issues, policy)?.reason ?? "eligible",
-    /current Agent Brief/,
-  );
-});
-
-test("deletion evidence must be readable and strictly older than the reviewed readiness", async () => {
-  for (const deletion of [
-    "2026-10-05T00:00:00Z",
-    "2026-10-06T00:00:00Z",
-    502,
-    "malformed",
-  ]) {
-    const issues = await briefIssues(
-      [briefComment, approvalComment],
-      {},
-      42,
-      "admin",
-      deletion,
-    );
-    const hold = readinessExclusion(issues[0], issues, policy);
-    assert.ok(hold);
-    assert.equal(hold.waiting, deletion === 502 || deletion === "malformed");
-  }
-  const reviewedAfterDeletion = await briefIssues(
-    [briefComment, approvalComment],
-    {},
-    42,
-    "admin",
-    "2026-10-04T00:00:00Z",
-  );
-  assert.equal(
-    readinessExclusion(reviewedAfterDeletion[0], reviewedAfterDeletion, policy),
-    null,
-  );
-});
-
-test("a deleted Brief stays held after category removal while direct contracts need no comment access", async () => {
-  const directLabels = { labels: page([{ name: labels.ready }]) };
-  const deleted = await briefIssues([approvalComment], directLabels);
-  assert.match(
-    readinessExclusion(deleted[0], deleted, policy)!.reason,
-    /current Agent Brief is missing/,
-  );
-  const direct = await briefIssues(403, directLabels, 42, "admin", 403, false);
-  assert.equal(readinessExclusion(direct[0], direct, policy), null);
-});
-
-test("editing away a replacement heading cannot restore old approval, while ordinary edits remain discussion", async () => {
-  const replacement = {
-    ...briefComment,
-    id: 12,
-    nodeId: "IC_12",
-    body: "## Notes\n\nChanged discussion.",
-    updatedAt: "2026-10-06T00:00:00Z",
-  };
-  for (const original of [
-    "## Agent Brief\n\nReplacement work.",
-    "Ordinary discussion.",
-  ]) {
-    const issues = await briefIssues(
-      [briefComment, approvalComment, replacement],
-      {},
-      42,
-      "admin",
-      null,
-      true,
+      // The earlier line without a format, which Scriptorium's own
+      // validator still posts.
       {
-        IC_12: [replacement.body, original],
+        status: "approved",
+        revision: "sha256:0",
+        label: "ready-for-agent",
+        reviewer: "owner",
+        reviewEventId: "42",
+        sourceInvalidation: null,
       },
+      /^is refused: the latest contract result from @github-actions\[bot\] has no format version, and this factory reads only repo-canon\/issue-contract-state\/v1; update the factory or the repository's issue-contract validator so they share a result format$/,
+    ],
+    [
+      resultState({ format: "repo-canon/issue-contract-state/v2" }),
+      /has format repo-canon\/issue-contract-state\/v2, and this factory reads only repo-canon\/issue-contract-state\/v1/,
+    ],
+    ['{"format":', /result from @github-actions\[bot\] is unreadable/],
+    ["null", /is unreadable/],
+    ["[]", /is unreadable/],
+  ] as const) {
+    const issues = await resultIssues([briefComment, resultComment(state)]);
+    assertHold(issues[0].contractHold, refused(reason), String(reason));
+    assert.equal(
+      readinessExclusion(issues[0], issues, policy)?.key,
+      "readiness",
     );
-    const hold = readinessExclusion(issues[0], issues, policy);
-    if (original.includes("Agent Brief"))
-      assert.match(hold!.reason, /heading was edited away/);
-    else assert.equal(hold, null);
-  }
-  for (const history of [
-    502,
-    null,
-    ["Incomplete history without the current revision"],
-  ]) {
-    const issues = await briefIssues(
-      [briefComment, approvalComment, replacement],
-      {},
-      42,
-      "admin",
-      null,
-      true,
-      { IC_12: history },
-    );
-    assert.equal(readinessExclusion(issues[0], issues, policy)?.waiting, true);
   }
 });
 
-test("a replacement edited in its creation second still needs native edit evidence", async () => {
+test("a current result that does not approve the ready-label event holds with a hold comment", async () => {
+  // The recorded result, which approves nothing.
+  assertHold(
+    await held([
+      briefComment,
+      resultComment(
+        recordedLine.slice(
+          "<!-- repo-canon:issue-contract-state ".length,
+          -" -->".length,
+        ),
+      ),
+    ]),
+    refused(
+      /^is refused: the validator's latest contract result, awaiting-review, does not approve the current ready-for-agent event; review the current contract, then remove and re-apply ready-for-agent/,
+    ),
+  );
+  for (const fields of [
+    { status: "needs-attention" },
+    { status: "no-contract" },
+    { label: "ready-for-human" },
+    { reviewEventId: "43" },
+    { reviewEventId: 42 },
+    { reviewEventId: "opened:1" },
+  ])
+    assertHold(
+      await held([briefComment, resultComment(resultState(fields))]),
+      refused(/does not approve the current ready-for-agent event/),
+      JSON.stringify(fields),
+    );
+  // The latest marked comment by the author is the result, not an earlier
+  // approval.
+  assertHold(
+    await held([
+      briefComment,
+      resultComment(),
+      resultComment(resultState({ status: "awaiting-review" }), {
+        id: 12,
+        nodeId: "IC_12",
+      }),
+    ]),
+    refused(/, awaiting-review, does not approve/),
+  );
+});
+
+test("a result older than a comment, edit, deletion or label change waits for the validator's next result", async () => {
+  const waits = {
+    reason:
+      /^waits: the issue changed after the validator's latest contract result at 2026-10-05T00:00:01Z; the validator's next result decides it$/,
+    waiting: true,
+  };
   const comment = {
     ...briefComment,
     id: 12,
     nodeId: "IC_12",
-    body: "Ordinary-looking discussion.",
-    createdAt: "2026-10-06T00:00:00Z",
-    updatedAt: "2026-10-06T00:00:00Z",
+    body: "A question.",
+    createdAt: later,
+    updatedAt: later,
   };
-  const comments = [briefComment, approvalComment, comment];
-  const edited = await briefIssues(comments, {}, 42, "admin", null, true, {
-    IC_12: [comment.body, "## Agent Brief\n\nReplacement work."],
+  const removed = (id: number, label: string, at = later) => ({
+    ...labeled(id, user("owner"), at, label),
+    event: "unlabeled",
   });
-  assert.match(
-    readinessExclusion(edited[0], edited, policy)!.reason,
-    /heading was edited away/,
+  for (const [name, comments, options] of [
+    ["a newer comment", [briefComment, resultComment(), comment], {}],
+    [
+      "an older comment edited since",
+      [
+        briefComment,
+        resultComment(),
+        { ...comment, createdAt: "2026-10-04T00:00:00Z" },
+      ],
+      {},
+    ],
+    [
+      "a newer Brief edit",
+      [{ ...briefComment, updatedAt: later }, resultComment()],
+      {},
+    ],
+    ["a newer deletion", [briefComment, resultComment()], { deletion: later }],
+    [
+      "a newer body edit",
+      [briefComment, resultComment()],
+      { details: { lastEditedAt: later } },
+    ],
+    [
+      "a removed category label",
+      [briefComment, resultComment()],
+      { events: [removed(44, "bug")] },
+    ],
+    [
+      "re-applied readiness",
+      [briefComment, resultComment()],
+      {
+        events: [removed(44, labels.ready), labeled(45, user("owner"), later)],
+      },
+    ],
+    [
+      "a model label",
+      [briefComment, resultComment()],
+      { events: [labeled(44, user("owner"), later, "model:gpt-5.5")] },
+    ],
+  ] as const) {
+    const issues = await resultIssues([...comments], options);
+    assertHold(issues[0].contractHold, waits, name);
+    // A wait is log-only: it has no hold comment.
+    assert.equal(
+      readinessExclusion(issues[0], issues, policy)?.key,
+      undefined,
+      name,
+    );
+  }
+  // The validator writes its result after its own label writes, so a change
+  // in the result's second is not newer.
+  assert.equal(
+    await held(
+      [
+        briefComment,
+        resultComment(),
+        { ...comment, updatedAt: "2026-10-05T00:00:01Z" },
+      ],
+      {
+        events: [removed(43, "needs-triage", "2026-10-05T00:00:01Z")],
+      },
+    ),
+    null,
   );
-  const unedited = await briefIssues(comments);
-  assert.equal(readinessExclusion(unedited[0], unedited, policy), null);
+});
+
+test("a triaged request whose body is edited after readiness runs once the validator posts a newer approving result", async () => {
+  const edited = { details: { lastEditedAt: later } };
+  assert.equal(
+    (await held([briefComment, resultComment()], edited))?.waiting,
+    true,
+  );
+  assert.equal(
+    await held(
+      [
+        briefComment,
+        resultComment(undefined, { updatedAt: "2026-10-07T00:00:00Z" }),
+      ],
+      edited,
+    ),
+    null,
+  );
+  // A removed category's newer result needs attention and approves nothing.
+  assertHold(
+    await held(
+      [
+        briefComment,
+        resultComment(resultState({ status: "needs-attention" }), {
+          updatedAt: "2026-10-07T00:00:00Z",
+        }),
+      ],
+      {
+        events: [
+          {
+            ...labeled(44, user("owner"), later, "bug"),
+            event: "unlabeled",
+          },
+        ],
+      },
+    ),
+    refused(/, needs-attention, does not approve/),
+  );
+});
+
+test("the factory's own hold comments and configured label writes do not make the result stale", async () => {
+  const hold = (body: string, at = later): Comment => ({
+    ...briefComment,
+    id: 13,
+    nodeId: "IC_13",
+    author: { login: "factory[bot]", bot: true },
+    body,
+    createdAt: at,
+    updatedAt: at,
+  });
+  const factoryLabels = [
+    labeled(44, { login: "factory[bot]", type: "Bot" }, later, labels.running),
+    {
+      ...labeled(
+        45,
+        { login: "factory[bot]", type: "Bot" },
+        later,
+        labels.paused,
+      ),
+      event: "unlabeled",
+    },
+    labeled(46, user("owner"), later, labels.failed),
+    labeled(47, user("owner"), later, labels.needsInput),
+  ];
+  for (const comment of [
+    hold(
+      "<!-- scriptorium:hold:readiness -->\nThe factory is holding this issue: its readiness is refused: a reason.",
+    ),
+    hold(
+      "<!-- scriptorium:hold:model-label -->\nResolved: this reason no longer holds the issue.",
+    ),
+  ])
+    assert.equal(
+      await held([briefComment, resultComment(), comment], {
+        events: factoryLabels,
+      }),
+      null,
+    );
+  // Anything else under a hold marker is a change the validator evaluates.
+  for (const body of [
+    "<!-- scriptorium:hold:readiness -->\nThe factory is holding this issue: a reason.\n\n## Agent Brief",
+    "<!-- scriptorium:hold:readiness -->\n## Agent Brief",
+    "Note\n<!-- scriptorium:hold:readiness -->\nResolved: this reason no longer holds the issue.",
+  ])
+    assert.equal(
+      (await held([briefComment, resultComment(), hold(body)]))?.waiting,
+      true,
+      body,
+    );
+});
+
+test("the contract source the result names must be present and unedited", async () => {
+  const waits =
+    /^waits: the issue changed after the validator's latest contract result/;
+  for (const [name, comments, options] of [
+    ["a deleted Brief", [resultComment()], {}],
+    [
+      "a Brief edited before the result",
+      [{ ...briefComment, updatedAt: "2026-10-03T00:00:00Z" }, resultComment()],
+      {},
+    ],
+    [
+      "a body edited before the result",
+      [
+        resultComment(
+          resultState({ source: { type: "issue-body", editedAt: null } }),
+        ),
+      ],
+      { details: { lastEditedAt: "2026-10-04T00:00:00Z" } },
+    ],
+  ] as const)
+    assertHold(
+      await held([...comments], options),
+      { reason: waits, waiting: true },
+      name,
+    );
+  for (const source of [
+    null,
+    { type: "comment", id: 10, editedAt: briefComment.updatedAt },
+    { type: "comment", id: "10" },
+    { type: "pull-request", editedAt: null },
+  ])
+    assertHold(
+      await held([briefComment, resultComment(resultState({ source }))]),
+      refused(/names no readable contract source/),
+      JSON.stringify(source),
+    );
+});
+
+test("the host's role policy still applies to an approved result, naming the refused role", async () => {
+  const issues = await resultIssues([briefComment, resultComment()], {
+    role: "write",
+  });
+  assert.equal(issues[0].contractHold, null);
+  const exclusion = readinessExclusion(issues[0], issues, policy);
+  assert.match(
+    exclusion!.reason,
+    /ready-for-agent was applied by @owner, whose repository role write is not authorized/,
+  );
+  assert.equal(exclusion!.key, "readiness");
+});
+
+test("unreadable comments or deletion history wait with an actionable reason", async () => {
+  for (const [comments, deletion] of [
+    [502, null],
+    [[briefComment, resultComment()], 502],
+  ] as const)
+    assertHold(
+      await held(typeof comments === "number" ? comments : [...comments], {
+        deletion,
+      }),
+      {
+        reason:
+          /^waits: the issue-contract validator's result or the issue's comment history could not be read this pass; restore comment access and retry$/,
+        waiting: true,
+      },
+    );
 });
 
 // A comment GitHub's REST API created on the issue.
@@ -752,6 +756,41 @@ test("open issues reach the core with their readiness, links and times, and with
       request,
     );
     if (issue) return { status: 200, data: events[issue[1]] };
+    // Each ready issue's current result approves its readiness.
+    const commented =
+      /^GET \/repos\/acme\/widgets\/issues\/(\d+)\/comments$/.exec(request);
+    if (commented) {
+      const [eventId, editedAt] = (
+        {
+          1: [3, "2026-10-02T00:00:00Z"],
+          2: [5, null],
+          4: [6, null],
+          5: [7, null],
+          8: [8, null],
+        } as Record<string, [number, string | null]>
+      )[commented[1]];
+      return {
+        status: 200,
+        data: [
+          restComment(
+            resultComment(
+              resultState({
+                source: { type: "issue-body", editedAt },
+                reviewEventId: String(eventId),
+              }),
+              { updatedAt: "2026-10-10T00:00:00Z" },
+            ),
+          ),
+        ],
+      };
+    }
+    if (request === "FactoryCommentDeletions")
+      return {
+        status: 200,
+        data: {
+          data: { repository: { issue: { timelineItems: { nodes: [] } } } },
+        },
+      };
     const role = /\/collaborators\/(\w+)\/permission$/.exec(request);
     if (role?.[1] === "owner")
       return { status: 200, data: { permission: "admin", role_name: "admin" } };
@@ -760,7 +799,10 @@ test("open issues reach the core with their readiness, links and times, and with
     if (role?.[1] === "morgan")
       return { status: 502, data: { message: "Server Error" } };
   });
-  const issues = await repositoryPlatform(connection, labels).readIssues();
+  const issues = await repositoryPlatform(
+    connection,
+    configuration,
+  ).readIssues();
   assert.deepEqual(issues, [
     {
       number: 1,
@@ -854,19 +896,30 @@ test("open issues reach the core with their readiness, links and times, and with
       blockedBy: [],
     })),
   ]);
-  // Only ready issues' label changes are read, and each role once.
+  // Only ready issues' label changes and results are read, and each role
+  // once.
   assert.deepEqual(
     requests.filter((request) => request !== "PosternIssues"),
     [
       "GET /repos/acme/widgets/issues/1/events",
       "GET /repos/acme/widgets/collaborators/owner/permission",
+      "GET /repos/acme/widgets/issues/1/comments",
+      "FactoryCommentDeletions",
       "PosternSubIssueLinkAdditions",
       "GET /repos/acme/widgets/collaborators/casey/permission",
       "GET /repos/acme/widgets/collaborators/morgan/permission",
       "GET /repos/acme/widgets/issues/2/events",
+      "GET /repos/acme/widgets/issues/2/comments",
+      "FactoryCommentDeletions",
       "GET /repos/acme/widgets/issues/4/events",
+      "GET /repos/acme/widgets/issues/4/comments",
+      "FactoryCommentDeletions",
       "GET /repos/acme/widgets/issues/5/events",
+      "GET /repos/acme/widgets/issues/5/comments",
+      "FactoryCommentDeletions",
       "GET /repos/acme/widgets/issues/8/events",
+      "GET /repos/acme/widgets/issues/8/comments",
+      "FactoryCommentDeletions",
       "GET /repos/acme/widgets/issues/9/events",
     ],
   );
@@ -911,7 +964,7 @@ test("link history distinguishes unsupported, empty, unknown-time and failed rea
       ...unsupported,
       issueTracker: { ...unsupported.issueTracker, capabilities },
     },
-    labels,
+    configuration,
   );
   const [fallback] = await legacy.readIssues();
   assert.equal(fallback.linkAdditions, null);
@@ -927,7 +980,7 @@ test("link history distinguishes unsupported, empty, unknown-time and failed rea
   };
   connection.issueTracker.subIssueLinkAdditions = async () => [];
   assert.deepEqual(
-    (await repositoryPlatform(connection, labels).readIssues())[0]
+    (await repositoryPlatform(connection, configuration).readIssues())[0]
       .linkAdditions,
     [],
   );
@@ -935,16 +988,19 @@ test("link history distinguishes unsupported, empty, unknown-time and failed rea
     { subIssue: null, actor: null, time: null },
   ];
   assert.deepEqual(
-    (await repositoryPlatform(connection, labels).readIssues())[0]
+    (await repositoryPlatform(connection, configuration).readIssues())[0]
       .linkAdditions,
     [{ ticket: null, actor: { kind: "unknown" }, at: null }],
   );
   connection.issueTracker.subIssueLinkAdditions = async () => {
     throw new PlatformError("unavailable", "history unavailable");
   };
-  await assert.rejects(repositoryPlatform(connection, labels).readIssues(), {
-    reason: "unavailable",
-  });
+  await assert.rejects(
+    repositoryPlatform(connection, configuration).readIssues(),
+    {
+      reason: "unavailable",
+    },
+  );
 });
 
 test("existing state labels are left as they are, and another refusal fails the pass", async () => {
@@ -955,7 +1011,10 @@ test("existing state labels are left as they are, and another refusal fails the 
       errors: [{ code: "already_exists" }],
     },
   }));
-  await repositoryPlatform(existing.connection, labels).createStateLabels();
+  await repositoryPlatform(
+    existing.connection,
+    configuration,
+  ).createStateLabels();
   assert.deepEqual(existing.requests, [
     "POST /repos/acme/widgets/labels",
     "POST /repos/acme/widgets/labels",
@@ -967,7 +1026,7 @@ test("existing state labels are left as they are, and another refusal fails the 
     data: { message: "Resource not accessible by integration" },
   }));
   await assert.rejects(
-    repositoryPlatform(forbidden.connection, labels).createStateLabels(),
+    repositoryPlatform(forbidden.connection, configuration).createStateLabels(),
     { name: "PlatformError", reason: "forbidden" },
   );
 });
@@ -980,7 +1039,7 @@ test("removing a label the issue lacks succeeds, and a new state label is added 
         ? { status: 404, data: { message: "Label does not exist" } }
         : { status: 200, data: [] },
   );
-  await repositoryPlatform(connection, labels).fail(4, "failed");
+  await repositoryPlatform(connection, configuration).fail(4, "failed");
   assert.deepEqual(requests, [
     "POST /repos/acme/widgets/issues/4/labels",
     "DELETE /repos/acme/widgets/issues/4/labels/factory%3Arunning",
@@ -993,7 +1052,10 @@ test("a closing issue gets its comment, then closes", async () => {
   const { connection, requests } = github((request) =>
     request.endsWith("/comments") ? created(1) : { status: 200, data: {} },
   );
-  await repositoryPlatform(connection, labels).close(1, [2, "acme/gadgets#6"]);
+  await repositoryPlatform(connection, configuration).close(1, [
+    2,
+    "acme/gadgets#6",
+  ]);
   assert.deepEqual(requests, [
     "POST /repos/acme/widgets/issues/1/comments",
     "GET /repos/acme/widgets/issues/1",
@@ -1053,7 +1115,7 @@ test("a run's pull request is its repository's own, opened since its first attem
   const state = (closing: unknown[], branch: unknown[], since?: string) =>
     repositoryPlatform(
       answers(closing, branch).connection,
-      labels,
+      configuration,
     ).pullRequestState(4, since);
   const observed = async (
     closing: unknown[],
@@ -1062,7 +1124,7 @@ test("a run's pull request is its repository's own, opened since its first attem
   ) => {
     const { pullRequests: context, ...observation } = await repositoryPlatform(
       answers(closing, branch, viewerStatus).connection,
-      labels,
+      configuration,
     ).pullRequestObservation(4);
     assert.ok(Array.isArray(context));
     return observation;
@@ -1148,7 +1210,7 @@ test("a run's pull request is its repository's own, opened since its first attem
   );
   const context = await repositoryPlatform(
     answers([], [pull(2, "CLOSED")]).connection,
-    labels,
+    configuration,
   ).pullRequestObservation(4);
   assert.deepEqual(context.pullRequests, [
     {
@@ -1209,7 +1271,10 @@ test("closed claims include needs-input-only issues across every page with confi
     };
   });
   assert.deepEqual(
-    await repositoryPlatform(connection, configured).readClosedClaims(),
+    await repositoryPlatform(connection, {
+      labels: configured,
+      contractResult,
+    }).readClosedClaims(),
     [3, 4, 5, 6, 7],
   );
 });
@@ -1249,7 +1314,7 @@ function failing(issueLabels: string[], failAt: number) {
     },
     issueTracker,
   } as unknown as ConnectionWithLinkAdditions;
-  return { platform: repositoryPlatform(connection, labels), writes };
+  return { platform: repositoryPlatform(connection, configuration), writes };
 }
 
 test("a state transition that fails part way leaves its claimed issue a state label", async () => {
@@ -1340,14 +1405,17 @@ test("release holds read all open labelled PR numbers through authenticated page
     };
   });
   assert.deepEqual(
-    await repositoryPlatform(connection, labels).readReleaseHold(),
+    await repositoryPlatform(connection, configuration).readReleaseHold(),
     [],
   );
   assert.equal(requests.length, 0);
   assert.deepEqual(
     await repositoryPlatform(connection, {
-      ...labels,
-      releaseHold: "release-hold",
+      labels: {
+        ...labels,
+        releaseHold: "release-hold",
+      },
+      contractResult,
     }).readReleaseHold(),
     [40, 41],
   );
@@ -1378,8 +1446,11 @@ test("unreadable or incomplete release holds never imply no hold", async () => {
     const { connection } = github(() => response);
     await assert.rejects(
       repositoryPlatform(connection, {
-        ...labels,
-        releaseHold: "release-hold",
+        labels: {
+          ...labels,
+          releaseHold: "release-hold",
+        },
+        contractResult,
       }).readReleaseHold(),
     );
   }
@@ -1423,13 +1494,19 @@ test("a factory hold reads every open labelled issue and PR through authenticate
       },
     };
   });
-  assert.deepEqual(await repositoryPlatform(connection, labels).readHold(), []);
+  assert.deepEqual(
+    await repositoryPlatform(connection, configuration).readHold(),
+    [],
+  );
   assert.equal(requests.length, 0);
   assert.deepEqual(
     await repositoryPlatform(connection, {
-      ...labels,
-      releaseHold: "release-hold",
-      hold: "factory:hold",
+      labels: {
+        ...labels,
+        releaseHold: "release-hold",
+        hold: "factory:hold",
+      },
+      contractResult,
     }).readHold(),
     [7, 12, 30, 41],
   );
@@ -1493,8 +1570,11 @@ test("an unreadable or incomplete factory hold never implies no hold", async () 
       );
       await assert.rejects(
         repositoryPlatform(connection, {
-          ...labels,
-          hold: "factory:hold",
+          labels: {
+            ...labels,
+            hold: "factory:hold",
+          },
+          contractResult,
         }).readHold(),
       );
     }

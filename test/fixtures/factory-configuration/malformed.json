@@ -7,6 +7,7 @@
     "needsInput": " question ",
     "paused": "waiting\n"
   },
+  "contractResult": { "marker": " contract:result", "author": null },
   "modelLabelPrefix": 3,
   "skill": " ship ",
   "arguments": 3

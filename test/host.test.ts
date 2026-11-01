@@ -40,7 +40,7 @@ import type { Retention } from "../src/image-retention.ts";
 import { createRegistry } from "../src/providers.ts";
 import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
-import { briefComment, approvalComment } from "./contract-fixture.ts";
+import { contractResult } from "./contract-result-fixture.ts";
 
 // The host runner, run against a stateful fake of each repository's Postern
 // connection, real Git clones of local bare remotes, the provider registry
@@ -69,10 +69,18 @@ type IssueSpec = {
   comments?: string[];
   discussion?: Comment[] | Error;
   latestDeletion?: string | null | Error;
+  // Whether the fake issue-contract validator's current result follows the
+  // discussion, as when it has evaluated every event. Without it, any result
+  // is in `discussion`.
+  validator?: boolean;
   linkAdditions?: SubIssueLinkAddition[] | Error;
   // Events after the issue's creation, when the owner applied its labels.
   timeline?: TimelineEvent[];
 };
+
+// The readiness labels the fixtures' repositories configure, which the fake
+// validator approves.
+const fixtureReadyLabels = new Set(["ready-for-agent", "queued", "work:ready"]);
 
 // Legacy capability fixtures retain latest-link fallback coverage. Tests can
 // opt into the complete link history that GitHub now offers.
@@ -152,6 +160,7 @@ function fakePlatform(
           comments: [] as string[],
           discussion: [] as Comment[] | Error,
           latestDeletion: null as string | null | Error,
+          validator: true,
           ...spec,
         };
         return {
@@ -210,6 +219,55 @@ function fakePlatform(
           login,
           bot: capabilities.botMarking ? login.endsWith("[bot]") : null,
         };
+
+  // The validator's result as it would stand after evaluating every event:
+  // an approval of the latest readiness-label event for the issue's body.
+  // `id` is the label change's event identifier, as `labelChanges` reports it.
+  const validatorResult = (
+    issue: (typeof state)[string][number],
+    discussion: Comment[],
+  ): Comment => {
+    const ready = issue.timeline
+      .map((item, id) => ({ item, id }))
+      .findLast(
+        ({ item }) =>
+          item.event === "labeled" && fixtureReadyLabels.has(item.label),
+      );
+    const times = [
+      issue.createdAt,
+      ...issue.timeline.map((item) => item.at),
+      ...discussion.map((comment) => comment.updatedAt),
+      ...(typeof issue.latestDeletion === "string"
+        ? [issue.latestDeletion]
+        : []),
+    ];
+    const at = times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+    const state = {
+      format: "repo-canon/issue-contract-state/v1",
+      status: ready ? "approved" : "awaiting-review",
+      kind: "implementation ticket",
+      source: {
+        type: "issue-body",
+        editedAt: latest(
+          issue.timeline.filter((item) => item.event === "edited"),
+        ),
+      },
+      label: ready?.item.event === "labeled" ? ready.item.label : null,
+      reviewEventId:
+        ready?.item.event === "labeled"
+          ? String(ready.item.id ?? ready.id)
+          : null,
+    };
+    return {
+      id: issue.number * 10000 + 9999,
+      nodeId: `IC_RESULT_${issue.number}`,
+      url: "https://platform.test/result",
+      author: account(contractResult.author),
+      body: `<!-- ${contractResult.marker} ${JSON.stringify(state)} -->`,
+      createdAt: issue.createdAt,
+      updatedAt: at,
+    };
+  };
 
   // The connection to `repository`, which always passes the factory's section
   // names.
@@ -357,9 +415,12 @@ function fakePlatform(
         },
         async comments(number) {
           await request("comments", number);
-          const discussion = find(repository, number).discussion;
+          const issue = find(repository, number);
+          const { discussion } = issue;
           if (discussion instanceof Error) throw discussion;
-          return discussion;
+          return issue.validator
+            ? [...discussion, validatorResult(issue, discussion)]
+            : discussion;
         },
         async closeIssue(number) {
           await request("closeIssue", number);
@@ -919,6 +980,7 @@ const conventions = {
     needsInput: "factory:needs-input",
     paused: "factory:paused",
   },
+  contractResult,
   modelLabelPrefix: "model:",
   skill: "implement",
   arguments: "#{issue}",
@@ -2732,6 +2794,7 @@ test("the configured skill, arguments and state labels drive first attempts, ret
       needsInput: "question",
       paused: "waiting",
     },
+    contractResult,
     modelLabelPrefix: "agent:",
     skill: "ship",
     arguments: "#{issue}; issue={issue}",
@@ -3225,57 +3288,86 @@ function held(run: ReturnType<typeof host>, issue: number) {
     )?.reason;
 }
 
-test("pickup and parent readiness use the current Agent Brief even while stale labels survive", async (t) => {
-  const approved = [briefComment, approvalComment];
-  const edited = [
-    {
-      ...briefComment,
-      body: briefComment.body + "Changed scope.\n",
-      updatedAt: "2026-10-06T00:00:00Z",
-    },
-    approvalComment,
-  ];
-  const triaged = (
+// The validator's result, posted at `at`, approving readiness event 42 on an
+// issue body that was never edited, with `fields` replaced.
+function postedResult(
+  number: number,
+  at: string,
+  fields: Record<string, unknown> = {},
+): Comment {
+  const state = {
+    format: "repo-canon/issue-contract-state/v1",
+    status: "approved",
+    kind: "implementation ticket",
+    source: { type: "issue-body", editedAt: null },
+    label: ready,
+    reviewEventId: "42",
+    ...fields,
+  };
+  return {
+    id: number * 100 + 1,
+    nodeId: `IC_${number}_RESULT`,
+    url: "https://platform.test/result",
+    author: { login: contractResult.author, bot: true },
+    body: `<!-- ${contractResult.marker} ${JSON.stringify(state)} -->`,
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
+test("pickup, retries and parent readiness follow the validator's current result", async (t) => {
+  const readyEvent: TimelineEvent = {
+    event: "labeled",
+    label: ready,
+    actor: "owner",
+    at: "2026-10-05T00:00:00Z",
+    id: 42,
+  };
+  const posted = (
     number: number,
     discussion: Comment[] | Error,
     details: Partial<IssueSpec> = {},
   ): IssueSpec => ({
     number,
-    labels: [ready, "bug"],
     discussion,
-    timeline: [
-      {
-        event: "labeled",
-        label: ready,
-        actor: "owner",
-        at: "2026-10-05T00:00:00Z",
-        id: 42,
-      },
-    ],
+    validator: false,
+    timeline: [readyEvent],
     ...details,
   });
+  const resultAt = "2026-10-05T00:00:01Z";
   const run = host(t, {
     repositories: {
       "acme/widgets": [
-        triaged(1, approved),
-        triaged(2, edited),
-        triaged(3, [
-          briefComment,
-          approvalComment,
-          { ...briefComment, id: 12, nodeId: "IC_12" },
+        posted(1, [postedResult(1, resultAt)]),
+        posted(2, []),
+        posted(3, [
+          postedResult(3, resultAt, {
+            format: "repo-canon/issue-contract-state/v2",
+          }),
         ]),
-        triaged(4, [approvalComment]),
-        triaged(5, new PlatformError("unavailable", "Comments unavailable")),
-        triaged(6, approved, {
-          subIssues: [{ number: 7 }],
-          latestDeletion: "2026-10-06T00:00:00Z",
+        posted(4, [postedResult(4, resultAt)], {
+          timeline: [
+            readyEvent,
+            { event: "commented", at: "2026-10-06T00:00:00Z" },
+          ],
+          discussion: [
+            postedResult(4, resultAt),
+            {
+              ...postedResult(4, resultAt),
+              id: 402,
+              author: { login: "casey", bot: false },
+              body: "A newer question.",
+              updatedAt: "2026-10-06T00:00:00Z",
+            },
+          ],
         }),
+        posted(5, new PlatformError("unavailable", "Comments unavailable")),
+        posted(6, [], { subIssues: [{ number: 7 }] }),
         { number: 7, parent: 6 },
-        triaged(8, approved, {
+        posted(8, [postedResult(8, resultAt, { status: "needs-attention" })], {
           subIssues: [{ number: 80, state: "CLOSED" }],
-          latestDeletion: "2026-10-06T00:00:00Z",
         }),
-        triaged(9, approved, { subIssues: [{ number: 90, state: "CLOSED" }] }),
+        { number: 9, subIssues: [{ number: 90, state: "CLOSED" }] },
       ],
     },
     remotes: { "acme/widgets": remote(t, factoryFiles) },
@@ -3286,56 +3378,114 @@ test("pickup and parent readiness use the current Agent Brief even while stale l
     run.launched.map(({ options }) => options.name),
     ["acme/widgets#1"],
   );
-  for (const number of [2, 3, 4, 5, 7, 8])
-    assert.match(held(run, number)!, /current Agent Brief/);
+  assert.match(held(run, 2)!, /no contract result from @github-actions\[bot\]/);
+  assert.match(
+    held(run, 3)!,
+    /has format repo-canon\/issue-contract-state\/v2/,
+  );
+  assert.match(
+    held(run, 4)!,
+    /waits: the issue changed after the validator's latest contract result/,
+  );
+  assert.match(
+    held(run, 5)!,
+    /result or the issue's comment history could not be read/,
+  );
+  assert.match(
+    held(run, 7)!,
+    /sub-issue of #6, whose readiness is refused: no contract result/,
+  );
   assert.equal(run.github.find("acme/widgets", 8).state, "OPEN");
   assert.equal(run.github.find("acme/widgets", 9).state, "CLOSED");
-  // Review of the actual edited Brief releases held work on the next pickup
-  // snapshot. The ready event and validator approval both reflect that review.
-  const reviewedEdit = [
-    edited[0],
-    {
-      ...approvalComment,
-      body: approvalComment.body
-        .replaceAll(
-          "e4a84a2dd9caf78e1d4dbf78e73f2a81004dc935cca474dbbc65aee038195c37",
-          "440a84cd3525f93b73b750b3cc8bcae6900a60626d0aab3ccd5e267d3a9479bd",
-        )
-        .replace('"reviewEventId":"42"', '"reviewEventId":"43"'),
-      updatedAt: "2026-10-07T00:00:01Z",
-    },
+  // A refused or missing result has a hold comment; a stale result and an
+  // unreadable one wait without one.
+  for (const number of [2, 3, 6])
+    assert.equal(
+      run.github.find("acme/widgets", number).comments.length,
+      1,
+      `#${number}`,
+    );
+  assert.match(
+    run.github.find("acme/widgets", 2).comments[0],
+    /^<!-- scriptorium:hold:readiness -->\nThe factory is holding this issue: its readiness is refused: no contract result/,
+  );
+  for (const number of [4, 5])
+    assert.deepEqual(run.github.find("acme/widgets", number).comments, []);
+
+  // The validator's newer results: its hold comments, posted since, don't make
+  // them stale, nor does the running label written at pickup.
+  const later = "2026-10-08T00:00:00Z";
+  run.github.find("acme/widgets", 2).discussion = [
+    postedResult(2, later),
+    ...(run.github.find("acme/widgets", 2).discussion as Comment[]),
   ];
-  run.github.find("acme/widgets", 2).discussion = reviewedEdit;
-  run.github.find("acme/widgets", 2).timeline.push({
-    event: "labeled",
-    label: ready,
-    actor: "owner",
-    at: "2026-10-07T00:00:00Z",
-    id: 43,
-  });
-  run.github.find("acme/widgets", 6).discussion = [
-    briefComment,
-    {
-      ...approvalComment,
-      body: approvalComment.body.replace(
-        '"reviewEventId":"42"',
-        '"reviewEventId":"43"',
-      ),
-    },
+  run.github.find("acme/widgets", 4).discussion = [
+    ...(run.github.find("acme/widgets", 4).discussion as Comment[]).slice(1),
+    postedResult(4, later),
   ];
-  run.github.find("acme/widgets", 6).timeline.push({
-    event: "labeled",
-    label: ready,
-    actor: "owner",
-    at: "2026-10-07T00:00:00Z",
-    id: 43,
-  });
+  // The first attempt fails; the factory's running label write at its pickup
+  // came after the result.
+  run.launched[0].finish();
+  await settled();
   await run.tick();
   assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
     "acme/widgets#1",
+    "acme/widgets#1",
     "acme/widgets#2",
-    "acme/widgets#7",
+    "acme/widgets#4",
   ]);
+  assert.match(
+    run.github.find("acme/widgets", 2).comments[0],
+    /Resolved: this reason no longer holds the issue\./,
+  );
+});
+
+test("a retry that meets a stale result waits, and launches once the validator posts a newer approving result", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          validator: false,
+          discussion: [postedResult(4, "2026-10-05T00:00:01Z")],
+          timeline: [
+            {
+              event: "labeled",
+              label: ready,
+              actor: "owner",
+              at: "2026-10-05T00:00:00Z",
+              id: 42,
+            },
+          ],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  // A body edit during the first attempt, which the validator hasn't
+  // evaluated yet.
+  const issue = run.github.find("acme/widgets", 4);
+  issue.timeline.push({ event: "edited", at: "2026-10-09T11:00:00Z" });
+  run.launched[0].finish();
+  await settled();
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.deepEqual(issue.labels, [ready, "factory:running"]);
+  assert.match(
+    held(run, 4)!,
+    /^retry waits: its readiness waits: the issue changed after the validator's latest contract result/,
+  );
+  assert.deepEqual(issue.comments, []);
+  issue.discussion = [
+    postedResult(4, "2026-10-09T11:00:05Z", {
+      source: { type: "issue-body", editedAt: "2026-10-09T11:00:00Z" },
+    }),
+  ];
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(run.launched[1].options.name, "acme/widgets#4");
 });
 
 test("readiness counts only from a user whose role, read once a pass, the host authorizes", async (t) => {
@@ -3414,21 +3564,29 @@ test("readiness counts only from a user whose role, read once a pass, the host a
   assert.equal(lookups().length, 6);
 });
 
-test("readiness must be newer than the body's last edit, whatever the title and comments did", async (t) => {
+test("a parent's readiness must be newer than its body's last edit, whatever the title and comments did; a running issue's edit is the validator's", async (t) => {
   const later = "2026-10-09T10:00:01Z";
   const run = host(t, {
     repositories: {
       "acme/widgets": [
-        { number: 1, timeline: [{ event: "edited", at: reviewed }] },
         {
-          number: 2,
+          number: 1,
+          subIssues: [{ number: 2 }],
+          timeline: [{ event: "edited", at: reviewed }],
+        },
+        { number: 2, parent: 1 },
+        {
+          number: 3,
+          subIssues: [{ number: 4 }],
           timeline: [
             { event: "edited", at: reviewed },
             labelled("owner", reviewed),
           ],
         },
+        { number: 4, parent: 3 },
         {
-          number: 3,
+          number: 5,
+          subIssues: [{ number: 6 }],
           timeline: [
             { event: "edited", at: reviewed },
             labelled("owner", later),
@@ -3436,26 +3594,30 @@ test("readiness must be newer than the body's last edit, whatever the title and 
             { event: "commented", at: "2026-10-09T11:00:00Z" },
           ],
         },
+        { number: 6, parent: 5 },
+        // The fake validator approves the edit, as it does a triaged
+        // request's.
+        { number: 7, timeline: [{ event: "edited", at: reviewed }] },
       ],
     },
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   await run.tick();
-  assert.deepEqual(
-    run.launched.map(({ options }) => options.name),
-    ["acme/widgets#3"],
-  );
-  assert.equal(
-    held(run, 1),
-    `its readiness is refused: ready-for-agent was applied at 2026-10-01T00:00:00Z, not after the body's last edit at ${reviewed}; review the edit, then remove and re-apply ready-for-agent`,
-  );
+  assert.deepEqual(run.launched.map(({ options }) => options.name).sort(), [
+    "acme/widgets#6",
+    "acme/widgets#7",
+  ]);
   assert.equal(
     held(run, 2),
-    `its readiness is refused: ready-for-agent was applied at ${reviewed}, not after the body's last edit at ${reviewed}; review the edit, then remove and re-apply ready-for-agent`,
+    `sub-issue of #1, whose readiness is refused: ready-for-agent was applied at 2026-10-01T00:00:00Z, not after the body's last edit at ${reviewed}; review the edit, then remove and re-apply ready-for-agent on #1`,
+  );
+  assert.equal(
+    held(run, 4),
+    `sub-issue of #3, whose readiness is refused: ready-for-agent was applied at ${reviewed}, not after the body's last edit at ${reviewed}; review the edit, then remove and re-apply ready-for-agent on #3`,
   );
 });
 
-test("without the platform's edit and link times, readiness skips those comparisons and invents no time", async (t) => {
+test("without the platform's link times readiness skips that comparison and invents no time; without its edit times no result counts", async (t) => {
   const later = "2026-10-09T10:00:01Z";
   const repositories = {
     "acme/widgets": [
@@ -3474,14 +3636,12 @@ test("without the platform's edit and link times, readiness skips those comparis
       },
     ] satisfies IssueSpec[],
   };
-  const {
-    bodyEditTime: _edits,
-    linkTime: _links,
-    ...timeless
-  } = githubCapabilities;
+  const { linkTime: _links, ...linkless } = githubCapabilities;
+  const { bodyEditTime: _edits, ...editless } = githubCapabilities;
   for (const [capabilities, launched] of [
-    [githubCapabilities, []],
-    [timeless, ["acme/widgets#2", "acme/widgets#4"]],
+    [githubCapabilities, ["acme/widgets#4"]],
+    [linkless, ["acme/widgets#2", "acme/widgets#4"]],
+    [editless, []],
   ] as const) {
     const run = host(t, {
       repositories,
@@ -3493,9 +3653,13 @@ test("without the platform's edit and link times, readiness skips those comparis
       run.launched.map(({ options }) => options.name).sort(),
       launched,
     );
-    if (launched.length === 0) {
+    if (capabilities === githubCapabilities)
       assert.match(held(run, 2)!, /whose readiness predates its latest ticket/);
-      assert.match(held(run, 4)!, /not after the body's last edit/);
+    if (capabilities === editless) {
+      const unshown =
+        /is refused: the platform reports no body edit or comment deletion times, so the validator's latest contract result cannot be shown current/;
+      assert.match(held(run, 2)!, unshown);
+      assert.match(held(run, 4)!, unshown);
     }
   }
 });

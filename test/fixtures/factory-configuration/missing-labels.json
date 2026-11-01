@@ -1,6 +1,10 @@
 {
   "version": 2,
   "labels": {},
+  "contractResult": {
+    "marker": "contract:result",
+    "author": "validator[bot]"
+  },
   "modelLabelPrefix": "agent:",
   "skill": "ship",
   "arguments": "#{issue}"
