@@ -30,11 +30,12 @@ export type Policy = {
 export type ReadinessHold = { reason: string; waiting: boolean };
 
 // An issue that carries readiness the factory accepts, with at least one
-// native sub-issue and every sub-issue closed, is finished.
+// native sub-issue, every sub-issue closed and no open blockers, is finished.
 export function closes(issue: Issue, policy: Policy): boolean {
   return (
     issue.labels.includes(policy.ready) &&
     refusal(issue, policy) === null &&
+    issue.blockedBy.every((blocker) => blocker.state === "closed") &&
     issue.subIssues.length > 0 &&
     issue.subIssues.every((ticket) => ticket.state === "closed")
   );

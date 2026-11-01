@@ -487,6 +487,31 @@ test("a ready parent closes once every native sub-issue is closed", () => {
   );
 });
 
+test("a finished parent waits for its local and cross-repository blockers to close", () => {
+  const finished = parent(released, {
+    subIssues: [{ number: 5, state: "closed" }],
+    blockedBy: [
+      { number: 1, state: "closed" },
+      { number: 2, state: "open" },
+      { number: "acme/gadgets#8", state: "open" },
+    ],
+  });
+
+  for (const blocker of finished.blockedBy.slice(1)) {
+    const decisions = decide({ issues: [finished] });
+    assert.equal(
+      decisions.some((decision) => decision.kind === "close"),
+      false,
+    );
+    assert.deepEqual(launches(decisions), []);
+    blocker.state = "closed";
+  }
+
+  assert.deepEqual(decide({ issues: [finished] }), [
+    { kind: "close", ...at(3), tickets: [5] },
+  ]);
+});
+
 test("closing a parent takes precedence over settling its earlier run or claim", () => {
   for (const state of [
     { runs: [run(3, { ended: none })] },
@@ -568,14 +593,13 @@ test("a finished parent stays open while its readiness is refused or unread", ()
   }
 });
 
-test("closing any ready parent does not require pickup gates", () => {
+test("closing any ready parent does not require other pickup gates", () => {
   assert.deepEqual(
     decide({
       issues: [
         issue(3, ["ready-for-agent", "model:unusable"], {
           latestLink: { ticket: 5, at: released },
           subIssues: [{ number: 5, state: "closed" }],
-          blockedBy: [{ number: 2, state: "open" }],
         }),
       ],
       settings: { caps: {} },
