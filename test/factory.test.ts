@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   decideFactory,
+  factoryHoldReason,
   type Claim,
   type Decision,
   type Issue,
@@ -3337,7 +3338,7 @@ test("a release hold permits pickup, retries, interrupted and paused relaunches 
 });
 
 // A repository whose configuration names the factory hold label.
-function factoryHeld(
+function holdingRepository(
   name: string,
   issues: Issue[],
   details: Partial<Repository> = {},
@@ -3399,8 +3400,8 @@ test("a factory hold stops pickup, retries, interrupted and paused relaunches, n
   ];
   for (const scenario of scenarios)
     for (const hold of [[12], [12, 40], null]) {
-      const repo = factoryHeld(widgets, [issue(4, scenario.labels)], {
-        hold,
+      const repo = holdingRepository(widgets, [issue(4, scenario.labels)], {
+        factoryHold: hold,
         claims: scenario.claims ?? [],
       });
       const decisions = decide({
@@ -3420,7 +3421,7 @@ test("a factory hold stops pickup, retries, interrupted and paused relaunches, n
           : /factory hold \(#12(, #40 carry|\s+carries) `factory:hold`\); pickup and merging resume when the last labelled issue or PR closes or loses the label/,
       );
       // Clearing the hold resumes the same launch on the next pass.
-      repo.hold = [];
+      repo.factoryHold = [];
       assert.equal(
         launches(decide({ repositories: [repo], runs: scenario.runs })).length,
         1,
@@ -3447,8 +3448,8 @@ test("a merge relaunch whose target PR alone carries the factory hold launches",
       [] as Run[],
       [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
     ]) {
-      const repo = factoryHeld(widgets, [issue(4, claimed), issue(6)], {
-        hold: hold === null ? null : [...hold],
+      const repo = holdingRepository(widgets, [issue(4, claimed), issue(6)], {
+        factoryHold: hold === null ? null : [...hold],
         claims: runs.length
           ? []
           : [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
@@ -3474,10 +3475,10 @@ test("a merge relaunch whose target PR alone carries the factory hold launches",
 test("a factory hold lets existing runs settle and stop, and other gates keep their own holds", () => {
   const decisions = decide({
     repositories: [
-      factoryHeld(
+      holdingRepository(
         widgets,
         [issue(2, claimed), issue(3, ["ready-for-agent", "model:unknown"])],
-        { hold: [9] },
+        { factoryHold: [9] },
       ),
     ],
     runs: [
@@ -3504,8 +3505,8 @@ test("a merge relaunch blocked by another gate gets no factory-hold reason from 
     baseBranch: "main",
     createdAt: now,
   };
-  const repo = factoryHeld(widgets, [issue(4, claimed)], {
-    hold: [40],
+  const repo = holdingRepository(widgets, [issue(4, claimed)], {
+    factoryHold: [40],
     claims: [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
   });
   const decisions = decide({
@@ -3518,6 +3519,19 @@ test("a merge relaunch blocked by another gate gets no factory-hold reason from 
 });
 
 test("a factory hold read without a configured label holds nothing", () => {
-  const repo = repository(widgets, [issue(4)], { hold: null });
+  const repo = repository(widgets, [issue(4)], { factoryHold: null });
   assert.equal(launches(decide({ repositories: [repo] })).length, 1);
+});
+
+test("the factory hold exempts exactly the PRs being merged, and holds nothing without a label", () => {
+  assert.match(
+    factoryHoldReason("factory:hold", [9, 40, 41], [40, 41])!,
+    /^factory hold \(#9 carries `factory:hold`\)/,
+  );
+  assert.equal(factoryHoldReason("factory:hold", [40, 41], [40, 41]), null);
+  assert.match(
+    factoryHoldReason("factory:hold", null, [40])!,
+    /^factory hold state is unreadable/,
+  );
+  assert.equal(factoryHoldReason(undefined, null, []), null);
 });

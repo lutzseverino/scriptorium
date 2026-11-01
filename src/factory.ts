@@ -121,7 +121,7 @@ export type Repository = {
   releaseHold?: number[] | null;
   // Open issue and PR numbers carrying `labels.hold`; null means the
   // configured hold read failed.
-  hold?: number[] | null;
+  factoryHold?: number[] | null;
 };
 
 export type Settings = {
@@ -363,6 +363,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const { labels, modelLabelPrefix } = repository.configuration;
     if (!issue.labels.includes(labels.ready)) continue;
     const excluded = exclusion(issue, repository);
+    const factoryHeld = heldByFactory(repository, []);
     const reason =
       (labels.skip !== undefined && issue.labels.includes(labels.skip)
         ? `labelled \`${labels.skip}\`; delivered outside the factory`
@@ -382,7 +383,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         ? "a factory run for it is still on the host"
         : null) ??
       paused(repository) ??
-      factoryHold(repository, []);
+      factoryHeld;
     if (reason) {
       decisions.push({
         kind: "skip",
@@ -392,7 +393,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
           ? { hold: excluded.key }
           : reason === paused(repository)
             ? { hold: "repository-configuration" }
-            : reason === factoryHold(repository, [])
+            : reason === factoryHeld
               ? { hold: "factory-hold" }
               : {}),
       });
@@ -506,7 +507,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
             reason: configuration,
           });
         const target = mergeTarget(previous, claim);
-        const held = factoryHold(repository, target ? [target.number] : []);
+        const held = heldByFactory(repository, target ? [target.number] : []);
         if (held) holds.push({ key: "factory-hold", reason: held });
       }
       for (const hold of holds)
@@ -707,7 +708,7 @@ function relaunch(
   const { provider } = retry.model;
   const gated =
     paused(repository) ??
-    factoryHold(repository, []) ??
+    heldByFactory(repository, []) ??
     gate(provider, running, snapshot, "drain");
   if (gated)
     return [
@@ -794,7 +795,7 @@ function resume(
   const own = run.mergeRelaunch ? [run.mergeRelaunch.number] : [];
   const gated =
     paused(repository) ??
-    factoryHold(repository, own) ??
+    heldByFactory(repository, own) ??
     (pause && limited(run.provider, pause.paused, snapshot)) ??
     gate(run.provider, running, snapshot, "pause");
   if (gated)
@@ -870,7 +871,7 @@ function mergeRelaunch(
     "error" in model
       ? model.error
       : (paused(repository) ??
-        factoryHold(repository, [target.number]) ??
+        heldByFactory(repository, [target.number]) ??
         gate(model.provider, running, snapshot, "pause"));
   if (reason)
     return [
@@ -902,21 +903,6 @@ function mergeRelaunch(
   ];
 }
 
-// The labelled items that hold the delivery of `own`, the PRs being merged,
-// or "unreadable" when the set could not be read: a labelled PR never holds
-// its own merge. Without PRs of its own, every labelled item holds.
-function labelHold(
-  hold: number[] | null | undefined,
-  own: number[],
-): number[] | "unreadable" {
-  if (hold === null) return "unreadable";
-  return (
-    hold?.filter(
-      (number) => own.length === 0 || own.some((pr) => number !== pr),
-    ) ?? []
-  );
-}
-
 const numbered = (numbers: number[]) =>
   numbers.map((number) => `#${number}`).join(", ");
 
@@ -926,25 +912,28 @@ export function releaseHoldReason(
   hold: Repository["releaseHold"],
   own: number[],
 ): string | null {
-  const others = labelHold(hold, own);
-  if (others === "unreadable")
+  if (hold === null)
     return "release hold state is unreadable; merging resumes after a successful read confirms no other labelled PR remains";
+  const others =
+    hold?.filter((number) => own.some((pr) => number !== pr)) ?? [];
   return others.length
     ? `release hold (${numbered(others)}); merging resumes when the last labelled PR closes or loses the label`
     : null;
 }
 
 // The factory hold pauses the repository as a whole: pickup, retries,
-// relaunches, resumes and merges. `own` names the PR a merge relaunch
-// delivers, which its own label never holds.
+// relaunches, resumes and merges. `own` names the PRs being merged, whose
+// own label never holds them; an unreadable set holds even those. Without a
+// configured label nothing holds.
 export function factoryHoldReason(
-  label: string,
-  hold: Repository["hold"],
+  label: string | undefined,
+  hold: Repository["factoryHold"],
   own: number[],
 ): string | null {
-  const others = labelHold(hold, own);
-  if (others === "unreadable")
+  if (label === undefined) return null;
+  if (hold === null)
     return `factory hold state is unreadable; pickup and merging resume after a successful read confirms no open issue or PR carries \`${label}\``;
+  const others = hold?.filter((number) => !own.includes(number)) ?? [];
   return others.length
     ? `factory hold (${numbered(others)} ${others.length === 1 ? "carries" : "carry"} \`${label}\`); pickup and merging resume when the last labelled issue or PR closes or loses the label`
     : null;
@@ -1107,11 +1096,12 @@ function paused(repository: Repository): string | null {
     : `${repository.name} is paused: ${repository.paused}`;
 }
 
-function factoryHold(repository: Repository, own: number[]): string | null {
-  const { hold } = repository.configuration.labels;
-  return hold === undefined
-    ? null
-    : factoryHoldReason(hold, repository.hold, own);
+function heldByFactory(repository: Repository, own: number[]): string | null {
+  return factoryHoldReason(
+    repository.configuration.labels.hold,
+    repository.factoryHold,
+    own,
+  );
 }
 
 // The hold comment key for a launch the repository itself holds, when it
@@ -1121,7 +1111,7 @@ function repositoryHoldKey(
   own: number[],
 ): { hold?: string } {
   if (repository.paused !== null) return { hold: "repository-configuration" };
-  return factoryHold(repository, own) ? { hold: "factory-hold" } : {};
+  return heldByFactory(repository, own) ? { hold: "factory-hold" } : {};
 }
 
 // The PR a continuing issue's next launch would deliver: an ended run's or

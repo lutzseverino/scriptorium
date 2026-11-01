@@ -170,7 +170,7 @@ type Pass = {
   hasReviewPolicy: boolean;
   releaseHold?: number[] | null;
   // Open issues and PRs carrying `labels.hold`; null when the read failed.
-  hold?: number[] | null;
+  factoryHold?: number[] | null;
   releaseHeld: Map<number, number[]>;
 };
 
@@ -365,15 +365,15 @@ export function createHost(
     }
     if (pass.configuration.labels.hold !== undefined) {
       try {
-        pass.hold = await platform.readHold();
+        pass.factoryHold = await platform.readHold();
       } catch (error) {
-        pass.hold = null;
-        report(`${name} is held: factory hold read failed: ${error}`);
+        pass.factoryHold = null;
+        report(`${name} factory hold read failed: ${error}`);
       }
     }
     // Persist before settlement or launch decisions: a later clear read must
     // not erase a hold that affected a still-running attempt.
-    const observed = [...(pass.releaseHold ?? []), ...(pass.hold ?? [])];
+    const observed = [...(pass.releaseHold ?? []), ...(pass.factoryHold ?? [])];
     for (const run of runs.filter(
       (run) => run.repository === name && !run.releaseHoldSettled,
     )) {
@@ -399,7 +399,7 @@ export function createHost(
           const held = observation.ownedPullRequests.filter(
             (own) =>
               pass.releaseHold === null ||
-              pass.hold === null ||
+              pass.factoryHold === null ||
               (run.releaseHoldObserved ?? []).some((number) => number !== own),
           );
           if (held.length) {
@@ -461,7 +461,9 @@ export function createHost(
         ...(pass.releaseHold !== undefined && {
           releaseHold: pass.releaseHold,
         }),
-        ...(pass.hold !== undefined && { hold: pass.hold }),
+        ...(pass.factoryHold !== undefined && {
+          factoryHold: pass.factoryHold,
+        }),
         claims: await readClaims(
           name,
           platform,
@@ -921,7 +923,7 @@ export function createHost(
             ? (previous.releaseHoldObserved ?? [])
             : []),
           ...(pass.releaseHold ?? []),
-          ...(pass.hold ?? []),
+          ...(pass.factoryHold ?? []),
         ]),
       ],
       ...(decision.relaunch &&
@@ -1301,12 +1303,11 @@ export function createHost(
         }
         if (
           held?.length &&
-          pass.configuration?.labels.hold !== undefined &&
           !holds.some((hold) => hold.key === "factory-hold")
         ) {
           const reason = factoryHoldReason(
-            pass.configuration.labels.hold,
-            pass.hold,
+            pass.configuration?.labels.hold,
+            pass.factoryHold,
             held,
           );
           if (reason) holds.push({ key: "factory-hold", reason });
@@ -1403,10 +1404,11 @@ export function createHost(
 
   // Why the repository's factory hold pauses it this pass, or null.
   function factoryHeld(pass: Pass): string | null {
-    const label = pass.configuration?.labels.hold;
-    return label === undefined || pass.hold === undefined
-      ? null
-      : factoryHoldReason(label, pass.hold, []);
+    return factoryHoldReason(
+      pass.configuration?.labels.hold,
+      pass.factoryHold,
+      [],
+    );
   }
 
   // After launches have been stopped or finished, wait for their log and

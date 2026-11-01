@@ -199,7 +199,7 @@ export function repositoryPlatform(
     operation: string,
     kind: "issues" | "pullRequests",
     label: string,
-    hold: string,
+    subject: string,
   ): Promise<number[]> {
     const [owner, name] = path.split("/");
     const numbers = new Set<number>();
@@ -235,7 +235,7 @@ export function repositoryPlatform(
       const invalid = () =>
         new PlatformError(
           "invalidResponse",
-          `${hold} could not be read completely`,
+          `${subject} could not be read completely`,
         );
       if (
         result?.errors ||
