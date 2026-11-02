@@ -1,6 +1,6 @@
 # Installed rules
 
-These rules come from https://github.com/lutzseverino/repo-canon v0.19.1, profile factory.
+These rules come from https://github.com/lutzseverino/repo-canon v0.22.0, profile factory.
 Repository Standards installs and verifies them; adopt again to change them.
 Run `repo-standards rules <path>` to print the rules that cover a path.
 
@@ -13,6 +13,7 @@ Run `repo-standards rules <path>` to print the rules that cover a path.
   - `docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md`
   - `docs/adr/0005-default-the-factorys-own-comment-wording.md`
   - `docs/adr/0006-reach-the-hosting-platform-through-postern.md`
+  - `docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md`
   - `docs/adr/README.md`
   - `docs/development/README.md`
   - `docs/development/release.md`

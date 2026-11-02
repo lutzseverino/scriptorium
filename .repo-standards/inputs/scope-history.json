@@ -1,7 +1,7 @@
 {
   "format": "repo-standards/scope-history/v6",
   "evidence": "historical",
-  "inspection": "sha256:b2ac5440ad63366966348b8dd039e1af888bf34b3850ffb0f4c3c326b9fe2830",
+  "inspection": "sha256:d613bda48e8d2fcb1f0b46a2a484c0ba7cdfd712b9be16c360cf5ad0bf6a5366",
   "resolved": {
     "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
@@ -78,6 +78,7 @@
             "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
             "docs/adr/0005-default-the-factorys-own-comment-wording.md",
             "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
+            "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
             "docs/adr/README.md",
             "docs/development/README.md",
             "docs/development/release.md",
@@ -95,7 +96,7 @@
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/domain.md",
-        "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/domain.md"
+        "exact": "docs/agents/domain.md"
       },
       {
         "id": "factory-configuration",
@@ -340,7 +341,7 @@
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/issue-tracker.md",
-        "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md"
+        "exact": "docs/agents/issue-tracker.md"
       },
       {
         "id": "marked-license",
@@ -560,7 +561,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "code-review",
-        "source": "vendor/mattpocock-skills/skills/engineering/code-review"
+        "source": ".agents/skills/code-review"
       },
       {
         "id": "skill-codebase-design",
@@ -568,7 +569,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "codebase-design",
-        "source": "vendor/mattpocock-skills/skills/engineering/codebase-design"
+        "source": ".agents/skills/codebase-design"
       },
       {
         "id": "skill-diagnosing-bugs",
@@ -576,7 +577,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "diagnosing-bugs",
-        "source": "vendor/mattpocock-skills/skills/engineering/diagnosing-bugs"
+        "source": ".agents/skills/diagnosing-bugs"
       },
       {
         "id": "skill-domain-modeling",
@@ -584,7 +585,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "domain-modeling",
-        "source": "vendor/mattpocock-skills/skills/engineering/domain-modeling"
+        "source": ".agents/skills/domain-modeling"
       },
       {
         "id": "skill-grill-with-docs",
@@ -592,7 +593,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "grill-with-docs",
-        "source": "vendor/mattpocock-skills/skills/engineering/grill-with-docs"
+        "source": ".agents/skills/grill-with-docs"
       },
       {
         "id": "skill-grilling",
@@ -600,7 +601,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "grilling",
-        "source": "vendor/mattpocock-skills/skills/productivity/grilling"
+        "source": ".agents/skills/grilling"
       },
       {
         "id": "skill-implement",
@@ -608,7 +609,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "implement",
-        "source": "vendor/mattpocock-skills/skills/engineering/implement"
+        "source": ".agents/skills/implement"
       },
       {
         "id": "skill-improve-codebase-architecture",
@@ -616,7 +617,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "improve-codebase-architecture",
-        "source": "vendor/mattpocock-skills/skills/engineering/improve-codebase-architecture"
+        "source": ".agents/skills/improve-codebase-architecture"
       },
       {
         "id": "skill-orchestrate",
@@ -632,7 +633,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "pr",
-        "source": "vendor/mattpocock-skills/skills/engineering/pr"
+        "source": ".agents/skills/pr"
       },
       {
         "id": "skill-prototype",
@@ -640,7 +641,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "prototype",
-        "source": "vendor/mattpocock-skills/skills/engineering/prototype"
+        "source": ".agents/skills/prototype"
       },
       {
         "id": "skill-research",
@@ -648,7 +649,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "research",
-        "source": "vendor/mattpocock-skills/skills/engineering/research"
+        "source": ".agents/skills/research"
       },
       {
         "id": "skill-tdd",
@@ -656,7 +657,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "tdd",
-        "source": "vendor/mattpocock-skills/skills/engineering/tdd"
+        "source": ".agents/skills/tdd"
       },
       {
         "id": "skill-to-spec",
@@ -664,7 +665,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "to-spec",
-        "source": "vendor/mattpocock-skills/skills/engineering/to-spec"
+        "source": ".agents/skills/to-spec"
       },
       {
         "id": "skill-to-tickets",
@@ -672,7 +673,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "to-tickets",
-        "source": "vendor/mattpocock-skills/skills/engineering/to-tickets"
+        "source": ".agents/skills/to-tickets"
       },
       {
         "id": "skill-triage",
@@ -688,7 +689,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "wayfinder",
-        "source": "vendor/mattpocock-skills/skills/engineering/wayfinder"
+        "source": ".agents/skills/wayfinder"
       },
       {
         "id": "skill-writing-for-agents",
@@ -696,7 +697,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "writing-for-agents",
-        "source": "vendor/mattpocock-skills/skills/productivity/writing-for-agents"
+        "source": ".agents/skills/writing-for-agents"
       },
       {
         "id": "specification-template",
@@ -720,7 +721,19 @@
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/triage-labels.md",
-        "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/triage-labels.md"
+        "exact": "docs/agents/triage-labels.md"
+      },
+      {
+        "id": "typescript-astro-stack",
+        "checks": [],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/typescript-astro-stack.md",
+        "targets": {
+          "paths": [],
+          "directories": []
+        },
+        "no-scope": true
       },
       {
         "id": "typescript-node-stack",
@@ -755,6 +768,18 @@
           ],
           "directories": []
         }
+      },
+      {
+        "id": "typescript-vite-stack",
+        "checks": [],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/typescript-vite-stack.md",
+        "targets": {
+          "paths": [],
+          "directories": []
+        },
+        "no-scope": true
       },
       {
         "id": "validator-command",
@@ -863,7 +888,7 @@
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/domain.md",
-        "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/domain.md"
+        "exact": "docs/agents/domain.md"
       },
       {
         "id": "factory-configuration",
@@ -1102,7 +1127,7 @@
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/issue-tracker.md",
-        "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md"
+        "exact": "docs/agents/issue-tracker.md"
       },
       {
         "id": "marked-license",
@@ -1319,7 +1344,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "code-review",
-        "source": "vendor/mattpocock-skills/skills/engineering/code-review"
+        "source": ".agents/skills/code-review"
       },
       {
         "id": "skill-codebase-design",
@@ -1327,7 +1352,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "codebase-design",
-        "source": "vendor/mattpocock-skills/skills/engineering/codebase-design"
+        "source": ".agents/skills/codebase-design"
       },
       {
         "id": "skill-diagnosing-bugs",
@@ -1335,7 +1360,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "diagnosing-bugs",
-        "source": "vendor/mattpocock-skills/skills/engineering/diagnosing-bugs"
+        "source": ".agents/skills/diagnosing-bugs"
       },
       {
         "id": "skill-domain-modeling",
@@ -1343,7 +1368,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "domain-modeling",
-        "source": "vendor/mattpocock-skills/skills/engineering/domain-modeling"
+        "source": ".agents/skills/domain-modeling"
       },
       {
         "id": "skill-grill-with-docs",
@@ -1351,7 +1376,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "grill-with-docs",
-        "source": "vendor/mattpocock-skills/skills/engineering/grill-with-docs"
+        "source": ".agents/skills/grill-with-docs"
       },
       {
         "id": "skill-grilling",
@@ -1359,7 +1384,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "grilling",
-        "source": "vendor/mattpocock-skills/skills/productivity/grilling"
+        "source": ".agents/skills/grilling"
       },
       {
         "id": "skill-implement",
@@ -1367,7 +1392,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "implement",
-        "source": "vendor/mattpocock-skills/skills/engineering/implement"
+        "source": ".agents/skills/implement"
       },
       {
         "id": "skill-improve-codebase-architecture",
@@ -1375,7 +1400,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "improve-codebase-architecture",
-        "source": "vendor/mattpocock-skills/skills/engineering/improve-codebase-architecture"
+        "source": ".agents/skills/improve-codebase-architecture"
       },
       {
         "id": "skill-orchestrate",
@@ -1391,7 +1416,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "pr",
-        "source": "vendor/mattpocock-skills/skills/engineering/pr"
+        "source": ".agents/skills/pr"
       },
       {
         "id": "skill-prototype",
@@ -1399,7 +1424,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "prototype",
-        "source": "vendor/mattpocock-skills/skills/engineering/prototype"
+        "source": ".agents/skills/prototype"
       },
       {
         "id": "skill-research",
@@ -1407,7 +1432,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "research",
-        "source": "vendor/mattpocock-skills/skills/engineering/research"
+        "source": ".agents/skills/research"
       },
       {
         "id": "skill-tdd",
@@ -1415,7 +1440,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "tdd",
-        "source": "vendor/mattpocock-skills/skills/engineering/tdd"
+        "source": ".agents/skills/tdd"
       },
       {
         "id": "skill-to-spec",
@@ -1423,7 +1448,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "to-spec",
-        "source": "vendor/mattpocock-skills/skills/engineering/to-spec"
+        "source": ".agents/skills/to-spec"
       },
       {
         "id": "skill-to-tickets",
@@ -1431,7 +1456,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "to-tickets",
-        "source": "vendor/mattpocock-skills/skills/engineering/to-tickets"
+        "source": ".agents/skills/to-tickets"
       },
       {
         "id": "skill-triage",
@@ -1447,7 +1472,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "wayfinder",
-        "source": "vendor/mattpocock-skills/skills/engineering/wayfinder"
+        "source": ".agents/skills/wayfinder"
       },
       {
         "id": "skill-writing-for-agents",
@@ -1455,7 +1480,7 @@
         "fixes": [],
         "kind": "skill",
         "name": "writing-for-agents",
-        "source": "vendor/mattpocock-skills/skills/productivity/writing-for-agents"
+        "source": ".agents/skills/writing-for-agents"
       },
       {
         "id": "specification-template",
@@ -1479,7 +1504,61 @@
         "fixes": [],
         "kind": "file",
         "target": "docs/agents/triage-labels.md",
-        "exact": "vendor/mattpocock-skills/skills/engineering/setup-matt-pocock-skills/triage-labels.md"
+        "exact": "docs/agents/triage-labels.md"
+      },
+      {
+        "id": "typescript-astro-stack",
+        "checks": [
+          {
+            "id": "typescript-astro-stack-manifests",
+            "run": {
+              "executable": "node",
+              "script": "operations/check-typescript-astro-stack.mjs",
+              "resources": [
+                "operations/lib/typescript-node-stack.mjs",
+                "operations/lib/stack-files.mjs",
+                "operations/lib/typescript-web-stack.mjs",
+                "operations/lib/stack-check.mjs",
+                "operations/lib/local-markdown-links.mjs"
+              ],
+              "arguments": []
+            },
+            "prerequisite": {
+              "version-arguments": [
+                "--version"
+              ],
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+            },
+            "timeout-seconds": 30
+          }
+        ],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/typescript-astro-stack.md",
+        "rules": "rules/typescript-web-stacks.md",
+        "discovery": "discovery/typescript-astro-stack.md",
+        "discovery-script": {
+          "run": {
+            "executable": "node",
+            "script": "discovery/draft-typescript-astro-stack-scope.mjs",
+            "resources": [
+              "operations/lib/typescript-node-stack.mjs",
+              "operations/lib/stack-files.mjs",
+              "operations/lib/typescript-web-stack.mjs",
+              "operations/lib/stack-scope.mjs",
+              "operations/lib/local-markdown-links.mjs"
+            ],
+            "arguments": []
+          },
+          "prerequisite": {
+            "version-arguments": [
+              "--version"
+            ],
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+          },
+          "timeout-seconds": 60
+        },
+        "optional": true
       },
       {
         "id": "typescript-node-stack",
@@ -1515,6 +1594,63 @@
             "script": "discovery/draft-typescript-node-stack-scope.mjs",
             "resources": [
               "operations/lib/typescript-node-stack.mjs",
+              "operations/lib/stack-files.mjs",
+              "operations/lib/typescript-web-stack.mjs",
+              "operations/lib/stack-scope.mjs",
+              "operations/lib/local-markdown-links.mjs"
+            ],
+            "arguments": []
+          },
+          "prerequisite": {
+            "version-arguments": [
+              "--version"
+            ],
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+          },
+          "timeout-seconds": 60
+        },
+        "optional": true
+      },
+      {
+        "id": "typescript-vite-stack",
+        "checks": [
+          {
+            "id": "typescript-vite-stack-manifests",
+            "run": {
+              "executable": "node",
+              "script": "operations/check-typescript-vite-stack.mjs",
+              "resources": [
+                "operations/lib/typescript-node-stack.mjs",
+                "operations/lib/stack-files.mjs",
+                "operations/lib/typescript-web-stack.mjs",
+                "operations/lib/stack-check.mjs",
+                "operations/lib/local-markdown-links.mjs"
+              ],
+              "arguments": []
+            },
+            "prerequisite": {
+              "version-arguments": [
+                "--version"
+              ],
+              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+            },
+            "timeout-seconds": 30
+          }
+        ],
+        "fixes": [],
+        "kind": "repository",
+        "guidance": "guidance/typescript-vite-stack.md",
+        "rules": "rules/typescript-web-stacks.md",
+        "discovery": "discovery/typescript-vite-stack.md",
+        "discovery-script": {
+          "run": {
+            "executable": "node",
+            "script": "discovery/draft-typescript-vite-stack-scope.mjs",
+            "resources": [
+              "operations/lib/typescript-node-stack.mjs",
+              "operations/lib/stack-files.mjs",
+              "operations/lib/typescript-web-stack.mjs",
+              "operations/lib/stack-scope.mjs",
               "operations/lib/local-markdown-links.mjs"
             ],
             "arguments": []
@@ -1540,13 +1676,13 @@
     ]
   },
   "discovery": {
-    "identity": "sha256:5e867812d129e137d0d11f5718b56760e5a6fa12a0205f002da80cb41fd7cdfb",
+    "identity": "sha256:1d21b3ef8a694a4923abd587e40151946755a245668727854840f8c0d64fcf1b",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
         {
           "id": "documentation",
-          "coverage": "Drafted from the repository tree by `discovery/draft-documentation-scope.mjs`: every file Git keeps under the documentation root `docs`, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each README.md outside the documentation roots. Link-repair files and move destinations enter when the work needs them. Prior confirmed documentation decisions are retained. Added ADRs 0003 through 0006 belong to the maintained docs/adr root. Excluded copied source inputs (.repo-standards/), vendor/, installed .agents/skills/ and .claude/skills/, and test/fixtures/ as non-documentation; exact and separately owned agent docs remain excluded.",
+          "coverage": "Drafted from the repository tree by `discovery/draft-documentation-scope.mjs`: every file Git keeps under the documentation root `docs`, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each README.md outside the documentation roots. Link-repair files and move destinations enter when the work needs them.",
           "candidates": [
             {
               "path": "GLOSSARY.md",
@@ -1613,6 +1749,14 @@
               ]
             },
             {
+              "path": "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md"
+              ]
+            },
+            {
               "path": "docs/adr/README.md",
               "decision": "include",
               "reason": "A file under the documentation root `docs`.",
@@ -1642,14 +1786,6 @@
               "reason": "Owned by the `issue-tracker-configuration` declaration.",
               "evidence": [
                 "docs/agents/issue-tracker.md"
-              ]
-            },
-            {
-              "path": "docs/agents/project.md",
-              "decision": "exclude",
-              "reason": "Owned by the `project-agent-guidance` declaration.",
-              "evidence": [
-                "docs/agents/project.md"
               ]
             },
             {
@@ -1730,6 +1866,22 @@
           "unresolved": []
         },
         {
+          "id": "typescript-astro-stack",
+          "coverage": "Drafted from manifests and workspace configuration by `discovery/draft-typescript-astro-stack-scope.mjs`: one `package.json` per Project, included when it matches the stack's manifest facts and excluded naming its differences otherwise. A maintained workspace root package is a Project alongside its members; a shared-only root is not. Uncertain root membership stays unresolved. A root package without workspace members is a Project. The repository holds no matching web Project, so the declaration has no scope.",
+          "candidates": [
+            {
+              "path": "package.json",
+              "decision": "exclude",
+              "reason": "`package.json` has no evidence of membership in typescript-astro; assess independently, without assigning a web stack from tool conformity alone.",
+              "evidence": [
+                "package.json"
+              ]
+            }
+          ],
+          "unresolved": [],
+          "noScope": true
+        },
+        {
           "id": "typescript-node-stack",
           "coverage": "The sole root package @lutzseverino/scriptorium is the repository Project: package.json names start, typecheck and tests over src/ and test/, and there are no workspace members. Toolchain PR #56 is merged. The manifest and pnpm-lock.yaml match pnpm 11, Node 24/26, oxlint 1, Prettier 3 and validate. TypeScript 7.0.2, node --test, required CI Test aggregating both Node jobs running pnpm validate, and docs/development/README.md Setup and validation establish the contextual stack rules. Copied source inputs and fixture packages are not Projects.",
           "candidates": [
@@ -1744,6 +1896,22 @@
             }
           ],
           "unresolved": []
+        },
+        {
+          "id": "typescript-vite-stack",
+          "coverage": "Drafted from manifests and workspace configuration by `discovery/draft-typescript-vite-stack-scope.mjs`: one `package.json` per Project, included when it matches the stack's manifest facts and excluded naming its differences otherwise. A maintained workspace root package is a Project alongside its members; a shared-only root is not. Uncertain root membership stays unresolved. A root package without workspace members is a Project. The repository holds no matching web Project, so the declaration has no scope.",
+          "candidates": [
+            {
+              "path": "package.json",
+              "decision": "exclude",
+              "reason": "`package.json` has no evidence of membership in typescript-vite; assess independently, without assigning a web stack from tool conformity alone.",
+              "evidence": [
+                "package.json"
+              ]
+            }
+          ],
+          "unresolved": [],
+          "noScope": true
         }
       ]
     },
@@ -1752,7 +1920,7 @@
       "targets": {
         "GLOSSARY.md": {
           "type": "file",
-          "sha256": "4c126c920cbbaec2fa9f6ea7ad43e2d38cde440163ae5dc03755c630104af5c4",
+          "sha256": "d10db0bc3179e042b1a355aecd0744d544ecd40556a12411e3e4eb651b95404b",
           "executable": false
         },
         "docs/README.md": {
@@ -1790,19 +1958,24 @@
           "sha256": "05fc9433a09405f6cfcc15cfb0d9a3633aec4950d12901ca38b1896762f25fe2",
           "executable": false
         },
+        "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md": {
+          "type": "file",
+          "sha256": "e7dcde70183fa12e5101dbd9066a4055cc26c366331d7c7fde37985ab45f236d",
+          "executable": false
+        },
         "docs/adr/README.md": {
           "type": "file",
-          "sha256": "6f191deb7f2c0f3b7eb851721e440a66dde9df890d4c063c9ef90fdcf98afba9",
+          "sha256": "38bca3491f2572759fe07d9ff1424aa242f4ce6d7f4758a6b5e9f343dd0e39d8",
           "executable": false
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "b1609dd57d104c096df9f5d7a41e4b8804b8b27cacad0a7c81746c340ef54fe9",
+          "sha256": "0c95fa852f2a116981f3561541dadd1bacfc349aa325cc1fcdba941168b8f62b",
           "executable": false
         },
         "docs/development/release.md": {
           "type": "file",
-          "sha256": "2e15a846140ca8df8dfd791c06d4abafbe096af045d48e5585541879d57f0576",
+          "sha256": "155c0765ef125468f36fce05cc306d2d76ead0be48b697b546a4eb8b6047b1a3",
           "executable": false
         },
         "docs/usage/README.md": {
@@ -1812,22 +1985,22 @@
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "a49cd3873662a603ed76c39c14113fb83fc365952ff0018eeb6d7adb1524152c",
+          "sha256": "e5c5f03415ff0405e75e153971987dfcf69ea8b2d1b58e8cc1957daae4ea4e57",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "73fa8e127c01d0e6831a1fa805e502b46bb2d9655be558b273269b48e2b26d9d",
+          "sha256": "4e86c5b01b5f2df3fe2adaffa7fa9d4872a92a73df5e949ad0aafb3f0543eb9a",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "796044a59fb306903a9f874c2551c5436acecf19035d536e8faa1dc8715f337c",
+          "sha256": "71e032fb31d9b866d5f61fa41dfe4a292f150ded9428f7b94d2cbc6f9e6a0de3",
           "executable": false
         },
         "package.json": {
           "type": "file",
-          "sha256": "5a1ff051de7e9df3639c474ac76f0dfaf4876efec382b18127dbcc6019beaa71",
+          "sha256": "9cd811d6f36cc72786027cd5ddb603a9c0460634628614294344e8b7a38e66d4",
           "executable": false
         }
       }
@@ -1902,6 +2075,14 @@
             ]
           },
           {
+            "path": "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md"
+            ]
+          },
+          {
             "path": "docs/adr/README.md",
             "decision": "include",
             "reason": "A file under the documentation root `docs`.",
@@ -1931,14 +2112,6 @@
             "reason": "Owned by the `issue-tracker-configuration` declaration.",
             "evidence": [
               "docs/agents/issue-tracker.md"
-            ]
-          },
-          {
-            "path": "docs/agents/project.md",
-            "decision": "exclude",
-            "reason": "Owned by the `project-agent-guidance` declaration.",
-            "evidence": [
-              "docs/agents/project.md"
             ]
           },
           {
@@ -2001,6 +2174,22 @@
         "unresolved": []
       },
       {
+        "id": "typescript-astro-stack",
+        "coverage": "Drafted from manifests and workspace configuration by `discovery/draft-typescript-astro-stack-scope.mjs`: one `package.json` per Project, included when it matches the stack's manifest facts and excluded naming its differences otherwise. A maintained workspace root package is a Project alongside its members; a shared-only root is not. Uncertain root membership stays unresolved. A root package without workspace members is a Project. The repository holds no matching web Project, so the declaration has no scope.",
+        "candidates": [
+          {
+            "path": "package.json",
+            "decision": "exclude",
+            "reason": "`package.json` has no evidence of membership in typescript-astro; assess independently, without assigning a web stack from tool conformity alone.",
+            "evidence": [
+              "package.json"
+            ]
+          }
+        ],
+        "unresolved": [],
+        "noScope": true
+      },
+      {
         "id": "typescript-node-stack",
         "coverage": "Drafted from manifests and workspace configuration by `discovery/draft-typescript-node-stack-scope.mjs`: one `package.json` per Project, included when it matches the stack's manifest facts and excluded naming its differences otherwise. A maintained workspace root package is a Project alongside its members; a shared-only root is not. Uncertain root membership stays unresolved. A root package without workspace members is a Project.",
         "candidates": [
@@ -2010,11 +2199,28 @@
             "reason": "The Project of `package.json` matches the typescript-node stack's manifest facts: pnpm 11, its lockfile, Node.js 24 or 26, oxlint 1, Prettier 3 and a validate script.",
             "evidence": [
               "package.json",
-              "pnpm-lock.yaml"
+              "pnpm-lock.yaml",
+              "pnpm-workspace.yaml"
             ]
           }
         ],
         "unresolved": []
+      },
+      {
+        "id": "typescript-vite-stack",
+        "coverage": "Drafted from manifests and workspace configuration by `discovery/draft-typescript-vite-stack-scope.mjs`: one `package.json` per Project, included when it matches the stack's manifest facts and excluded naming its differences otherwise. A maintained workspace root package is a Project alongside its members; a shared-only root is not. Uncertain root membership stays unresolved. A root package without workspace members is a Project. The repository holds no matching web Project, so the declaration has no scope.",
+        "candidates": [
+          {
+            "path": "package.json",
+            "decision": "exclude",
+            "reason": "`package.json` has no evidence of membership in typescript-vite; assess independently, without assigning a web stack from tool conformity alone.",
+            "evidence": [
+              "package.json"
+            ]
+          }
+        ],
+        "unresolved": [],
+        "noScope": true
       }
     ],
     "declarations": [
@@ -2043,9 +2249,21 @@
         "executable": false
       },
       {
+        "id": "typescript-astro-stack",
+        "source": "discovery/typescript-astro-stack.md",
+        "sha256": "2c41b18bc7757bc2f6b4f26cdebec67f8c9c70b25ac636562a27843d8ba4c615",
+        "executable": false
+      },
+      {
         "id": "typescript-node-stack",
         "source": "discovery/typescript-node-stack.md",
-        "sha256": "0ac8fb30073e6b656d8456e1f0c7cd21a5e17668494402d39ee103270824e3f9",
+        "sha256": "d23ae9513f022862a8be9be8d8ca30ced7ed8febef21a27ab3b3e34cbfeba937",
+        "executable": false
+      },
+      {
+        "id": "typescript-vite-stack",
+        "source": "discovery/typescript-vite-stack.md",
+        "sha256": "d26c9725c371c74235feef40d4cfae4d6e5c5ad4d6da13e69603155cfe06d03b",
         "executable": false
       }
     ],
@@ -2073,12 +2291,12 @@
         },
         ".agents/skills/babysit/platform.mjs": {
           "type": "file",
-          "sha256": "dccb0f3e7c2f89563ed25ca0e4bf1a479af5b65732ad08fbed38304263bc8b47",
+          "sha256": "bd0ad7346873e5bc4de7f33b5b9b1ea682e50606b73a4914b6a6c0941bf5ec2b",
           "executable": false
         },
         ".agents/skills/babysit/pull-request-reviewer.mjs": {
           "type": "file",
-          "sha256": "77fb9197a4365dde57cba91cd4ff4c3c52eb55a275d9eb6b3fa494bac4cc3809",
+          "sha256": "2d9a9c62876ac00ef87ad820c5dbb2fbcd852aa6590273875d445d99fe21eb49",
           "executable": false
         },
         ".agents/skills/babysit/request.mjs": {
@@ -2103,7 +2321,7 @@
         },
         ".agents/skills/babysit/wait.mjs": {
           "type": "file",
-          "sha256": "abb938c0df67cb490a92171718fd1131d48c25427f22f2d3ef0be5cd220c3f1d",
+          "sha256": "1da6442ae15f91da3005032c4a53b0ae207de9d6b4bf97e95b5848d508577851",
           "executable": false
         },
         ".agents/skills/code-review/SKILL.md": {
@@ -2223,7 +2441,7 @@
         },
         ".agents/skills/orchestrate/SKILL.md": {
           "type": "file",
-          "sha256": "3c19d4dabec8537b928b380f2fbd5edce565a2dfa0c761592b1eef30677dc83e",
+          "sha256": "3e2ad88cc78105cb19d12166f22b4c70e3fb151e9bf56ad53d5abd7b0f0f231c",
           "executable": false
         },
         ".agents/skills/orchestrate/agents/openai.yaml": {
@@ -2468,7 +2686,7 @@
         },
         ".factory/config.json": {
           "type": "file",
-          "sha256": "46b2ccd9b9bb783111d2e64d07e43337061681673dfbbed832ca04c1af90fba9",
+          "sha256": "54636b6ccd37b42a8b13960704f52f23b4596b361f4f35840ca9923fa599fa86",
           "executable": false
         },
         ".gitattributes": {
@@ -2573,7 +2791,7 @@
         },
         "GLOSSARY.md": {
           "type": "file",
-          "sha256": "4c126c920cbbaec2fa9f6ea7ad43e2d38cde440163ae5dc03755c630104af5c4",
+          "sha256": "d10db0bc3179e042b1a355aecd0744d544ecd40556a12411e3e4eb651b95404b",
           "executable": false
         },
         "LICENSE": {
@@ -2621,9 +2839,14 @@
           "sha256": "05fc9433a09405f6cfcc15cfb0d9a3633aec4950d12901ca38b1896762f25fe2",
           "executable": false
         },
+        "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md": {
+          "type": "file",
+          "sha256": "e7dcde70183fa12e5101dbd9066a4055cc26c366331d7c7fde37985ab45f236d",
+          "executable": false
+        },
         "docs/adr/README.md": {
           "type": "file",
-          "sha256": "6f191deb7f2c0f3b7eb851721e440a66dde9df890d4c063c9ef90fdcf98afba9",
+          "sha256": "38bca3491f2572759fe07d9ff1424aa242f4ce6d7f4758a6b5e9f343dd0e39d8",
           "executable": false
         },
         "docs/agents/README.md": {
@@ -2641,11 +2864,6 @@
           "sha256": "afd6852a80185217bd28aa5cbe456bef1e85be25be7bd1fba382d5b8ee428325",
           "executable": false
         },
-        "docs/agents/project.md": {
-          "type": "file",
-          "sha256": "f7c4346a54a2ca4aca95841afd1652d241b1c81712b8ee202bc361371b9f73d6",
-          "executable": false
-        },
         "docs/agents/triage-labels.md": {
           "type": "file",
           "sha256": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d",
@@ -2653,12 +2871,12 @@
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "b1609dd57d104c096df9f5d7a41e4b8804b8b27cacad0a7c81746c340ef54fe9",
+          "sha256": "0c95fa852f2a116981f3561541dadd1bacfc349aa325cc1fcdba941168b8f62b",
           "executable": false
         },
         "docs/development/release.md": {
           "type": "file",
-          "sha256": "2e15a846140ca8df8dfd791c06d4abafbe096af045d48e5585541879d57f0576",
+          "sha256": "155c0765ef125468f36fce05cc306d2d76ead0be48b697b546a4eb8b6047b1a3",
           "executable": false
         },
         "docs/usage/README.md": {
@@ -2668,17 +2886,17 @@
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "a49cd3873662a603ed76c39c14113fb83fc365952ff0018eeb6d7adb1524152c",
+          "sha256": "e5c5f03415ff0405e75e153971987dfcf69ea8b2d1b58e8cc1957daae4ea4e57",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "73fa8e127c01d0e6831a1fa805e502b46bb2d9655be558b273269b48e2b26d9d",
+          "sha256": "4e86c5b01b5f2df3fe2adaffa7fa9d4872a92a73df5e949ad0aafb3f0543eb9a",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "796044a59fb306903a9f874c2551c5436acecf19035d536e8faa1dc8715f337c",
+          "sha256": "71e032fb31d9b866d5f61fa41dfe4a292f150ded9428f7b94d2cbc6f9e6a0de3",
           "executable": false
         },
         "operations/lib/rendered-markdown.mjs": {
@@ -2688,17 +2906,22 @@
         },
         "package.json": {
           "type": "file",
-          "sha256": "5a1ff051de7e9df3639c474ac76f0dfaf4876efec382b18127dbcc6019beaa71",
+          "sha256": "9cd811d6f36cc72786027cd5ddb603a9c0460634628614294344e8b7a38e66d4",
           "executable": false
         },
         "pnpm-lock.yaml": {
           "type": "file",
-          "sha256": "7d66aa2556c57af6ea5d457f6f8393b61d7700fe25e19c6c7ee1d24e6276eb56",
+          "sha256": "6a2286eb69927873a6d5141494733fe85d0d9e92ff7bceeffaf669a5dacc8ff6",
+          "executable": false
+        },
+        "pnpm-workspace.yaml": {
+          "type": "file",
+          "sha256": "2abdb770994f0ef1d8be24f7dd521b50c88629e08e4aeb9fa98f6149b1b55209",
           "executable": false
         },
         "scripts/validate-issue-contract.mjs": {
           "type": "file",
-          "sha256": "725b1494370348a99dc153f6833541014d5f2c70c80688046cc3219fa11a0a64",
+          "sha256": "f5b14e32000fddc95e27f94fc91f9166ceb02b0d3ae15df26d3a656230868939",
           "executable": false
         },
         "scripts/validate.mjs": {
@@ -2716,19 +2939,14 @@
           "sha256": "72aff252119e391fba055ef7217d7ea85fdca4ebcd6800796cf3b4f3028d001a",
           "executable": false
         },
-        "src/comment-history.ts": {
-          "type": "file",
-          "sha256": "20cf435113157d95c0ca1acba7196e9cb59651a03b8668b1fa0aba4805770baa",
-          "executable": false
-        },
         "src/comment-template.ts": {
           "type": "file",
-          "sha256": "1a7300a047926ecc1686827b739ff56db337309452e43a5bf9115cc67edb893f",
+          "sha256": "41c55b484d3e8a4ccf06bffcc472e06073d8d406e1da5f4fc44505b9498cfe77",
           "executable": false
         },
-        "src/contract.ts": {
+        "src/contract-result.ts": {
           "type": "file",
-          "sha256": "425aa8d55d4d530d5f5d48d97d3e6ed50c6bc6a9d32a1b4fb073c0b59ca658c7",
+          "sha256": "b78f24982498e0cac592cf19bae36a69da6555bc5377f5c1ab8960d450bf675d",
           "executable": false
         },
         "src/events.ts": {
@@ -2738,12 +2956,12 @@
         },
         "src/factory-configuration.ts": {
           "type": "file",
-          "sha256": "4bd02e3a568762b99eeef27f58781ee8d22180d5a03fb78fbf8f5e8c4bd28479",
+          "sha256": "2aaa33b1a7d8548597aae201e97ae99bc52b298d71470b57cc9f5defa2dde524",
           "executable": false
         },
         "src/factory.ts": {
           "type": "file",
-          "sha256": "6768d3fdba148378433671453ade89577f7c867dccef6a040f66f8d68a961c4c",
+          "sha256": "eea02a220ce212f27ce363740d197ff2cc96c1f9b532636ed516ec0bf4e48bed",
           "executable": false
         },
         "src/github-token.ts": {
@@ -2751,24 +2969,34 @@
           "sha256": "817a9d75d15fe50344c8264429788e4bc916f7fba48c6da0da5741ccf88ef98b",
           "executable": false
         },
+        "src/hold-comments.ts": {
+          "type": "file",
+          "sha256": "19f66ca3a4a6a1bdd1f2819dc59ed64cd6930cb4cdc979144268d1d7dee29c37",
+          "executable": false
+        },
         "src/host-configuration.ts": {
           "type": "file",
-          "sha256": "a283e8f73f080bfafb8340018cded4fd871fff30ea1c84822da4e58ab9bba000",
+          "sha256": "d42281867b8a6b299f53b5a26fc39c98ed461898bf9d1b95a1b748c470743413",
           "executable": false
         },
         "src/host.ts": {
           "type": "file",
-          "sha256": "64d21f97ed963796c5ed0be672e37dfbef14cb63188d8f6160989471187a3ab9",
+          "sha256": "0e472b04d4948ba490da5fa29c8048e100630a7cf746b993b579fab7024bd56c",
           "executable": false
         },
         "src/image-retention.ts": {
           "type": "file",
-          "sha256": "0a2a2873b7362b5a294281bece1efaab25dccc991865cf15e5253fbbeae675e3",
+          "sha256": "cd51ae858d7384f6e0a3949943d7f7fe36cf22030c223c3189e18d2a6702503e",
+          "executable": false
+        },
+        "src/image-storage.ts": {
+          "type": "file",
+          "sha256": "af5f3e14787cb087978f94040a10ce9e083fa6efc472730a2982fc35f84a5786",
           "executable": false
         },
         "src/main.ts": {
           "type": "file",
-          "sha256": "fa966daf76d4cbdb56d3ef434ef09c2f4edbe862d5b5a2fb61a74909725ce985",
+          "sha256": "ac946b9f3f489eb6d49c4ce6c9ff7342198998a0799594876985490d75c50408",
           "executable": false
         },
         "src/owner.ts": {
@@ -2783,22 +3011,22 @@
         },
         "src/platform.ts": {
           "type": "file",
-          "sha256": "a7a1be6076b99d964ee96e8ab7b467406cabdb8e1c4092596a9ad903b7f312cb",
+          "sha256": "07a1aa1f071733bfaeddf1ee28f0c92f274fbaf77f0543de03ec29697617dcba",
           "executable": false
         },
         "src/providers.ts": {
           "type": "file",
-          "sha256": "422d3d708d39703b49227745e521642d4a441aae6312b27ed9e5ba34f4152220",
+          "sha256": "3cc3fc5afb10d48683b6617d97d27335941300e5159b6f57fe79edfdbf138da3",
           "executable": false
         },
         "src/providers/claude-code.ts": {
           "type": "file",
-          "sha256": "330a05398c9289803116917c03e5a01eefe5646fb57f2cf5be0f5319221910a1",
+          "sha256": "21d10cb7410910b5e2428f58cfa5226b0ec4eed9a6cb367853d5925982a43130",
           "executable": false
         },
         "src/providers/codex.ts": {
           "type": "file",
-          "sha256": "c5df8eecacc43b8ac43044705df9b084b4d96a130a66cf0edc87017b2597802b",
+          "sha256": "ea28e7df9aeea2de1cc6a8e0ed7ec58de5a1477176181f9be169c4e6a70a8d5c",
           "executable": false
         },
         "src/providers/launch.ts": {
@@ -2818,7 +3046,7 @@
         },
         "src/readiness.ts": {
           "type": "file",
-          "sha256": "0282cf23a0c35fa235dbbc979fe58d62ec7337ede12e96b94118fa97b5c57d70",
+          "sha256": "949b5019b5f5a27b9647f9f6f7fa1b63e41d9306f07b8083692316bfd67aec7d",
           "executable": false
         },
         "src/redaction.ts": {
@@ -2838,17 +3066,17 @@
         },
         "src/run-outcome.ts": {
           "type": "file",
-          "sha256": "17cda8e6a3eaac69764e9c8b3d780b56bc1358b27b61ee35af0b8ca79ff01dda",
+          "sha256": "15ecfd205198dedd15ae3e90e270182202c6e466ca4265aee007c5cfa563010b",
           "executable": false
         },
         "src/sandbox-image.ts": {
           "type": "file",
-          "sha256": "8619a2405bb2444f629711884417eefabe3d5223634b695445763c88ea510867",
+          "sha256": "cc5ab174161aefea24ef2942879498921ffc98ee00fa8f0976bf9f8273c6189e",
           "executable": false
         },
         "src/status.ts": {
           "type": "file",
-          "sha256": "0ff78ee5f222a5ea5219cf98da49de97b7b839bd223af1f4f15f98436899dfc1",
+          "sha256": "c0441e1a0715c1df6b20b2915d3a03561c5c082eeaf815ae1dede571049872e9",
           "executable": false
         },
         "src/usage.ts": {
@@ -2873,7 +3101,7 @@
         },
         "test/boundary.test.ts": {
           "type": "file",
-          "sha256": "2a2d861de93e98d5152f2aa01dd514ff61c001bcf12ba55229d67a0dc8b3ebc1",
+          "sha256": "753a344efff7947354de06f67fc5b2c6e74d2275f25feb88b2670cf3bae04880",
           "executable": false
         },
         "test/claude-code.test.ts": {
@@ -2893,22 +3121,22 @@
         },
         "test/comment-template.test.ts": {
           "type": "file",
-          "sha256": "a2a95daf4a5a235600174a2ad00fdad7de00c3736ccdb73012bb3cf830e7038f",
+          "sha256": "f8797d21b2e93a5bd2ad2b055a9a3bc7b38a9dbf491df80ae7ec4843ac8dbe66",
           "executable": false
         },
-        "test/contract-fixture.ts": {
+        "test/contract-result-fixture.ts": {
           "type": "file",
-          "sha256": "ba82ef676370315097fa9b1af4891f25c2fee6404eb2db2dfe66c88d69eb41bd",
+          "sha256": "c5b261584c6e2c88901e63f98d7b7369d51c93d3283483d0153b500d9c1e9bac",
           "executable": false
         },
         "test/factory-configuration.test.ts": {
           "type": "file",
-          "sha256": "8f2c3dbbdab11188d08b4d009a6168a912692fd048ab31d6f6fd446498dc806d",
+          "sha256": "907e4ee6158ad5687396d85f1fdd38058a0b7cf12ed2b49f81a372d1aeda034f",
           "executable": false
         },
         "test/factory.test.ts": {
           "type": "file",
-          "sha256": "fb5faa4d18c16b14b2ac2cf57773c05d70889e954c5bce767f05668ac583296c",
+          "sha256": "8c7e609039edbef746f649703fa5afbedc6af427dad176cd06f7703ff95872dd",
           "executable": false
         },
         "test/fakes.ts": {
@@ -2938,17 +3166,17 @@
         },
         "test/fixtures/factory-configuration/malformed-objects.json": {
           "type": "file",
-          "sha256": "0307f9331c47ad6adac514a0f01da601cd43e69fcb105f4d078bb2126d2d9329",
+          "sha256": "f2a75937503e08bd37a3b89331ce4f0e3c829e6a45e7abce9ee81e6fdc043131",
           "executable": false
         },
         "test/fixtures/factory-configuration/malformed.json": {
           "type": "file",
-          "sha256": "bfc4ec676cbd2f59203ec9685f971e36d167507a2ac84e2ddb8bacd2c3a74a5e",
+          "sha256": "d33dd0fd3a413230eed0a5aef7631af2e535d3486adcc62d9769e224b440a020",
           "executable": false
         },
         "test/fixtures/factory-configuration/missing-labels.json": {
           "type": "file",
-          "sha256": "f292965e3043460f4380380527f6177f22fff01971ecb64a97feb48d8fa0f594",
+          "sha256": "0b4e5d26ef3fad766b529d1961b45cbbae35e0f4a43d68539ba76a94c44c9365",
           "executable": false
         },
         "test/fixtures/factory-configuration/missing.json": {
@@ -2963,17 +3191,17 @@
         },
         "test/fixtures/factory-configuration/overlapping-labels.json": {
           "type": "file",
-          "sha256": "ba71bd9679329c372da9792fe59e656c8dea917ddd937c2c98d12d90c8c02cb7",
+          "sha256": "8842d5c235df41b32cf2296c296f9109e5bc2976c13cd7d324e8113428572ee5",
           "executable": false
         },
         "test/fixtures/factory-configuration/unknown.json": {
           "type": "file",
-          "sha256": "56a11ad027e04744d770ea0300ed3b457a7c127f8520c2609012be03be1f9ba6",
+          "sha256": "d07cbb675ce7dc425e1d792c7ce8571b95cc1b78d7cccb6a025152c119494b58",
           "executable": false
         },
         "test/fixtures/factory-configuration/valid.json": {
           "type": "file",
-          "sha256": "1e504e3d04787e11ca808deea0994dc10d8f12c2fff2726c68dabd85b7425133",
+          "sha256": "f1229dad2519ae8b69e2cbde050b6bdda0137c92c896d6a310f3a7dca928b9a2",
           "executable": false
         },
         "test/fixtures/host-configuration/github-shorthand.json": {
@@ -3043,17 +3271,22 @@
         },
         "test/host-configuration.test.ts": {
           "type": "file",
-          "sha256": "0995f8c04d11536cb1408ab5291b5947dc130af080813cb5ae40bff964381f91",
+          "sha256": "931c673dba05cc4849bde1a7dadd1789e6ccda7a8a1fb619f9b2d5251f39f94c",
           "executable": false
         },
         "test/host.test.ts": {
           "type": "file",
-          "sha256": "8275bdc7eaaa86b048d00e7efe6b8456628040525b3b8a8f2626b78c89b1705c",
+          "sha256": "095079181cd91de423cba53d1aaeb499c2253c2d2e87914456c756a83a853b9c",
           "executable": false
         },
         "test/image-retention.test.ts": {
           "type": "file",
-          "sha256": "7418bb827cdbf83bf5da758de3533412cc79d08ce87c9efb30e0253dd0ba5b89",
+          "sha256": "7c476eff8881f398a7cf4e01dbaebf5b9e275ba86a3f4ed148f2f612c6979071",
+          "executable": false
+        },
+        "test/image-storage.test.ts": {
+          "type": "file",
+          "sha256": "8f191163c063dfd30ff387f08dc2e7d08e81a60297b55920ca7173e44e65b1d0",
           "executable": false
         },
         "test/owner.test.ts": {
@@ -3068,12 +3301,12 @@
         },
         "test/platform.test.ts": {
           "type": "file",
-          "sha256": "5e51808cbd3e9d00b29dcd9c4a7fba2a39236c19bf592f4759f3f1886bced291",
+          "sha256": "1d46e6471d1cc682c0157a9a41895031c981c9089d0f8fc6f8e08f9b57611a4d",
           "executable": false
         },
         "test/providers.test.ts": {
           "type": "file",
-          "sha256": "08431bfa04d7de8a5b4e1b75ac833978ba1734d1050a2157ec5a5550f2ba0d9c",
+          "sha256": "64fa967868689fc4aa956f8e9ab86cc111faf490879f5137c0d718090b80ebf2",
           "executable": false
         },
         "test/pull-request-reviewer.test.ts": {
@@ -3103,7 +3336,7 @@
         },
         "test/sandbox-image.test.ts": {
           "type": "file",
-          "sha256": "e35b10734387ee6806d637c39e869a05b7f0ba992509fe51aa2c0370f6f2f669",
+          "sha256": "cc3c651a305c1f055f6653d7bd395c5a57cd3d508443cae751858ffad7bf287c",
           "executable": false
         },
         "test/sandcastle.test.ts": {
@@ -3153,7 +3386,7 @@
         },
         "vendor/parse5/README.md": {
           "type": "file",
-          "sha256": "8f285afdb9d5eca93648d2ffbea58ea0cea94485f18c3eec6f5825ef1e0446bf",
+          "sha256": "bb5904a74bace3cfbcf0f7f817f2a3f808a21f4d60c1b1b118e1464d6d096855",
           "executable": false
         },
         "vendor/parse5/parse5.esm.js": {
@@ -3196,6 +3429,7 @@
           "operations",
           "package.json",
           "pnpm-lock.yaml",
+          "pnpm-workspace.yaml",
           "scripts",
           "src",
           "test",
@@ -3461,13 +3695,13 @@
           "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md",
           "docs/adr/0005-default-the-factorys-own-comment-wording.md",
           "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
+          "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
           "docs/adr/README.md"
         ],
         "docs/agents": [
           "docs/agents/README.md",
           "docs/agents/domain.md",
           "docs/agents/issue-tracker.md",
-          "docs/agents/project.md",
           "docs/agents/triage-labels.md"
         ],
         "docs/development": [
@@ -3493,16 +3727,17 @@
         "src": [
           "src/agent-layer.Dockerfile",
           "src/clone.ts",
-          "src/comment-history.ts",
           "src/comment-template.ts",
-          "src/contract.ts",
+          "src/contract-result.ts",
           "src/events.ts",
           "src/factory-configuration.ts",
           "src/factory.ts",
           "src/github-token.ts",
+          "src/hold-comments.ts",
           "src/host-configuration.ts",
           "src/host.ts",
           "src/image-retention.ts",
+          "src/image-storage.ts",
           "src/main.ts",
           "src/owner.ts",
           "src/pause.ts",
@@ -3534,7 +3769,7 @@
           "test/claude-foreground.test.ts",
           "test/codex.test.ts",
           "test/comment-template.test.ts",
-          "test/contract-fixture.ts",
+          "test/contract-result-fixture.ts",
           "test/factory-configuration.test.ts",
           "test/factory.test.ts",
           "test/fakes.ts",
@@ -3544,6 +3779,7 @@
           "test/host-configuration.test.ts",
           "test/host.test.ts",
           "test/image-retention.test.ts",
+          "test/image-storage.test.ts",
           "test/owner.test.ts",
           "test/pause.test.ts",
           "test/platform.test.ts",
@@ -4047,5 +4283,13 @@
       }
     }
   },
-  "scopeChanges": []
+  "scopeChanges": [
+    {
+      "id": "documentation",
+      "additions": [
+        "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md"
+      ],
+      "removals": []
+    }
+  ]
 }
