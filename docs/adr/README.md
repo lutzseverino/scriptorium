@@ -18,8 +18,7 @@ This directory records consequential decisions local to the factory.
 - [Default the factory's own comment wording](0005-default-the-factorys-own-comment-wording.md):
   optional deterministic comment templates default the factory's own reports
   while other products' conventions remain explicit configuration. Its per-
-  comment pause, failure and awaiting-merge templates are superseded by ADR
-  0008.
+  comment pause, failure and awaiting-merge templates are superseded by ADR 0008.
 - [Reach the hosting platform through Postern](0006-reach-the-hosting-platform-through-postern.md):
   the factory reads and writes issues, roles and pull requests through
   Postern's facts while keeping readiness and authorization, and the host
