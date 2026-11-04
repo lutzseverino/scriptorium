@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   decideFactory,
   factoryHoldReason,
+  releaseHoldReason,
   type Claim,
   type Decision,
   type Issue,
@@ -3267,6 +3268,22 @@ test("pending automatic and orphan retries retain all model and configuration ho
     assert.deepEqual(held(), ["repository-configuration"]);
     assert.deepEqual(launches(decideFactory(input, models)), []);
   }
+});
+
+test("release-hold reasons exclude every owned PR when a run owns several", () => {
+  assert.equal(releaseHoldReason([40], [40, 41]), null);
+  assert.equal(releaseHoldReason([40, 41], [40, 41]), null);
+  assert.equal(
+    releaseHoldReason([40, 80, 41], [40, 41]),
+    "release hold (#80); merging resumes when the last labelled PR closes or loses the label",
+  );
+});
+
+test("release-hold reasons name only foreign labelled PRs for a single owned PR", () => {
+  assert.equal(
+    releaseHoldReason([40, 80], [40]),
+    "release hold (#80); merging resumes when the last labelled PR closes or loses the label",
+  );
 });
 
 test("release holds gate only merge relaunches in their own repository and exclude the PR itself", () => {

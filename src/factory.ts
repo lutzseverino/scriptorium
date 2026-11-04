@@ -915,8 +915,7 @@ export function releaseHoldReason(
 ): string | null {
   if (hold === null)
     return "release hold state is unreadable; merging resumes after a successful read confirms no other labelled PR remains";
-  const others =
-    hold?.filter((number) => own.some((pr) => number !== pr)) ?? [];
+  const others = hold?.filter((number) => !own.includes(number)) ?? [];
   return others.length
     ? `release hold (${numbered(others)}); merging resumes when the last labelled PR closes or loses the label`
     : null;
