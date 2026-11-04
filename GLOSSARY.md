@@ -21,6 +21,24 @@ A factory configuration string the factory fills in to word one of its issue
 comments; the factory's own wording when absent.
 _Avoid_: Comment prompt, agent-written comment
 
+**Run comment**:
+The factory's one issue comment per pass through the pipeline, from triage or
+readiness to merge or failure, edited in place with each run kind's phase and
+result; a retry after failure starts a new one.
+_Avoid_: Status comment, progress comment
+
+**Run result**:
+The file a run's agent leaves for the host at exit, holding its outcome and
+the text the host posts in the factory's frame.
+_Avoid_: Agent comment, completion signal
+
+**Run kind**:
+One of the factory's kinds of run (triage, implement or review), each started
+by its own trigger and running the skill a repository's configuration maps to
+it; the factory owns the kinds and their handoffs, and the skills own what each
+run does.
+_Avoid_: Stage, phase, mode
+
 **Interrupted run**:
 A run whose sandbox a factory restart stopped, which launches again as the same
 attempt on its branch instead of ending with a run outcome.
