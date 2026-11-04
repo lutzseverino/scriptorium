@@ -17,7 +17,9 @@ This directory records consequential decisions local to the factory.
   pruned.
 - [Default the factory's own comment wording](0005-default-the-factorys-own-comment-wording.md):
   optional deterministic comment templates default the factory's own reports
-  while other products' conventions remain explicit configuration.
+  while other products' conventions remain explicit configuration. Its
+  per-comment pause, failure and awaiting-merge templates are superseded by
+  ADR 0008.
 - [Reach the hosting platform through Postern](0006-reach-the-hosting-platform-through-postern.md):
   the factory reads and writes issues, roles and pull requests through
   Postern's facts while keeping readiness and authorization, and the host
@@ -26,3 +28,6 @@ This directory records consequential decisions local to the factory.
 - [Read the contract decision from the validator's posted result](0007-read-the-contract-decision-from-the-validators-posted-result.md):
   the factory checks the issue-contract validator's versioned result against
   platform facts and no longer interprets Agent Briefs itself.
+- [Split work into run kinds handed off by the host](0008-split-work-into-run-kinds-handed-off-by-the-host.md):
+  triage, implement and review run kinds, each optional, hand off through
+  labels and artifacts, and the host posts every run's result.

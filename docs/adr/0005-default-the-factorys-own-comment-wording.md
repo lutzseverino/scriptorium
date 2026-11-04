@@ -1,5 +1,12 @@
 # Default the factory's own comment wording
 
+Status: its pause, failure and awaiting-merge comments, each with its own
+template, are superseded by
+[ADR 0008](0008-split-work-into-run-kinds-handed-off-by-the-host.md), which
+replaces them with one edited run comment and a fresh action comment; the
+factory's own default wording, deterministic substitution and the parent-close
+comment stand.
+
 The factory supplies its own wording for its pause, failure, parent-close and
 awaiting-merge issue comments, with optional comment templates in repository
 configuration to replace it. The owner settled this in
