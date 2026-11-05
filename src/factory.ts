@@ -304,7 +304,20 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
           decisions.push(...settled);
         }
       }
-  for (const { repository, issue } of oldestFirst(snapshot.repositories)) {
+  const continuations = snapshot.repositories.flatMap((repository) =>
+    repository.issues.map((issue) =>
+      continuation(
+        repository,
+        issue,
+        held.get(key(repository.name, issue.number)),
+        retries.get(key(repository.name, issue.number)),
+        snapshot,
+        models,
+      ),
+    ),
+  );
+  for (const next of oldestFirst(continuations)) {
+    const { repository, issue } = next;
     const at = { repository: repository.name, issue: issue.number };
     if (closing.has(key(repository.name, issue.number))) {
       decisions.push({
@@ -317,124 +330,16 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     if (
       decisions.some(
         (decision) =>
-          decision.repository === repository.name &&
-          decision.issue === issue.number &&
+          decision.repository === at.repository &&
+          decision.issue === at.issue &&
           (decision.kind === "complete" || decision.kind === "fail"),
       )
     )
       continue;
-    const resumed = held.get(key(repository.name, issue.number));
-    if (resumed) {
-      held.delete(key(repository.name, issue.number));
-      decisions.push(
-        ...resume(repository, issue, resumed, running, snapshot, models),
-      );
-      continue;
-    }
-    const previous = snapshot.runs.find(
-      (run) => run.repository === repository.name && run.issue === issue.number,
-    );
-    const claim = repository.claims.find(
-      (claim) => claim.issue === issue.number,
-    );
-    const mergeCandidate =
-      previous?.ended && "mergeCandidate" in previous.ended
-        ? previous.ended.mergeCandidate
-        : claim?.mergeCandidate;
-    if (
-      !claim?.inputResume &&
-      mergeCandidate &&
-      !snapshot.runs.some(
-        (run) =>
-          run.repository === repository.name &&
-          run.issue === issue.number &&
-          run.ended === null,
-      )
-    ) {
-      decisions.push(
-        ...mergeRelaunch(
-          repository,
-          issue,
-          mergeCandidate,
-          previous,
-          running,
-          snapshot,
-          models,
-        ),
-      );
-      continue;
-    }
-    const retry = retries.get(key(repository.name, issue.number));
-    if (retry) {
+    if (next.kind === "resume") held.delete(key(repository.name, issue.number));
+    if (next.kind === "retry")
       retries.delete(key(repository.name, issue.number));
-      decisions.push(
-        ...relaunch(repository, issue, retry, running, snapshot, models),
-      );
-      continue;
-    }
-    const { labels, modelLabelPrefix } = repository.configuration;
-    if (!issue.labels.includes(labels.ready)) continue;
-    const stateReason =
-      (labels.skip !== undefined && issue.labels.includes(labels.skip)
-        ? `labelled \`${labels.skip}\`; delivered outside the factory`
-        : null) ??
-      needsInputExclusion(issue, labels) ??
-      (issue.labels.includes(labels.running)
-        ? "claimed by a running factory run"
-        : null) ??
-      (issue.labels.includes(labels.paused)
-        ? `labelled ${labels.paused}; the factory resumes its run by itself`
-        : null);
-    const excluded = exclusion(issue, repository);
-    const blocked = stateReason
-      ? { reason: stateReason }
-      : excluded
-        ? {
-            reason: excluded.reason,
-            ...(excluded.key && { hold: excluded.key }),
-          }
-        : snapshot.runs.some(
-              (run) =>
-                run.repository === repository.name &&
-                run.issue === issue.number,
-            )
-          ? { reason: "a factory run for it is still on the host" }
-          : repositoryGate(repository);
-    if (blocked) {
-      decisions.push({ kind: "skip", ...at, ...blocked });
-      continue;
-    }
-    const model = issueModel(
-      issue,
-      modelLabelPrefix,
-      snapshot.settings,
-      models,
-    );
-    if ("error" in model) {
-      decisions.push({
-        kind: "skip",
-        ...at,
-        reason: model.error,
-        hold: holdKeys.model,
-      });
-      continue;
-    }
-    const gated = gate(model.provider, running, snapshot, "drain");
-    if (gated) {
-      decisions.push({ kind: "skip", ...at, reason: gated });
-      continue;
-    }
-    running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
-    decisions.push(
-      { kind: "claim", ...at },
-      {
-        kind: "launch",
-        ...at,
-        ...model,
-        attempt: 1,
-        ...(claim?.inputResume && { inputResume: claim.inputResume }),
-      },
-    );
+    decisions.push(...admit(next, running, snapshot, models));
   }
   for (const retry of retries.values())
     decisions.push(unretried(retry, "its issue is no longer open"));
@@ -447,106 +352,70 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     });
   // Reconcile every actionable reason independently of pickup's precedence.
   // A blocked issue may also have a model error; neither clears the other.
-  for (const repository of snapshot.repositories) {
-    const { labels, modelLabelPrefix } = repository.configuration;
-    for (const issue of repository.issues) {
-      const at = { repository: repository.name, issue: issue.number };
-      const previous = snapshot.runs.find(
-        (run) => run.repository === at.repository && run.issue === at.issue,
+  for (const next of continuations) {
+    const { repository, issue, previous, own, reconcile, selected } = next;
+    const { labels } = repository.configuration;
+    const at = { repository: repository.name, issue: issue.number };
+    const holds: { hold: HoldKey; reason: string }[] = [];
+    if (!(
+      (reconcile.readiness && !issue.labels.includes(labels.ready)) ||
+      [
+        ...(!reconcile.pending ? [labels.running, labels.paused] : []),
+        labels.failed,
+        labels.needsInput,
+        labels.skip,
+      ].some((label) => label !== undefined && issue.labels.includes(label)) ||
+      !decisions.some(
+        (decision) =>
+          decision.repository === at.repository &&
+          decision.issue === at.issue &&
+          decision.kind === "skip",
+      )
+    )) {
+      holds.push(
+        ...(reconcile.readiness
+          ? readinessExclusions(issue, repository.issues, policy(repository))
+          : []
+        ).flatMap((hold) =>
+          hold.key ? [{ hold: hold.key, reason: hold.reason }] : [],
+        ),
       );
-      const claim = repository.claims.find((claim) => claim.issue === at.issue);
-      const continuing = Boolean(
-        (previous?.ended &&
-          ("interrupted" in previous.ended ||
-            "paused" in previous.ended ||
-            ("mergeCandidate" in previous.ended &&
-              previous.ended.mergeCandidate))) ||
-        (claim?.mergeCandidate && !claim.inputResume),
-      );
-      const pendingLaunch =
-        continuing ||
-        Boolean(
-          (previous?.ended &&
-            "pullRequest" in previous.ended &&
-            previous.ended.pullRequest !== "open") ||
-          (claim && claim.pullRequest !== "open"),
-        );
-      const holds: { hold: HoldKey; reason: string }[] = [];
-      if (!(
-        (!continuing && !issue.labels.includes(labels.ready)) ||
-        [
-          ...(!pendingLaunch ? [labels.running, labels.paused] : []),
-          labels.failed,
-          labels.needsInput,
-          labels.skip,
-        ].some(
-          (label) => label !== undefined && issue.labels.includes(label),
-        ) ||
+      if (issue.subIssues.length === 0) {
+        if ("error" in selected)
+          holds.push({ hold: holdKeys.model, reason: selected.error });
+        const configuration = repositoryGate(repository);
+        if (configuration?.hold === holdKeys.configuration)
+          holds.push(configuration);
+        const held = repositoryHold("factory", repository, own);
+        if (held) holds.push(held);
+      }
+    }
+    const observedOwn = ownedPullRequests(previous);
+    if (
+      previous?.ended &&
+      "pullRequest" in previous.ended &&
+      previous.ended.pullRequest === "open" &&
+      heldPullRequests(previous.holdObserved, observedOwn).length
+    )
+      for (const scope of ["release", "factory"] as const) {
+        const held = repositoryHold(scope, repository, observedOwn);
+        if (held) holds.push(held);
+      }
+    for (const hold of holds)
+      if (
         !decisions.some(
           (decision) =>
             decision.repository === at.repository &&
             decision.issue === at.issue &&
-            decision.kind === "skip",
+            decision.kind === "skip" &&
+            decision.hold === hold.hold,
         )
-      )) {
-        holds.push(
-          ...(continuing
-            ? []
-            : readinessExclusions(issue, repository.issues, policy(repository))
-          ).flatMap((hold) =>
-            hold.key ? [{ hold: hold.key, reason: hold.reason }] : [],
-          ),
-        );
-        if (issue.subIssues.length === 0) {
-          const model = issueModel(
-            issue,
-            modelLabelPrefix,
-            snapshot.settings,
-            models,
-          );
-          if ("error" in model)
-            holds.push({ hold: holdKeys.model, reason: model.error });
-          if (repository.paused !== null)
-            holds.push({
-              hold: holdKeys.configuration,
-              reason: `${repository.name} is paused: ${repository.paused}`,
-            });
-          const target = mergeTarget(previous, claim);
-          const held = repositoryHold(
-            "factory",
-            repository,
-            ownedPullRequests(previous, target),
-          );
-          if (held) holds.push(held);
-        }
-      }
-      const own = ownedPullRequests(previous);
-      if (
-        previous?.ended &&
-        "pullRequest" in previous.ended &&
-        previous.ended.pullRequest === "open" &&
-        heldPullRequests(previous.holdObserved, own).length
       )
-        for (const scope of ["release", "factory"] as const) {
-          const held = repositoryHold(scope, repository, own);
-          if (held) holds.push(held);
-        }
-      for (const hold of holds)
-        if (
-          !decisions.some(
-            (decision) =>
-              decision.repository === at.repository &&
-              decision.issue === at.issue &&
-              decision.kind === "skip" &&
-              decision.hold === hold.hold,
-          )
-        )
-          decisions.push({
-            kind: "skip",
-            ...at,
-            ...hold,
-          });
-    }
+        decisions.push({
+          kind: "skip",
+          ...at,
+          ...hold,
+        });
   }
   return decisions;
 }
@@ -683,244 +552,305 @@ function settleOutcome(
   return { run, failure: outcome.failure, model };
 }
 
-// A retry takes its issue's turn in oldest-first order. It launches only
-// while the issue would still be picked up, apart from its own claim, and
-// waits for its provider's gate, as a new claim does, and for its repository
-// to resume.
-function relaunch(
+// Every issue has one continuation for both admission and hold reconciliation.
+// The table makes hold applicability explicit; owned PRs include a merge target.
+const continuationRules = {
+  fresh: {
+    factoryHold: "all",
+    releaseHold: false,
+    threshold: "drain",
+    prefix: "",
+    modelBeforeRepository: false,
+  },
+  retry: {
+    factoryHold: "all",
+    releaseHold: false,
+    threshold: "drain",
+    prefix: "retry waits: ",
+    modelBeforeRepository: true,
+  },
+  resume: {
+    factoryHold: "unowned",
+    releaseHold: false,
+    threshold: "pause",
+    prefix: "relaunch waits: ",
+    modelBeforeRepository: true,
+  },
+  merge: {
+    factoryHold: "unowned",
+    releaseHold: true,
+    threshold: "pause",
+    prefix: "merge relaunch waits: ",
+    modelBeforeRepository: true,
+  },
+} as const;
+
+type ContinuationState =
+  | { kind: "fresh" }
+  | { kind: "retry"; retry: Retry }
+  | { kind: "resume"; run: Run }
+  | { kind: "merge" };
+
+type Continuation = {
+  kind: ContinuationState["kind"];
+  repository: Repository;
+  issue: Issue;
+  previous: Run | undefined;
+  own: number[];
+  selected: Model | { error: string };
+  modelSource:
+    | { kind: "issue" }
+    | { kind: "retry"; model: Model }
+    | { kind: "recorded"; run: Run; retain: boolean };
+  exclusions: Decision[] | null;
+  afterModel: Decision[] | null;
+  pause: Pause | null;
+  reconcile: { readiness: boolean; pending: boolean };
+  launch: Pick<
+    Launch,
+    "attempt" | "retry" | "inputResume" | "mergeRelaunch" | "relaunch"
+  >;
+  unpause: boolean;
+};
+
+function continuation(
   repository: Repository,
   issue: Issue,
-  retry: Retry,
-  running: Map<string, number>,
+  resumed: Run | undefined,
+  retry: Retry | undefined,
   snapshot: Snapshot,
   models: Models,
-): Decision[] {
-  const at = { repository: repository.name, issue: issue.number };
-  const { labels } = repository.configuration;
-  const reason = issue.labels.includes(labels.ready)
-    ? exclusion(issue, repository)?.reason
-    : `it no longer carries ${labels.ready}`;
-  if (reason) {
-    const readiness = readinessExclusion(
-      issue,
-      repository.issues,
-      policy(repository),
+): Continuation {
+  const previous = snapshot.runs.find(
+    (run) => run.repository === repository.name && run.issue === issue.number,
+  );
+  const claim = repository.claims.find((claim) => claim.issue === issue.number);
+  const target = mergeTarget(previous, claim);
+  const merge =
+    !claim?.inputResume &&
+    target &&
+    !snapshot.runs.some(
+      (run) =>
+        run.repository === repository.name &&
+        run.issue === issue.number &&
+        run.ended === null,
     );
-    if (issue.labels.includes(labels.ready) && readiness?.waiting)
-      return [{ kind: "skip", ...at, reason: `retry waits: ${reason}` }];
-    return [unretried(retry, reason)];
-  }
-  const selected = issueModel(
-    issue,
-    repository.configuration.modelLabelPrefix,
-    snapshot.settings,
-    models,
+  const state = resumed
+    ? { kind: "resume" as const, run: resumed }
+    : merge
+      ? { kind: "merge" as const }
+      : retry
+        ? { kind: "retry" as const, retry }
+        : { kind: "fresh" as const };
+  // A needs-input claim can defer a fresh merge launch while the previous
+  // candidate still keeps its continuation holds actionable.
+  const continuing = Boolean(
+    (previous?.ended &&
+      ("interrupted" in previous.ended ||
+        "paused" in previous.ended ||
+        ("mergeCandidate" in previous.ended &&
+          previous.ended.mergeCandidate))) ||
+    (claim?.mergeCandidate && !claim.inputResume),
   );
-  if ("error" in selected)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        reason: `retry waits: ${selected.error}`,
-        hold: holdKeys.model,
-      },
-    ];
-  const { provider } = retry.model;
-  const repositoryHeld = repositoryGate(repository);
-  const gated =
-    repositoryHeld?.reason ?? gate(provider, running, snapshot, "drain");
-  if (gated)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        reason: `retry waits: ${gated}`,
-        ...(repositoryHeld && { hold: repositoryHeld.hold }),
-      },
-    ];
-  running.set(provider, (running.get(provider) ?? 0) + 1);
+  const run = resumed ?? previous;
+  const classified = { ...state, repository, issue, previous };
+  const recorded = resumed ?? (state.kind === "merge" ? previous : undefined);
+  const mergeExcluded = resumed?.mergeRelaunch
+    ? mergeExclusion(issue, repository.configuration.labels)
+    : null;
+  const pause =
+    resumed?.ended && "paused" in resumed.ended ? resumed.ended : null;
+  return {
+    ...classified,
+    modelSource:
+      state.kind === "retry"
+        ? { kind: "retry", model: state.retry.model }
+        : recorded
+          ? { kind: "recorded", run: recorded, retain: state.kind === "resume" }
+          : { kind: "issue" },
+    exclusions: continuationExclusions(classified),
+    afterModel: mergeExcluded
+      ? skipped(classified, mergeExcluded, undefined, "merge relaunch waits: ")
+      : null,
+    pause: pause?.paused ?? null,
+    own: ownedPullRequests(run, target),
+    selected: issueModel(
+      issue,
+      repository.configuration.modelLabelPrefix,
+      snapshot.settings,
+      models,
+    ),
+    reconcile: {
+      readiness: !continuing,
+      pending:
+        continuing ||
+        Boolean(
+          (previous?.ended &&
+            "pullRequest" in previous.ended &&
+            previous.ended.pullRequest !== "open") ||
+          (claim && claim.pullRequest !== "open"),
+        ),
+    },
+    launch:
+      state.kind === "fresh"
+        ? {
+            attempt: 1,
+            ...(claim?.inputResume && { inputResume: claim.inputResume }),
+          }
+        : state.kind === "retry"
+          ? {
+              attempt: 2,
+              retry: {
+                failure: state.retry.failure,
+                log: state.retry.run.log ?? "",
+              },
+              ...(state.retry.run.inputResume && {
+                inputResume: state.retry.run.inputResume,
+              }),
+            }
+          : {
+              attempt: run?.attempt ?? 1,
+              ...(run?.retry && { retry: run.retry }),
+              ...(run?.inputResume && { inputResume: run.inputResume }),
+              relaunch: true,
+              ...((state.kind === "merge" ? target : run?.mergeRelaunch) && {
+                mergeRelaunch:
+                  state.kind === "merge" ? target : run?.mergeRelaunch,
+              }),
+            },
+    unpause:
+      state.kind === "resume"
+        ? Boolean(resumed?.ended && "paused" in resumed.ended)
+        : state.kind !== "fresh" &&
+          issue.labels.includes(repository.configuration.labels.paused),
+  };
+}
+
+// Exclusions are selected once with the continuation, before admission.
+function continuationExclusions(
+  next: ContinuationState &
+    Pick<Continuation, "repository" | "issue" | "previous">,
+): Decision[] | null {
+  const { repository, issue } = next;
+  const { labels } = repository.configuration;
+  const at = { repository: repository.name, issue: issue.number };
+  const pause =
+    next.kind === "resume" && next.run.ended && "paused" in next.run.ended
+      ? next.run.ended
+      : null;
+  if (next.kind === "resume") {
+    if (needsInputExclusion(issue, labels)) return [{ kind: "release", ...at }];
+    if (pause && !pause.commented)
+      return [{ kind: "pause", ...at, pause: pause.paused }];
+  } else if (next.kind === "merge") {
+    const reason = mergeExclusion(issue, labels);
+    if (reason) return skipped(next, reason);
+  } else {
+    if (!issue.labels.includes(labels.ready))
+      return next.kind === "retry"
+        ? [unretried(next.retry, `it no longer carries ${labels.ready}`)]
+        : [];
+    const excluded = exclusion(issue, repository);
+    if (next.kind === "retry" && excluded) {
+      const readiness = readinessExclusion(
+        issue,
+        repository.issues,
+        policy(repository),
+      );
+      return readiness?.waiting
+        ? skipped(next, excluded.reason)
+        : [unretried(next.retry, excluded.reason)];
+    }
+    if (next.kind === "fresh") {
+      const stateReason =
+        (labels.skip !== undefined && issue.labels.includes(labels.skip)
+          ? `labelled \`${labels.skip}\`; delivered outside the factory`
+          : null) ??
+        needsInputExclusion(issue, labels) ??
+        (issue.labels.includes(labels.running)
+          ? "claimed by a running factory run"
+          : null) ??
+        (issue.labels.includes(labels.paused)
+          ? `labelled ${labels.paused}; the factory resumes its run by itself`
+          : null);
+      if (stateReason) return skipped(next, stateReason);
+      if (excluded) return skipped(next, excluded.reason, excluded.key);
+      if (next.previous)
+        return skipped(next, "a factory run for it is still on the host");
+    }
+  }
+  return null;
+}
+
+function skipped(
+  next: Pick<Continuation, "repository" | "issue" | "kind">,
+  reason: string,
+  hold?: HoldKey,
+  prefix: string = continuationRules[next.kind].prefix,
+): Decision[] {
   return [
-    // A paused-labelled claim's retry runs under the running label.
-    ...(issue.labels.includes(labels.paused)
-      ? [{ kind: "unpause" as const, ...at }]
-      : []),
     {
-      kind: "launch",
-      ...at,
-      ...retry.model,
-      attempt: 2,
-      retry: { failure: retry.failure, log: retry.run.log ?? "" },
-      ...(retry.run.inputResume && { inputResume: retry.run.inputResume }),
+      kind: "skip",
+      repository: next.repository.name,
+      issue: next.issue.number,
+      reason: `${prefix}${reason}`,
+      ...(hold && { hold }),
     },
   ];
 }
 
-// An interrupted run continues as it would have without the restart: it
-// launches again as the same attempt on its branch, in its issue's turn, and
-// pickup's exclusions don't hold it. As running work, it waits for its
-// provider's gate only at the pause threshold, and for its repository to
-// resume, and releases its claim once its issue needs input. A paused run
-// first tells its issue, once, then resumes the same way, under the running
-// label again, once its pause no longer holds it.
-function resume(
-  repository: Repository,
-  issue: Issue,
-  run: Run,
+// Admission preserves reason precedence: fresh repository gates and a fresh
+// merge's release hold precede model validation; retry/resume models precede
+// repository gates. A paused run's first notice precedes all admission holds.
+function admit(
+  next: Continuation,
   running: Map<string, number>,
   snapshot: Snapshot,
   models: Models,
 ): Decision[] {
+  const { repository, issue, selected, modelSource } = next;
+  const rules = continuationRules[next.kind];
   const at = { repository: repository.name, issue: issue.number };
-  if (needsInputExclusion(issue, repository.configuration.labels))
-    return [{ kind: "release", ...at }];
-  const pause = run.ended && "paused" in run.ended ? run.ended : null;
-  if (pause && !pause.commented)
-    return [{ kind: "pause", ...at, pause: pause.paused }];
-  const selected = issueModel(
-    issue,
-    repository.configuration.modelLabelPrefix,
-    snapshot.settings,
-    models,
+  if (next.exclusions !== null) return next.exclusions;
+  const repositoryHeld = repositoryGate(
+    repository,
+    rules.factoryHold === "all" ? [] : next.own,
   );
-  if ("error" in selected)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        reason: `relaunch waits: ${selected.error}`,
-        hold: holdKeys.model,
-      },
-    ];
-  const recordedModel = models.resolveModel(
-    `${run.provider}/${run.model}@${run.effort}`,
-  );
-  if ("error" in recordedModel)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        reason: `relaunch waits: ${recordedModel.error}`,
-        hold: holdKeys.model,
-      },
-    ];
-  if (run.mergeRelaunch) {
-    const excluded = mergeExclusion(issue, repository.configuration.labels);
-    if (excluded)
-      return [
-        { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
-      ];
+  if (!rules.modelBeforeRepository && repositoryHeld)
+    return skipped(next, repositoryHeld.reason, repositoryHeld.hold);
+  if (rules.releaseHold) {
+    const held = repositoryHold("release", repository, next.own);
+    if (held) return skipped(next, held.reason, held.hold, "relaunch waits: ");
   }
-  // An interrupted or paused merge relaunch is still delivery of its target.
-  const repositoryHeld = repositoryGate(repository, ownedPullRequests(run));
-  const gated =
-    repositoryHeld?.reason ??
-    (pause && limited(run.provider, pause.paused, snapshot)) ??
-    gate(run.provider, running, snapshot, "pause");
-  if (gated)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        reason: `relaunch waits: ${gated}`,
-        ...(repositoryHeld && { hold: repositoryHeld.hold }),
-      },
-    ];
-  running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
-  return [
-    ...(pause ? [{ kind: "unpause" as const, ...at }] : []),
-    {
-      kind: "launch",
-      ...at,
-      provider: run.provider,
-      model: run.model,
-      effort: run.effort,
-      attempt: run.attempt,
-      ...(run.retry && { retry: run.retry }),
-      ...(run.inputResume && { inputResume: run.inputResume }),
-      ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
-      relaunch: true,
-    },
-  ];
-}
-
-// Stale-base delivery continues the same attempt and spends running-work
-// capacity. Readiness, the retry model and the drain gate don't restart it.
-function mergeRelaunch(
-  repository: Repository,
-  issue: Issue,
-  target: MergeRelaunch,
-  previous: Run | undefined,
-  running: Map<string, number>,
-  snapshot: Snapshot,
-  models: Models,
-): Decision[] {
-  const at = { repository: repository.name, issue: issue.number };
-  const { labels, modelLabelPrefix } = repository.configuration;
-  const excluded = mergeExclusion(issue, labels);
-  if (excluded)
-    return [
-      { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
-    ];
-  const own = ownedPullRequests(previous, target);
-  const hold = repositoryHold("release", repository, own);
-  if (hold)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        ...hold,
-        reason: `relaunch waits: ${hold.reason}`,
-      },
-    ];
-  const selected = issueModel(
-    issue,
-    modelLabelPrefix,
-    snapshot.settings,
-    models,
-  );
+  if ("error" in selected) return skipped(next, selected.error, holdKeys.model);
+  const resolved =
+    modelSource.kind === "recorded"
+      ? models.resolveModel(
+          `${modelSource.run.provider}/${modelSource.run.model}@${modelSource.run.effort}`,
+        )
+      : modelSource.kind === "retry"
+        ? modelSource.model
+        : selected;
+  if ("error" in resolved) return skipped(next, resolved.error, holdKeys.model);
   const model =
-    "error" in selected
-      ? selected
-      : previous
-        ? models.resolveModel(
-            `${previous.provider}/${previous.model}@${previous.effort}`,
-          )
-        : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
-  const repositoryHeld = repositoryGate(repository, own);
+    modelSource.kind === "recorded" && modelSource.retain
+      ? {
+          provider: modelSource.run.provider,
+          model: modelSource.run.model,
+          effort: modelSource.run.effort,
+        }
+      : resolved;
+  if (next.afterModel !== null) return next.afterModel;
   const reason =
-    "error" in model
-      ? model.error
-      : (repositoryHeld?.reason ??
-        gate(model.provider, running, snapshot, "pause"));
-  if (reason)
-    return [
-      {
-        kind: "skip",
-        ...at,
-        reason: `merge relaunch waits: ${reason}`,
-        ...("error" in model
-          ? { hold: holdKeys.model }
-          : repositoryHeld
-            ? { hold: repositoryHeld.hold }
-            : {}),
-      },
-    ];
-  if ("error" in model) return [];
+    repositoryHeld?.reason ??
+    (next.pause && limited(model.provider, next.pause, snapshot)) ??
+    gate(model.provider, running, snapshot, rules.threshold);
+  if (reason) return skipped(next, reason, repositoryHeld?.hold);
   running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
   return [
-    ...(issue.labels.includes(labels.paused)
-      ? [{ kind: "unpause" as const, ...at }]
-      : []),
-    {
-      kind: "launch",
-      ...at,
-      ...model,
-      attempt: previous?.attempt ?? 1,
-      ...(previous?.retry && { retry: previous.retry }),
-      ...(previous?.inputResume && { inputResume: previous.inputResume }),
-      relaunch: true,
-      mergeRelaunch: target,
-    },
+    ...(next.kind === "fresh" ? [{ kind: "claim" as const, ...at }] : []),
+    ...(next.unpause ? [{ kind: "unpause" as const, ...at }] : []),
+    { kind: "launch", ...at, ...model, ...next.launch },
   ];
 }
 
@@ -1138,23 +1068,19 @@ function issueModel(
 
 // One queue across every repository: oldest issue first, then by repository
 // and number.
-function oldestFirst(
-  repositories: Repository[],
-): { repository: Repository; issue: Issue }[] {
-  return repositories
-    .flatMap((repository) =>
-      repository.issues.map((issue) => ({ repository, issue })),
-    )
-    .sort(
-      (left, right) =>
-        Date.parse(left.issue.createdAt) - Date.parse(right.issue.createdAt) ||
-        (left.repository.name < right.repository.name
-          ? -1
-          : left.repository.name > right.repository.name
-            ? 1
-            : 0) ||
-        left.issue.number - right.issue.number,
-    );
+function oldestFirst<T extends { repository: Repository; issue: Issue }>(
+  continuations: T[],
+): T[] {
+  return [...continuations].sort(
+    (left, right) =>
+      Date.parse(left.issue.createdAt) - Date.parse(right.issue.createdAt) ||
+      (left.repository.name < right.repository.name
+        ? -1
+        : left.repository.name > right.repository.name
+          ? 1
+          : 0) ||
+      left.issue.number - right.issue.number,
+  );
 }
 
 // A ready-labelled issue's exclusion from pickup, given its repository, whose
