@@ -175,6 +175,8 @@ export function createHost(
   ports: HostPorts,
 ) {
   const runs: HostRun[] = [];
+  // Recovered endings that still need their first platform observation.
+  const unobserved = new WeakSet<HostRun>();
   // A bad edit pauses pickup, but runs still settle with the last valid conventions.
   const conventions = new Map<string, FactoryConfiguration>();
   // Every token the command prints and every provider credential value a
@@ -369,7 +371,7 @@ export function createHost(
         (!run.ended ||
           "interrupted" in run.ended ||
           "paused" in run.ended ||
-          !run.ownedPullRequests),
+          unobserved.has(run)),
     )) {
       run.holdObserved = observeHolds(run.holdObserved, pass);
       record(run);
@@ -430,6 +432,7 @@ export function createHost(
           pass.configuration.labels.needsInput,
         );
         if (paths.length) run.ended.unpushedChanges = paths;
+        unobserved.delete(run);
         record(run);
       }
       pass.read = {
@@ -764,11 +767,10 @@ export function createHost(
         const holdSettled =
           recorded.releaseHoldSettled ||
           (recorded.ended && "pullRequest" in recorded.ended);
-        recovered.push({
+        const restored: HostRun = {
           ...recorded,
-          ownedPullRequests: holdSettled
-            ? (recorded.ownedPullRequests ?? [])
-            : undefined,
+          ownedPullRequests:
+            recorded.ownedPullRequests ?? (holdSettled ? [] : undefined),
           // v3.0.1 stored derived held PRs. Preserve settled classification;
           // unsettled records retain their observations until the first read.
           holdObserved:
@@ -794,7 +796,9 @@ export function createHost(
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
-        });
+        };
+        if (!holdSettled) unobserved.add(restored);
+        recovered.push(restored);
       }
     }
     runs.push(...recovered);

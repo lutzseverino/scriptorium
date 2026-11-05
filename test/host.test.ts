@@ -7264,11 +7264,29 @@ test("an interrupted merge refreshes ownership before excluding its own labelled
   run.interrupt();
   run.launched[0].finish();
   await run.drain();
-  await run.restart().tick();
+  const restarted = run.restart();
+  await restarted.tick();
   assert.equal(run.launched.length, 2);
   assert.ok(
     !issue.comments.some((comment) =>
       comment.includes("scriptorium:hold:factory-hold"),
     ),
+  );
+  // A later interruption retains that known ownership even after #41 closes.
+  restarted.interrupt();
+  run.launched[1].finish();
+  await restarted.drain();
+  issue.branchPullRequests[1].state = "closed";
+  run.github.factoryHolds["acme/widgets"] = { issues: [], pullRequests: [] };
+  const again = run.restart();
+  await again.tick();
+  assert.equal(run.launched.length, 3);
+  run.launched[2].finish();
+  await again.drain();
+  await run.restart().tick();
+  assert.equal(
+    run.launched.length,
+    3,
+    "historical self-labels grant no extra merge attempt",
   );
 });
