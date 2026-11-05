@@ -1,3 +1,4 @@
+import { holdKeys } from "../src/hold-comments.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -306,7 +307,10 @@ test("a missing result holds with a hold comment; only the configured author's m
   ] as const)
     assertHold(await held([...comments]), missing, name);
   const issues = await resultIssues([]);
-  assert.equal(readinessExclusion(issues[0], issues, policy)?.key, "readiness");
+  assert.equal(
+    readinessExclusion(issues[0], issues, policy)?.key,
+    holdKeys.readiness,
+  );
 });
 
 test("an unknown format version or an unreadable result holds with a hold comment", async () => {
@@ -336,7 +340,7 @@ test("an unknown format version or an unreadable result holds with a hold commen
     assertHold(issues[0].contractHold, refused(reason), String(reason));
     assert.equal(
       readinessExclusion(issues[0], issues, policy)?.key,
-      "readiness",
+      holdKeys.readiness,
     );
   }
 });
@@ -606,7 +610,7 @@ test("the host's role policy still applies to an approved result, naming the ref
     exclusion!.reason,
     /ready-for-agent was applied by @owner, whose repository role write is not authorized/,
   );
-  assert.equal(exclusion!.key, "readiness");
+  assert.equal(exclusion!.key, holdKeys.readiness);
 });
 
 test("unreadable comments or deletion history wait with an actionable reason", async () => {

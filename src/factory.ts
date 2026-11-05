@@ -1,6 +1,13 @@
 // The factory's decision core: a pure function from a snapshot of the host's
 // repositories and runs to the decisions the host carries out.
 import type { FactoryConfiguration } from "./factory-configuration.ts";
+import { holdKeys, type HoldKey } from "./hold-comments.ts";
+import {
+  repositoryHold,
+  repositoryGate,
+  ownedPullRequests,
+  heldPullRequests,
+} from "./repository-holds.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
 import type { MergeRelaunch, InputResume } from "./platform.ts";
@@ -78,6 +85,8 @@ export type Run = {
   // The delivery task, retained through interruptions and provider pauses.
   mergeRelaunch?: MergeRelaunch;
   inputResume?: InputResume;
+  // Observed hold numbers; null means a read failed during the run.
+  holdObserved?: number[] | null;
   startedAt: string;
   log: string;
   ended:
@@ -88,6 +97,7 @@ export type Run = {
         timedOut: boolean;
         orphaned?: true;
         pullRequest: PullRequestState;
+        ownedPullRequests?: number[];
         closesIssue?: true;
         mergeCandidate?: MergeRelaunch;
         // Paths under the host's unpushable paths in commits the remote lacks.
@@ -203,7 +213,7 @@ export type Decision = { repository: string; issue: number } & (
   | { kind: "claim" }
   | { kind: "close"; tickets: IssueId[] }
   | Launch
-  | { kind: "skip"; reason: string; hold?: string }
+  | { kind: "skip"; reason: string; hold?: HoldKey }
   // Stops a running run's sandbox: at the time limit, or at the pause
   // threshold with the pause it ends with once its agent exits.
   | { kind: "stop"; reason: string; pause?: Pause }
@@ -363,9 +373,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     }
     const { labels, modelLabelPrefix } = repository.configuration;
     if (!issue.labels.includes(labels.ready)) continue;
-    const excluded = exclusion(issue, repository);
-    const factoryHeld = heldByFactory(repository, []);
-    const reason =
+    const stateReason =
       (labels.skip !== undefined && issue.labels.includes(labels.skip)
         ? `labelled \`${labels.skip}\`; delivered outside the factory`
         : null) ??
@@ -375,29 +383,24 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         : null) ??
       (issue.labels.includes(labels.paused)
         ? `labelled ${labels.paused}; the factory resumes its run by itself`
-        : null) ??
-      excluded?.reason ??
-      (snapshot.runs.some(
-        (run) =>
-          run.repository === repository.name && run.issue === issue.number,
-      )
-        ? "a factory run for it is still on the host"
-        : null) ??
-      paused(repository) ??
-      factoryHeld;
-    if (reason) {
-      decisions.push({
-        kind: "skip",
-        ...at,
-        reason,
-        ...(reason === excluded?.reason && excluded?.key
-          ? { hold: excluded.key }
-          : reason === paused(repository)
-            ? { hold: "repository-configuration" }
-            : reason === factoryHeld
-              ? { hold: "factory-hold" }
-              : {}),
-      });
+        : null);
+    const excluded = exclusion(issue, repository);
+    const blocked = stateReason
+      ? { reason: stateReason }
+      : excluded
+        ? {
+            reason: excluded.reason,
+            ...(excluded.key && { hold: excluded.key }),
+          }
+        : snapshot.runs.some(
+              (run) =>
+                run.repository === repository.name &&
+                run.issue === issue.number,
+            )
+          ? { reason: "a factory run for it is still on the host" }
+          : repositoryGate(repository);
+    if (blocked) {
+      decisions.push({ kind: "skip", ...at, ...blocked });
       continue;
     }
     const model = issueModel(
@@ -411,7 +414,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         kind: "skip",
         ...at,
         reason: model.error,
-        hold: "model-label",
+        hold: holdKeys.model,
       });
       continue;
     }
@@ -467,7 +470,8 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
             previous.ended.pullRequest !== "open") ||
           (claim && claim.pullRequest !== "open"),
         );
-      if (
+      const holds: { hold: HoldKey; reason: string }[] = [];
+      if (!(
         (!continuing && !issue.labels.includes(labels.ready)) ||
         [
           ...(!pendingLaunch ? [labels.running, labels.paused] : []),
@@ -483,34 +487,48 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
             decision.issue === at.issue &&
             decision.kind === "skip",
         )
-      )
-        continue;
-      const holds = (
-        continuing
-          ? []
-          : readinessExclusions(issue, repository.issues, policy(repository))
-      ).flatMap((hold) =>
-        hold.key ? [{ key: hold.key, reason: hold.reason }] : [],
-      );
-      if (issue.subIssues.length === 0) {
-        const model = issueModel(
-          issue,
-          modelLabelPrefix,
-          snapshot.settings,
-          models,
+      )) {
+        holds.push(
+          ...(continuing
+            ? []
+            : readinessExclusions(issue, repository.issues, policy(repository))
+          ).flatMap((hold) =>
+            hold.key ? [{ hold: hold.key, reason: hold.reason }] : [],
+          ),
         );
-        if ("error" in model)
-          holds.push({ key: "model-label", reason: model.error });
-        const configuration = paused(repository);
-        if (configuration)
-          holds.push({
-            key: "repository-configuration",
-            reason: configuration,
-          });
-        const target = mergeTarget(previous, claim);
-        const held = heldByFactory(repository, target ? [target.number] : []);
-        if (held) holds.push({ key: "factory-hold", reason: held });
+        if (issue.subIssues.length === 0) {
+          const model = issueModel(
+            issue,
+            modelLabelPrefix,
+            snapshot.settings,
+            models,
+          );
+          if ("error" in model)
+            holds.push({ hold: holdKeys.model, reason: model.error });
+          if (repository.paused !== null)
+            holds.push({
+              hold: holdKeys.configuration,
+              reason: `${repository.name} is paused: ${repository.paused}`,
+            });
+          const target = mergeTarget(previous, claim);
+          const held = repositoryHold(
+            "factory",
+            repository,
+            ownedPullRequests(previous, target),
+          );
+          if (held) holds.push(held);
+        }
       }
+      const own = ownedPullRequests(previous);
+      if (
+        previous?.ended &&
+        "pullRequest" in previous.ended &&
+        heldPullRequests(previous.holdObserved, own).length
+      )
+        for (const scope of ["release", "factory"] as const) {
+          const held = repositoryHold(scope, repository, own);
+          if (held) holds.push(held);
+        }
       for (const hold of holds)
         if (
           !decisions.some(
@@ -518,14 +536,13 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
               decision.repository === at.repository &&
               decision.issue === at.issue &&
               decision.kind === "skip" &&
-              decision.hold === hold.key,
+              decision.hold === hold.hold,
           )
         )
           decisions.push({
             kind: "skip",
             ...at,
-            reason: hold.reason,
-            hold: hold.key,
+            ...hold,
           });
     }
   }
@@ -703,21 +720,20 @@ function relaunch(
         kind: "skip",
         ...at,
         reason: `retry waits: ${selected.error}`,
-        hold: "model-label",
+        hold: holdKeys.model,
       },
     ];
   const { provider } = retry.model;
+  const repositoryHeld = repositoryGate(repository);
   const gated =
-    paused(repository) ??
-    heldByFactory(repository, []) ??
-    gate(provider, running, snapshot, "drain");
+    repositoryHeld?.reason ?? gate(provider, running, snapshot, "drain");
   if (gated)
     return [
       {
         kind: "skip",
         ...at,
         reason: `retry waits: ${gated}`,
-        ...repositoryHoldKey(repository, []),
+        ...(repositoryHeld && { hold: repositoryHeld.hold }),
       },
     ];
   running.set(provider, (running.get(provider) ?? 0) + 1);
@@ -770,7 +786,7 @@ function resume(
         kind: "skip",
         ...at,
         reason: `relaunch waits: ${selected.error}`,
-        hold: "model-label",
+        hold: holdKeys.model,
       },
     ];
   const recordedModel = models.resolveModel(
@@ -782,7 +798,7 @@ function resume(
         kind: "skip",
         ...at,
         reason: `relaunch waits: ${recordedModel.error}`,
-        hold: "model-label",
+        hold: holdKeys.model,
       },
     ];
   if (run.mergeRelaunch) {
@@ -793,10 +809,9 @@ function resume(
       ];
   }
   // An interrupted or paused merge relaunch is still delivery of its target.
-  const own = run.mergeRelaunch ? [run.mergeRelaunch.number] : [];
+  const repositoryHeld = repositoryGate(repository, ownedPullRequests(run));
   const gated =
-    paused(repository) ??
-    heldByFactory(repository, own) ??
+    repositoryHeld?.reason ??
     (pause && limited(run.provider, pause.paused, snapshot)) ??
     gate(run.provider, running, snapshot, "pause");
   if (gated)
@@ -805,7 +820,7 @@ function resume(
         kind: "skip",
         ...at,
         reason: `relaunch waits: ${gated}`,
-        ...repositoryHoldKey(repository, own),
+        ...(repositoryHeld && { hold: repositoryHeld.hold }),
       },
     ];
   running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
@@ -844,14 +859,15 @@ function mergeRelaunch(
     return [
       { kind: "skip", ...at, reason: `merge relaunch waits: ${excluded}` },
     ];
-  const hold = releaseHoldReason(repository.releaseHold, [target.number]);
+  const own = ownedPullRequests(previous, target);
+  const hold = repositoryHold("release", repository, own);
   if (hold)
     return [
       {
         kind: "skip",
         ...at,
-        reason: `relaunch waits: ${hold}`,
-        hold: "release-hold",
+        ...hold,
+        reason: `relaunch waits: ${hold.reason}`,
       },
     ];
   const selected = issueModel(
@@ -868,11 +884,11 @@ function mergeRelaunch(
             `${previous.provider}/${previous.model}@${previous.effort}`,
           )
         : issueModel(issue, modelLabelPrefix, snapshot.settings, models);
+  const repositoryHeld = repositoryGate(repository, own);
   const reason =
     "error" in model
       ? model.error
-      : (paused(repository) ??
-        heldByFactory(repository, [target.number]) ??
+      : (repositoryHeld?.reason ??
         gate(model.provider, running, snapshot, "pause"));
   if (reason)
     return [
@@ -881,8 +897,10 @@ function mergeRelaunch(
         ...at,
         reason: `merge relaunch waits: ${reason}`,
         ...("error" in model
-          ? { hold: "model-label" }
-          : repositoryHoldKey(repository, [target.number])),
+          ? { hold: holdKeys.model }
+          : repositoryHeld
+            ? { hold: repositoryHeld.hold }
+            : {}),
       },
     ];
   if ("error" in model) return [];
@@ -902,41 +920,6 @@ function mergeRelaunch(
       mergeRelaunch: target,
     },
   ];
-}
-
-const numbered = (numbers: number[]) =>
-  numbers.map((number) => `#${number}`).join(", ");
-
-// The release hold holds merges only. An unreadable set requires a
-// successful read before granting merge permission.
-export function releaseHoldReason(
-  hold: Repository["releaseHold"],
-  own: number[],
-): string | null {
-  if (hold === null)
-    return "release hold state is unreadable; merging resumes after a successful read confirms no other labelled PR remains";
-  const others = hold?.filter((number) => !own.includes(number)) ?? [];
-  return others.length
-    ? `release hold (${numbered(others)}); merging resumes when the last labelled PR closes or loses the label`
-    : null;
-}
-
-// The factory hold pauses the repository as a whole: pickup, retries,
-// relaunches, resumes and merges. `own` names the PRs being merged, whose
-// own label never holds them; an unreadable set holds even those. Without a
-// configured label nothing holds.
-export function factoryHoldReason(
-  label: string | undefined,
-  hold: Repository["factoryHold"],
-  own: number[],
-): string | null {
-  if (label === undefined) return null;
-  if (hold === null)
-    return `factory hold state is unreadable; pickup and merging resume after a successful read confirms no open issue or PR carries \`${label}\``;
-  const others = hold?.filter((number) => !own.includes(number)) ?? [];
-  return others.length
-    ? `factory hold (${numbered(others)} ${others.length === 1 ? "carries" : "carry"} \`${label}\`); pickup and merging resume when the last labelled issue or PR closes or loses the label`
-    : null;
 }
 
 // A merge delivery never takes over an owner's question or a PR whose
@@ -1090,30 +1073,6 @@ function carriesPaused(repository: Repository, number: number): boolean {
   );
 }
 
-function paused(repository: Repository): string | null {
-  return repository.paused === null
-    ? null
-    : `${repository.name} is paused: ${repository.paused}`;
-}
-
-function heldByFactory(repository: Repository, own: number[]): string | null {
-  return factoryHoldReason(
-    repository.configuration.labels.hold,
-    repository.factoryHold,
-    own,
-  );
-}
-
-// The hold comment key for a launch the repository itself holds, when it
-// does: its configuration pause first, then its factory hold.
-function repositoryHoldKey(
-  repository: Repository,
-  own: number[],
-): { hold?: string } {
-  if (repository.paused !== null) return { hold: "repository-configuration" };
-  return heldByFactory(repository, own) ? { hold: "factory-hold" } : {};
-}
-
 // The PR a continuing issue's next launch would deliver: an ended run's or
 // orphaned claim's merge candidate, or an interrupted or paused merge
 // relaunch's target.
@@ -1201,7 +1160,7 @@ function oldestFirst(
 function exclusion(
   issue: Issue,
   repository: Repository,
-): { reason: string; key?: string } | null {
+): { reason: string; key?: HoldKey } | null {
   const { labels } = repository.configuration;
   const needsInput = needsInputExclusion(issue, labels);
   if (needsInput) return { reason: needsInput };

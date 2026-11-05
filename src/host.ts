@@ -32,8 +32,6 @@ import {
 } from "./factory-configuration.ts";
 import {
   decideFactory,
-  factoryHoldReason,
-  releaseHoldReason,
   type Claim,
   type Decision,
   type Issue,
@@ -43,6 +41,11 @@ import {
   type Settings,
   type Snapshot,
 } from "./factory.ts";
+import {
+  heldPullRequests,
+  repositoryHold,
+  observeHolds,
+} from "./repository-holds.ts";
 import {
   relationshipSections,
   repositoryPlatform,
@@ -121,13 +124,6 @@ type HostRun = Run & {
   awaitingMergeNotified?: true;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
-  // Items carrying the release or factory hold label observed during this
-  // run, retained even after the hold clears. Both holds defer merges.
-  releaseHoldObserved?: number[];
-  releaseHoldSettled?: true;
-  // Run-owned PRs whose merges this run deferred for either hold,
-  // independent of eligibility.
-  releaseHeld?: number[];
   launchResult?: LaunchResult;
   recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
@@ -171,7 +167,6 @@ type Pass = {
   releaseHold?: number[] | null;
   // Open issues and PRs carrying `labels.hold`; null when the read failed.
   factoryHold?: number[] | null;
-  releaseHeld: Map<number, number[]>;
 };
 
 export function createHost(
@@ -281,7 +276,6 @@ export function createHost(
       read: null,
       configuration: conventions.get(name) ?? null,
       hasReviewPolicy: false,
-      releaseHeld: new Map(),
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
     try {
@@ -369,16 +363,13 @@ export function createHost(
     }
     // Persist before settlement or launch decisions: a later clear read must
     // not erase a hold that affected a still-running attempt.
-    const observed = [...(pass.releaseHold ?? []), ...(pass.factoryHold ?? [])];
     for (const run of runs.filter(
-      (run) => run.repository === name && !run.releaseHoldSettled,
+      (run) =>
+        run.repository === name &&
+        (!run.ended || !("ownedPullRequests" in run.ended)),
     )) {
-      if (observed.length) {
-        run.releaseHoldObserved = [
-          ...new Set([...(run.releaseHoldObserved ?? []), ...observed]),
-        ];
-        record(run);
-      }
+      run.holdObserved = observeHolds(run.holdObserved, pass);
+      record(run);
     }
     try {
       const issues = await platform.readIssues();
@@ -391,33 +382,15 @@ export function createHost(
           run.issue,
           run.pullRequestSince,
         );
-        if (!run.releaseHoldSettled) {
-          const held = observation.ownedPullRequests.filter(
-            (own) =>
-              pass.releaseHold === null ||
-              pass.factoryHold === null ||
-              (run.releaseHoldObserved ?? []).some((number) => number !== own),
-          );
-          if (held.length) {
-            run.releaseHeld = held;
-            // A merge attempt stopped by a hold did not spend its
-            // head's recovery opportunity. Other consumed heads stay bounded.
-            if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
-              run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
-                (head) => head !== mergeHead(run.mergeRelaunch!),
-              );
-          }
-          run.releaseHoldSettled = true;
-          record(run);
-        }
-        // Historical marks survive temporary ineligibility; visible reasons
-        // concern only PRs that are still open and owned in this pass.
-        pass.releaseHeld.set(
-          run.issue,
-          (run.releaseHeld ?? []).filter((number) =>
-            observation.ownedPullRequests.includes(number),
-          ),
+        const held = heldPullRequests(
+          run.holdObserved,
+          observation.ownedPullRequests,
         );
+        // A hold-stopped merge attempt did not spend its head's recovery.
+        if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
+          run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
+            (head) => head !== mergeHead(run.mergeRelaunch!),
+          );
         const mergeCandidate = await readMergeCandidate(
           git,
           clone,
@@ -425,7 +398,8 @@ export function createHost(
           observation.mergeCandidate,
           run.mergeRelaunchHeads ?? [],
           pass,
-          run.releaseHeld,
+          run.holdObserved,
+          observation.ownedPullRequests,
         );
         run.ended = {
           ...(mergeCandidate && { mergeCandidate }),
@@ -437,6 +411,7 @@ export function createHost(
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
           pullRequest: observation.state,
+          ownedPullRequests: observation.ownedPullRequests,
           ...(observation.closesIssue && { closesIssue: true }),
         };
         const paths = await readUnpushableChanges(
@@ -447,6 +422,7 @@ export function createHost(
           pass.configuration.labels.needsInput,
         );
         if (paths.length) run.ended.unpushedChanges = paths;
+        record(run);
       }
       pass.read = {
         name,
@@ -655,7 +631,8 @@ export function createHost(
     candidate: MergeRelaunch | undefined,
     consumed: string[],
     pass: Pass,
-    releaseHeld?: number[],
+    holdObserved?: number[] | null,
+    own: number[] = [],
   ): Promise<MergeRelaunch | undefined> {
     if (
       !candidate ||
@@ -673,7 +650,8 @@ export function createHost(
       candidate.baseBranch !== defaultRef.slice("refs/remotes/origin/".length)
     )
       return undefined;
-    if (releaseHeld?.includes(candidate.number)) return candidate;
+    if (heldPullRequests(holdObserved, own).includes(candidate.number))
+      return candidate;
     await git(clone, [
       "fetch",
       "--quiet",
@@ -777,12 +755,20 @@ export function createHost(
           conventions.set(name, recorded.configuration);
         recovered.push({
           ...recorded,
-          // Older awaiting-merge records predate this hold; they acquire no
-          // new sticky evidence merely because the process restarted.
-          ...((recorded.releaseHoldSettled ||
-            (recorded.ended && "pullRequest" in recorded.ended)) && {
-            releaseHoldSettled: true,
-          }),
+          // v3.0.1 stored derived held PRs. Preserve settled classification;
+          // unsettled records retain their observations until the first read.
+          holdObserved:
+            "holdObserved" in recorded
+              ? recorded.holdObserved
+              : recorded.releaseHoldSettled ||
+                  (recorded.ended && "pullRequest" in recorded.ended)
+                ? recorded.releaseHeld?.length
+                  ? null
+                  : []
+                : recorded.releaseHoldObserved,
+          releaseHoldObserved: undefined,
+          releaseHoldSettled: undefined,
+          releaseHeld: undefined,
           exited: true,
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
           ended: recorded.interrupted
@@ -791,7 +777,16 @@ export function createHost(
               ? recoveredPause(recorded)
               : recorded.pausing
                 ? { paused: recorded.pausing, commented: false }
-                : { timedOut: false, pullRequest: "none", orphaned: true },
+                : {
+                    timedOut: false,
+                    pullRequest: "none",
+                    orphaned: true,
+                    ...((recorded.releaseHoldSettled ||
+                      (recorded.ended && "pullRequest" in recorded.ended)) && {
+                      ownedPullRequests:
+                        recorded.ended?.ownedPullRequests ?? [],
+                    }),
+                  },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
@@ -898,6 +893,11 @@ export function createHost(
       return;
     }
     forget(decision);
+    const holdObserved =
+      previous?.ended &&
+      ("interrupted" in previous.ended || "paused" in previous.ended)
+        ? previous.holdObserved
+        : [];
     const run: HostRun = {
       configuration: pass.configuration!,
       repository,
@@ -912,16 +912,7 @@ export function createHost(
       ...(decision.inputResume && { inputResume: decision.inputResume }),
       ...(decision.mergeRelaunch && { mergeRelaunch: decision.mergeRelaunch }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
-      releaseHoldObserved: [
-        ...new Set([
-          ...(previous?.ended &&
-          ("interrupted" in previous.ended || "paused" in previous.ended)
-            ? (previous.releaseHoldObserved ?? [])
-            : []),
-          ...(pass.releaseHold ?? []),
-          ...(pass.factoryHold ?? []),
-        ]),
-      ],
+      holdObserved: observeHolds(holdObserved, pass),
       ...(decision.relaunch &&
         marker.awaitingMergeNotified && { awaitingMergeNotified: true }),
       startedAt,
@@ -1258,6 +1249,7 @@ export function createHost(
           ...(run.retry && { retry: run.retry }),
           ...(run.inputResume && { inputResume: run.inputResume }),
           ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
+          holdObserved: run.holdObserved,
           startedAt: run.startedAt,
           log: run.log,
           ended: run.exited ? run.ended : null,
@@ -1271,8 +1263,8 @@ export function createHost(
     for (const pass of passes) {
       if (pass.paused !== null)
         report(`${pass.name} is paused: ${pass.paused}`);
-      const held = factoryHeld(pass);
-      if (held !== null) report(`${pass.name} is held: ${held}`);
+      const held = repositoryHold("factory", pass)?.reason;
+      if (held) report(`${pass.name} is held: ${held}`);
     }
     const decisions = decideFactory(snapshot, registry);
     // Hold comments retry independently; their availability never prevents
@@ -1289,25 +1281,6 @@ export function createHost(
             ? [{ key: decision.hold, reason: decision.reason }]
             : [],
         );
-        const held = pass.releaseHeld.get(issue.number);
-        if (
-          held?.length &&
-          !holds.some((hold) => hold.key === "release-hold")
-        ) {
-          const reason = releaseHoldReason(pass.releaseHold, held);
-          if (reason) holds.push({ key: "release-hold", reason });
-        }
-        if (
-          held?.length &&
-          !holds.some((hold) => hold.key === "factory-hold")
-        ) {
-          const reason = factoryHoldReason(
-            pass.configuration?.labels.hold,
-            pass.factoryHold,
-            held,
-          );
-          if (reason) holds.push({ key: "factory-hold", reason });
-        }
         try {
           await pass.platform.reconcileHolds(issue.number, holds);
         } catch (error) {
@@ -1345,7 +1318,8 @@ export function createHost(
           snapshot.now,
           passes.map((pass) => ({
             name: pass.name,
-            paused: pass.paused ?? factoryHeld(pass),
+            paused:
+              pass.paused ?? repositoryHold("factory", pass)?.reason ?? null,
           })),
           decisions,
           providers,
@@ -1396,15 +1370,6 @@ export function createHost(
     } catch (error) {
       report(`the sandbox build cache was not pruned: ${error}`);
     }
-  }
-
-  // Why the repository's factory hold pauses it this pass, or null.
-  function factoryHeld(pass: Pass): string | null {
-    return factoryHoldReason(
-      pass.configuration?.labels.hold,
-      pass.factoryHold,
-      [],
-    );
   }
 
   // After launches have been stopped or finished, wait for their log and

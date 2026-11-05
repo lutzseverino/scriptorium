@@ -3,6 +3,7 @@
 // body edits and links, and its blockers, as the platform reports them. It
 // knows no issue template and reads no issue body.
 import type { Issue, IssueId } from "./factory.ts";
+import { holdKeys, type HoldKey } from "./hold-comments.ts";
 
 // Who last applied an issue's ready label. Only a user authorizes, by their
 // repository role now as the platform names it, which is null when they hold
@@ -47,7 +48,7 @@ export function readinessExclusion(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
-): (ReadinessHold & { key?: string }) | null {
+): (ReadinessHold & { key?: HoldKey }) | null {
   return readinessExclusions(issue, openIssues, policy)[0] ?? null;
 }
 
@@ -57,13 +58,13 @@ export function readinessExclusions(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
-): (ReadinessHold & { key?: string })[] {
-  const holds: (ReadinessHold & { key?: string })[] = [];
+): (ReadinessHold & { key?: HoldKey })[] {
+  const holds: (ReadinessHold & { key?: HoldKey })[] = [];
   const refused = refusal(issue, policy);
   if (refused)
     holds.push({
       ...refused,
-      ...(!refused.waiting && { key: "readiness" }),
+      ...(!refused.waiting && { key: holdKeys.readiness }),
       reason: `its readiness ${refused.reason}`,
     });
   if (issue.subIssues.length > 0)
@@ -82,7 +83,7 @@ export function readinessExclusions(
   if (held)
     holds.push({
       ...held,
-      ...(!held.waiting && !held.blocked && { key: "parent-readiness" }),
+      ...(!held.waiting && !held.blocked && { key: holdKeys.parentReadiness }),
       reason: `sub-issue of ${reference(parent.number)}, ${held.reason}`,
     });
   return holds;

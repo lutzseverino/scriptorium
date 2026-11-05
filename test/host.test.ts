@@ -1,3 +1,4 @@
+import { holdKeys } from "../src/hold-comments.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -6356,9 +6357,9 @@ test("an actionable hold comment is edited, resolved and reactivated across pass
 });
 
 for (const reason of [
-  "readiness",
-  "parent-readiness",
-  "repository-configuration",
+  holdKeys.readiness,
+  holdKeys.parentReadiness,
+  holdKeys.configuration,
 ])
   test(`${reason} comments update and resolve without duplicates or state-label changes`, async (t) => {
     const name = "acme/widgets";
@@ -6371,13 +6372,13 @@ for (const reason of [
         [name]: [
           {
             number: 1,
-            ...(reason === "readiness"
+            ...(reason === holdKeys.readiness
               ? { timeline: [labelled("casey")] }
-              : reason === "parent-readiness"
+              : reason === holdKeys.parentReadiness
                 ? { parent: 2 }
                 : {}),
           },
-          ...(reason === "parent-readiness"
+          ...(reason === holdKeys.parentReadiness
             ? [
                 {
                   number: 2,
@@ -6392,7 +6393,7 @@ for (const reason of [
       roles,
       caps: { "claude-code": 0, codex: 0 },
       imageFailures:
-        reason === "repository-configuration"
+        reason === holdKeys.configuration
           ? [
               new Error("first configuration problem"),
               new Error("changed configuration problem"),
@@ -6406,8 +6407,8 @@ for (const reason of [
     assert.equal(held.comments.length, 1);
     assert.match(held.comments[0], new RegExp(`scriptorium:hold:${reason}`));
     const first = held.comments[0];
-    if (reason === "readiness") roles.casey = "triage";
-    if (reason === "parent-readiness") {
+    if (reason === holdKeys.readiness) roles.casey = "triage";
+    if (reason === holdKeys.parentReadiness) {
       const parent = run.github.find(name, 2);
       parent.labels = ["ready-for-agent"];
       parent.timeline.push(labelled("casey"));
@@ -6415,11 +6416,11 @@ for (const reason of [
     await run.tick();
     assert.equal(held.comments.length, 1);
     assert.notEqual(held.comments[0], first);
-    if (reason === "readiness" || reason === "parent-readiness")
+    if (reason === holdKeys.readiness || reason === holdKeys.parentReadiness)
       roles.casey = "admin";
     await run.tick();
     assert.match(held.comments[0], /Resolved/);
-    if (reason === "readiness" || reason === "parent-readiness")
+    if (reason === holdKeys.readiness || reason === holdKeys.parentReadiness)
       roles.casey = "read";
     await run.tick();
     assert.equal(held.comments.length, 1);
@@ -7127,3 +7128,115 @@ test("without a factory hold label the factory reads no hold", async (t) => {
   assert.equal(run.launched.length, 1);
   assert.doesNotMatch(run.launched[0].options.prompt!, /Factory hold/);
 });
+
+test("a run owning two PRs is never held by its own labelled PR", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  const pr = publishedPR(bare);
+  issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+  run.github.releaseHolds["acme/widgets"] = [40];
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.ok(
+    !issue.comments.some((comment) =>
+      comment.includes("scriptorium:hold:release-hold"),
+    ),
+  );
+  issue.branchPullRequests[1].state = "closed";
+  await run.restart().tick();
+  assert.equal(
+    run.launched.length,
+    1,
+    "a self-label creates no deferred merge",
+  );
+});
+
+for (const settled of [false, true])
+  test(`v3.0.1 hold records restore deferred merges, settled: ${settled}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    run.github.releaseHolds["acme/widgets"] = [80];
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    issue.branchPullRequests.push(publishedPR(bare));
+    run.launched[0].finish();
+    await run.drain();
+    if (settled) await run.tick();
+    const path = join(
+      run.state,
+      "repositories/acme/widgets/runs/issue-4-attempt-1.json",
+    );
+    const record = JSON.parse(readFileSync(path, "utf8"));
+    delete record.holdObserved;
+    if (record.ended) delete record.ended.ownedPullRequests;
+    record.releaseHoldObserved = [80];
+    if (settled) {
+      record.releaseHoldSettled = true;
+      record.releaseHeld = [40];
+    }
+    writeFileSync(path, JSON.stringify(record));
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, 1);
+    assert.match(issue.comments.join("\n"), /release hold \(#80\)/);
+    run.github.releaseHolds["acme/widgets"] = [];
+    await restarted.tick();
+    assert.equal(run.launched.length, 2);
+    const restored = JSON.parse(readFileSync(path, "utf8"));
+    for (const field of [
+      "releaseHoldObserved",
+      "releaseHoldSettled",
+      "releaseHeld",
+    ])
+      assert.ok(!(field in restored));
+  });
+
+for (const factory of [false, true])
+  test(`an unreadable hold observed mid-run survives a clear before settlement, factory: ${factory}`, async (t) => {
+    const bare = remote(t, factory ? factoryHoldFiles : releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    const holds = factory ? run.github.factoryHolds : run.github.releaseHolds;
+    holds["acme/widgets"] = new PlatformError("invalidResponse", "unreadable");
+    await run.tick();
+    if (factory)
+      run.github.factoryHolds["acme/widgets"] = {
+        issues: [],
+        pullRequests: [],
+      };
+    else run.github.releaseHolds["acme/widgets"] = [];
+    await run.tick();
+    run.github
+      .find("acme/widgets", 4)
+      .branchPullRequests.push(publishedPR(bare));
+    run.launched[0].finish();
+    await run.drain();
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "the current PR gets its deferred merge attempt",
+    );
+    run.launched[1].finish();
+    await restarted.drain();
+    await run.restart().tick();
+    assert.equal(
+      run.launched.length,
+      2,
+      "the unheld attempt consumes the head once",
+    );
+  });
