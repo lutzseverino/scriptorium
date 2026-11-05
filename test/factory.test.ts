@@ -1,9 +1,8 @@
+import { holdKeys } from "../src/hold-comments.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   decideFactory,
-  factoryHoldReason,
-  releaseHoldReason,
   type Claim,
   type Decision,
   type Issue,
@@ -584,7 +583,7 @@ test("a finished parent stays open while its readiness is refused or unread", ()
           kind: "skip",
           ...at(3),
           reason: `its readiness ${reason}`,
-          ...(!reason.startsWith("waits:") && { hold: "readiness" }),
+          ...(!reason.startsWith("waits:") && { hold: holdKeys.readiness }),
         },
       ],
       reason,
@@ -698,7 +697,7 @@ test("any unauthorized addition since readiness holds a parent despite later aut
       assert.ok(hold?.kind === "skip");
       assert.equal(
         hold.hold,
-        actor.kind === "unreadable" ? undefined : "parent-readiness",
+        actor.kind === "unreadable" ? undefined : holdKeys.parentReadiness,
       );
     }
   }
@@ -1127,14 +1126,14 @@ test("a paused repository claims and launches nothing while its runs keep settli
       kind: "skip",
       ...at(1, gadgets),
       reason: "acme/gadgets is paused: it has no .factory/Dockerfile",
-      hold: "repository-configuration",
+      hold: holdKeys.configuration,
     },
     {
       kind: "skip",
       ...at(2, gadgets),
       reason:
         "retry waits: acme/gadgets is paused: it has no .factory/Dockerfile",
-      hold: "repository-configuration",
+      hold: holdKeys.configuration,
     },
     {
       kind: "skip",
@@ -1644,7 +1643,7 @@ test("an interrupted run takes its issue's turn and waits for its gate and its r
       ...at(4),
       reason:
         "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
-      hold: "repository-configuration",
+      hold: holdKeys.configuration,
     },
   ]);
 });
@@ -1922,7 +1921,7 @@ test("a paused run also waits for its provider's cap and its repository", () => 
       ...at(4),
       reason:
         "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
-      hold: "repository-configuration",
+      hold: holdKeys.configuration,
     },
   ]);
 });
@@ -2975,10 +2974,10 @@ test("a failed needs-input continuation retains its PR context on the automatic 
 
 test("actionable skips carry stable keys while blockers and transient roles stay log-only", () => {
   const cases: [Issue, Partial<Repository>, string | undefined][] = [
-    [issue(1, undefined, { ready: null }), {}, "readiness"],
-    [issue(1, undefined, { nativeParent: 2 }), {}, "parent-readiness"],
-    [issue(1, ["ready-for-agent", "model:unknown"]), {}, "model-label"],
-    [issue(1), { paused: "invalid configuration" }, "repository-configuration"],
+    [issue(1, undefined, { ready: null }), {}, holdKeys.readiness],
+    [issue(1, undefined, { nativeParent: 2 }), {}, holdKeys.parentReadiness],
+    [issue(1, ["ready-for-agent", "model:unknown"]), {}, holdKeys.model],
+    [issue(1), { paused: "invalid configuration" }, holdKeys.configuration],
     [
       issue(1, undefined, { blockedBy: [{ number: 3, state: "open" }] }),
       {},
@@ -3045,7 +3044,7 @@ test("unlisted labels hold pickup and retry without a fallback, and listed label
         assert.ok(
           decisions.some(
             (decision) =>
-              decision.kind === "skip" && decision.hold === "model-label",
+              decision.kind === "skip" && decision.hold === holdKeys.model,
           ),
         );
       } else assert.equal(launches(decisions).length, 1);
@@ -3094,7 +3093,7 @@ test("interrupted, paused and merge relaunches hold a recorded model removed fro
     assert.ok(
       decisions.some(
         (decision) =>
-          decision.kind === "skip" && decision.hold === "model-label",
+          decision.kind === "skip" && decision.hold === holdKeys.model,
       ),
     );
   }
@@ -3149,7 +3148,7 @@ test("every relaunch holds an unlisted current label even when its recorded mode
     assert.ok(
       decisions.some(
         (decision) =>
-          decision.kind === "skip" && decision.hold === "model-label",
+          decision.kind === "skip" && decision.hold === holdKeys.model,
       ),
     );
   }
@@ -3178,7 +3177,8 @@ test("a pending pause notice is delivered before the removed-model relaunch hold
   assert.deepEqual(launches(decisions), []);
   assert.ok(
     decisions.some(
-      (decision) => decision.kind === "skip" && decision.hold === "model-label",
+      (decision) =>
+        decision.kind === "skip" && decision.hold === holdKeys.model,
     ),
   );
 });
@@ -3225,9 +3225,9 @@ test("relaunch model and configuration reasons remain independently actionable u
           decision.kind === "skip" && decision.hold ? [decision.hold] : [],
         )
         .sort();
-    assert.deepEqual(held(), ["model-label", "repository-configuration"]);
+    assert.deepEqual(held(), [holdKeys.model, holdKeys.configuration]);
     candidate.labels = ["factory:running"];
-    assert.deepEqual(held(), ["repository-configuration"]);
+    assert.deepEqual(held(), [holdKeys.configuration]);
     assert.deepEqual(launches(decideFactory(input, models)), []);
   }
 });
@@ -3263,27 +3263,11 @@ test("pending automatic and orphan retries retain all model and configuration ho
           decision.kind === "skip" && decision.hold ? [decision.hold] : [],
         )
         .sort();
-    assert.deepEqual(held(), ["model-label", "repository-configuration"]);
+    assert.deepEqual(held(), [holdKeys.model, holdKeys.configuration]);
     candidate.labels = ["ready-for-agent", "factory:running"];
-    assert.deepEqual(held(), ["repository-configuration"]);
+    assert.deepEqual(held(), [holdKeys.configuration]);
     assert.deepEqual(launches(decideFactory(input, models)), []);
   }
-});
-
-test("release-hold reasons exclude every owned PR when a run owns several", () => {
-  assert.equal(releaseHoldReason([40], [40, 41]), null);
-  assert.equal(releaseHoldReason([40, 41], [40, 41]), null);
-  assert.equal(
-    releaseHoldReason([40, 80, 41], [40, 41]),
-    "release hold (#80); merging resumes when the last labelled PR closes or loses the label",
-  );
-});
-
-test("release-hold reasons name only foreign labelled PRs for a single owned PR", () => {
-  assert.equal(
-    releaseHoldReason([40, 80], [40]),
-    "release hold (#80); merging resumes when the last labelled PR closes or loses the label",
-  );
 });
 
 test("release holds gate only merge relaunches in their own repository and exclude the PR itself", () => {
@@ -3442,7 +3426,7 @@ test("a factory hold stops pickup, retries, interrupted and paused relaunches, n
         [gadgets],
         JSON.stringify({ scenario, hold }),
       );
-      assert.deepEqual(holdsOf(decisions, 4), ["factory-hold"]);
+      assert.deepEqual(holdsOf(decisions, 4), [holdKeys.factory]);
       assert.match(
         skipOf(decisions, 4)!,
         hold === null
@@ -3489,7 +3473,10 @@ test("a merge relaunch whose target PR alone carries the factory hold launches",
         launched,
         JSON.stringify({ hold, runs: runs.length }),
       );
-      assert.deepEqual(holdsOf(decisions, 4), launched ? [] : ["factory-hold"]);
+      assert.deepEqual(
+        holdsOf(decisions, 4),
+        launched ? [] : [holdKeys.factory],
+      );
       // Pickup stays held while any item carries the label, including the
       // merging PR itself.
       assert.equal(
@@ -3524,7 +3511,7 @@ test("a factory hold lets existing runs settle and stop, and other gates keep th
     ["release:1", "stop:2"],
   );
   assert.deepEqual(launches(decisions), []);
-  assert.deepEqual(holdsOf(decisions, 3), ["factory-hold", "model-label"]);
+  assert.deepEqual(holdsOf(decisions, 3), [holdKeys.factory, holdKeys.model]);
 });
 
 test("a merge relaunch blocked by another gate gets no factory-hold reason from its own label", () => {
@@ -3552,15 +3539,115 @@ test("a factory hold read without a configured label holds nothing", () => {
   assert.equal(launches(decide({ repositories: [repo] })).length, 1);
 });
 
-test("the factory hold exempts exactly the PRs being merged, and holds nothing without a label", () => {
-  assert.match(
-    factoryHoldReason("factory:hold", [9, 40, 41], [40, 41])!,
-    /^factory hold \(#9 carries `factory:hold`\)/,
-  );
-  assert.equal(factoryHoldReason("factory:hold", [40, 41], [40, 41]), null);
-  assert.match(
-    factoryHoldReason("factory:hold", null, [40])!,
-    /^factory hold state is unreadable/,
-  );
-  assert.equal(factoryHoldReason(undefined, null, []), null);
+test("owned PRs never create repository holds for their run", () => {
+  for (const number of [40, 41]) {
+    const repo = holdingRepository(widgets, [issue(4, claimed)], {
+      releaseHold: [40],
+      factoryHold: [40],
+    });
+    const decisions = decide({
+      repositories: [repo],
+      runs: [
+        run(4, {
+          holdObserved: [40],
+          ownedPullRequests: [40, 41],
+          ended: {
+            timedOut: false,
+            pullRequest: "open",
+            mergeCandidate: {
+              number,
+              headCommit: "a".repeat(40),
+              baseBranch: "main",
+              createdAt: now,
+            },
+          },
+        }),
+      ],
+    });
+    assert.deepEqual(holdsOf(decisions, 4), []);
+    assert.equal(launches(decisions)[0]?.mergeRelaunch?.number, number);
+  }
 });
+
+test("foreign repository holds remain visible for every owned PR", () => {
+  const repo = holdingRepository(widgets, [issue(4, claimed)], {
+    releaseHold: [40, 50],
+    factoryHold: [40, 50],
+  });
+  const decisions = decide({
+    repositories: [repo],
+    runs: [
+      run(4, {
+        holdObserved: [50],
+        ownedPullRequests: [40, 41],
+        ended: {
+          timedOut: false,
+          pullRequest: "open",
+        },
+      }),
+    ],
+  });
+  assert.deepEqual(holdsOf(decisions, 4), [holdKeys.factory, holdKeys.release]);
+  for (const decision of decisions)
+    if (decision.kind === "skip" && decision.hold) {
+      assert.match(decision.reason, /#50/);
+      assert.doesNotMatch(decision.reason, /#40|#41/);
+    }
+});
+
+test("an unreadable repository hold during a run holds all its owned PRs", () => {
+  const repo = holdingRepository(widgets, [issue(4, claimed)], {
+    releaseHold: null,
+    factoryHold: null,
+  });
+  const decisions = decide({
+    repositories: [repo],
+    runs: [
+      run(4, {
+        holdObserved: null,
+        ownedPullRequests: [40, 41],
+        ended: {
+          timedOut: false,
+          pullRequest: "open",
+        },
+      }),
+    ],
+  });
+  assert.deepEqual(holdsOf(decisions, 4), [holdKeys.factory, holdKeys.release]);
+  for (const decision of decisions)
+    if (decision.kind === "skip" && decision.hold) {
+      assert.match(decision.reason, /state is unreadable/);
+      assert.doesNotMatch(decision.reason, /#40|#41/);
+    }
+});
+
+for (const ended of [
+  { interrupted: true as const },
+  {
+    paused: { cause: "usage limit" as const, reset: null, at: now, until: now },
+    commented: true,
+  },
+])
+  test(`a continuing merge excludes every owned PR, ending: ${"interrupted" in ended ? "interrupted" : "paused"}`, () => {
+    const repo = holdingRepository(widgets, [issue(4, claimed)], {
+      factoryHold: [41],
+    });
+    const decisions = decide({
+      repositories: [repo],
+      runs: [
+        run(4, {
+          holdObserved: [41],
+          ownedPullRequests: [40, 41],
+          ended,
+          mergeRelaunch: {
+            number: 40,
+            headCommit: "a".repeat(40),
+            baseBranch: "main",
+            createdAt: now,
+          },
+        }),
+      ],
+    });
+    assert.deepEqual(holdsOf(decisions, 4), []);
+    assert.equal(launches(decisions)[0]?.mergeRelaunch?.number, 40);
+  });

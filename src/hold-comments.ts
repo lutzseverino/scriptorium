@@ -2,6 +2,16 @@
 // Cleared and recurring reasons reuse the same comment, including after restart.
 import type { IssueTracker } from "@lutzseverino/postern";
 
+export const holdKeys = {
+  model: "model-label",
+  factory: "factory-hold",
+  release: "release-hold",
+  configuration: "repository-configuration",
+  readiness: "readiness",
+  parentReadiness: "parent-readiness",
+} as const;
+export type HoldKey = (typeof holdKeys)[keyof typeof holdKeys];
+
 // A hold comment's marker line, keyed by its reason, and the wording of its
 // next line while the reason holds and once it is resolved.
 const markerLine = /^<!-- scriptorium:hold:([a-z0-9-]+) -->$/m;
@@ -11,10 +21,12 @@ const resolved = "Resolved: this reason no longer holds the issue.";
 export async function reconcileHolds(
   tracker: IssueTracker,
   issue: number,
-  holds: { key: string; reason: string }[],
+  holds: { key: HoldKey; reason: string }[],
 ): Promise<void> {
   const comments = await tracker.comments(issue);
-  const pending = new Map(holds.map((hold) => [hold.key, hold.reason]));
+  const pending = new Map<string, string>(
+    holds.map((hold) => [hold.key, hold.reason]),
+  );
   for (const comment of comments) {
     const match = markerLine.exec(comment.body);
     if (!match) continue;
