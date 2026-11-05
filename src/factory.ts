@@ -383,11 +383,9 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       if (issue.subIssues.length === 0) {
         if ("error" in selected)
           holds.push({ hold: holdKeys.model, reason: selected.error });
-        const configuration = repositoryGate({
-          ...repository,
-          factoryHold: [],
-        });
-        if (configuration) holds.push(configuration);
+        const configuration = repositoryGate(repository);
+        if (configuration?.hold === holdKeys.configuration)
+          holds.push(configuration);
         const held = repositoryHold("factory", repository, own);
         if (held) holds.push(held);
       }
@@ -562,45 +560,58 @@ const continuationRules = {
     releaseHold: false,
     threshold: "drain",
     prefix: "",
+    modelBeforeRepository: false,
   },
   retry: {
     factoryHold: "all",
     releaseHold: false,
     threshold: "drain",
     prefix: "retry waits: ",
+    modelBeforeRepository: true,
   },
   resume: {
     factoryHold: "unowned",
     releaseHold: false,
     threshold: "pause",
     prefix: "relaunch waits: ",
+    modelBeforeRepository: true,
   },
   merge: {
     factoryHold: "unowned",
     releaseHold: true,
     threshold: "pause",
     prefix: "merge relaunch waits: ",
+    modelBeforeRepository: true,
   },
 } as const;
 
+type ContinuationState =
+  | { kind: "fresh" }
+  | { kind: "retry"; retry: Retry }
+  | { kind: "resume"; run: Run }
+  | { kind: "merge" };
+
 type Continuation = {
+  kind: ContinuationState["kind"];
   repository: Repository;
   issue: Issue;
   previous: Run | undefined;
   own: number[];
   selected: Model | { error: string };
+  modelSource:
+    | { kind: "issue" }
+    | { kind: "retry"; model: Model }
+    | { kind: "recorded"; run: Run; retain: boolean };
+  exclusions: Decision[] | null;
+  afterModel: Decision[] | null;
+  pause: Pause | null;
   reconcile: { readiness: boolean; pending: boolean };
   launch: Pick<
     Launch,
     "attempt" | "retry" | "inputResume" | "mergeRelaunch" | "relaunch"
   >;
   unpause: boolean;
-} & (
-  | { kind: "fresh" }
-  | { kind: "retry"; retry: Retry }
-  | { kind: "resume"; run: Run }
-  | { kind: "merge" }
-);
+};
 
 function continuation(
   repository: Repository,
@@ -642,11 +653,26 @@ function continuation(
     (claim?.mergeCandidate && !claim.inputResume),
   );
   const run = resumed ?? previous;
+  const classified = { ...state, repository, issue, previous };
+  const recorded = resumed ?? (state.kind === "merge" ? previous : undefined);
+  const mergeExcluded = resumed?.mergeRelaunch
+    ? mergeExclusion(issue, repository.configuration.labels)
+    : null;
+  const pause =
+    resumed?.ended && "paused" in resumed.ended ? resumed.ended : null;
   return {
-    ...state,
-    repository,
-    issue,
-    previous,
+    ...classified,
+    modelSource:
+      state.kind === "retry"
+        ? { kind: "retry", model: state.retry.model }
+        : recorded
+          ? { kind: "recorded", run: recorded, retain: state.kind === "resume" }
+          : { kind: "issue" },
+    exclusions: continuationExclusions(classified),
+    afterModel: mergeExcluded
+      ? skipped(classified, mergeExcluded, undefined, "merge relaunch waits: ")
+      : null,
+    pause: pause?.paused ?? null,
     own: ownedPullRequests(run, target),
     selected: issueModel(
       issue,
@@ -700,32 +726,14 @@ function continuation(
   };
 }
 
-// Admission owns precedence, model choice and capacity for every continuation.
-// Preserve the existing reason precedence: fresh repository gates and a fresh
-// merge's release hold precede model validation; retry/resume models precede
-// repository gates. A paused run's first notice precedes all admission holds.
-function admit(
-  next: Continuation,
-  running: Map<string, number>,
-  snapshot: Snapshot,
-  models: Models,
-): Decision[] {
-  const { repository, issue, selected } = next;
+// Exclusions are selected once with the continuation, before admission.
+function continuationExclusions(
+  next: ContinuationState &
+    Pick<Continuation, "repository" | "issue" | "previous">,
+): Decision[] | null {
+  const { repository, issue } = next;
   const { labels } = repository.configuration;
-  const rules = continuationRules[next.kind];
   const at = { repository: repository.name, issue: issue.number };
-  const skip = (
-    reason: string,
-    hold?: HoldKey,
-    prefix: string = rules.prefix,
-  ): Decision[] => [
-    {
-      kind: "skip",
-      ...at,
-      reason: `${prefix}${reason}`,
-      ...(hold && { hold }),
-    },
-  ];
   const pause =
     next.kind === "resume" && next.run.ended && "paused" in next.run.ended
       ? next.run.ended
@@ -736,7 +744,7 @@ function admit(
       return [{ kind: "pause", ...at, pause: pause.paused }];
   } else if (next.kind === "merge") {
     const reason = mergeExclusion(issue, labels);
-    if (reason) return skip(reason);
+    if (reason) return skipped(next, reason);
   } else {
     if (!issue.labels.includes(labels.ready))
       return next.kind === "retry"
@@ -750,7 +758,7 @@ function admit(
         policy(repository),
       );
       return readiness?.waiting
-        ? skip(excluded.reason)
+        ? skipped(next, excluded.reason)
         : [unretried(next.retry, excluded.reason)];
     }
     if (next.kind === "fresh") {
@@ -765,54 +773,79 @@ function admit(
         (issue.labels.includes(labels.paused)
           ? `labelled ${labels.paused}; the factory resumes its run by itself`
           : null);
-      if (stateReason) return skip(stateReason);
-      if (excluded) return skip(excluded.reason, excluded.key);
+      if (stateReason) return skipped(next, stateReason);
+      if (excluded) return skipped(next, excluded.reason, excluded.key);
       if (next.previous)
-        return skip("a factory run for it is still on the host");
+        return skipped(next, "a factory run for it is still on the host");
     }
   }
+  return null;
+}
+
+function skipped(
+  next: Pick<Continuation, "repository" | "issue" | "kind">,
+  reason: string,
+  hold?: HoldKey,
+  prefix: string = continuationRules[next.kind].prefix,
+): Decision[] {
+  return [
+    {
+      kind: "skip",
+      repository: next.repository.name,
+      issue: next.issue.number,
+      reason: `${prefix}${reason}`,
+      ...(hold && { hold }),
+    },
+  ];
+}
+
+// Admission preserves reason precedence: fresh repository gates and a fresh
+// merge's release hold precede model validation; retry/resume models precede
+// repository gates. A paused run's first notice precedes all admission holds.
+function admit(
+  next: Continuation,
+  running: Map<string, number>,
+  snapshot: Snapshot,
+  models: Models,
+): Decision[] {
+  const { repository, issue, selected, modelSource } = next;
+  const rules = continuationRules[next.kind];
+  const at = { repository: repository.name, issue: issue.number };
+  if (next.exclusions !== null) return next.exclusions;
   const repositoryHeld = repositoryGate(
     repository,
     rules.factoryHold === "all" ? [] : next.own,
   );
-  if (next.kind === "fresh" && repositoryHeld)
-    return skip(repositoryHeld.reason, repositoryHeld.hold);
+  if (!rules.modelBeforeRepository && repositoryHeld)
+    return skipped(next, repositoryHeld.reason, repositoryHeld.hold);
   if (rules.releaseHold) {
     const held = repositoryHold("release", repository, next.own);
-    if (held) return skip(held.reason, held.hold, "relaunch waits: ");
+    if (held) return skipped(next, held.reason, held.hold, "relaunch waits: ");
   }
-  if ("error" in selected) return skip(selected.error, holdKeys.model);
-  const recorded =
-    next.kind === "resume"
-      ? next.run
-      : next.kind === "merge"
-        ? next.previous
-        : undefined;
-  const resolved = recorded
-    ? models.resolveModel(
-        `${recorded.provider}/${recorded.model}@${recorded.effort}`,
-      )
-    : selected;
-  if ("error" in resolved) return skip(resolved.error, holdKeys.model);
+  if ("error" in selected) return skipped(next, selected.error, holdKeys.model);
+  const resolved =
+    modelSource.kind === "recorded"
+      ? models.resolveModel(
+          `${modelSource.run.provider}/${modelSource.run.model}@${modelSource.run.effort}`,
+        )
+      : modelSource.kind === "retry"
+        ? modelSource.model
+        : selected;
+  if ("error" in resolved) return skipped(next, resolved.error, holdKeys.model);
   const model =
-    next.kind === "retry"
-      ? next.retry.model
-      : next.kind === "resume"
-        ? {
-            provider: next.run.provider,
-            model: next.run.model,
-            effort: next.run.effort,
-          }
-        : resolved;
-  if (next.kind === "resume" && next.run.mergeRelaunch) {
-    const reason = mergeExclusion(issue, labels);
-    if (reason) return skip(reason, undefined, "merge relaunch waits: ");
-  }
+    modelSource.kind === "recorded" && modelSource.retain
+      ? {
+          provider: modelSource.run.provider,
+          model: modelSource.run.model,
+          effort: modelSource.run.effort,
+        }
+      : resolved;
+  if (next.afterModel !== null) return next.afterModel;
   const reason =
     repositoryHeld?.reason ??
-    (pause && limited(model.provider, pause.paused, snapshot)) ??
+    (next.pause && limited(model.provider, next.pause, snapshot)) ??
     gate(model.provider, running, snapshot, rules.threshold);
-  if (reason) return skip(reason, repositoryHeld?.hold);
+  if (reason) return skipped(next, reason, repositoryHeld?.hold);
   running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
   return [
     ...(next.kind === "fresh" ? [{ kind: "claim" as const, ...at }] : []),
