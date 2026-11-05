@@ -3651,3 +3651,77 @@ for (const ended of [
     assert.deepEqual(holdsOf(decisions, 4), []);
     assert.equal(launches(decisions)[0]?.mergeRelaunch?.number, 40);
   });
+
+test("each continuation validates its model label once and reconciles independent holds", () => {
+  const mergeCandidate = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const endings: (Run["ended"] | undefined)[] = [
+    undefined,
+    { timedOut: false, pullRequest: "none" },
+    { interrupted: true },
+    {
+      paused: { cause: "usage limit", reset: null, at: now, until: now },
+      commented: true,
+    },
+    { timedOut: false, pullRequest: "open", mergeCandidate },
+  ];
+  for (const ended of endings) {
+    const candidate = issue(4, ["ready-for-agent", "model:unavailable"]);
+    const repo = holdingRepository(widgets, [candidate], {
+      paused: "invalid configuration",
+      factoryHold: [50],
+    });
+    let validations = 0;
+    const decisions = decideFactory(
+      snapshot({
+        repositories: [repo],
+        runs: ended === undefined ? [] : [run(4, { ended })],
+      }),
+      {
+        ...registry,
+        resolveModelLabel: () => {
+          validations++;
+          return { error: "model label unavailable" };
+        },
+      },
+    );
+    assert.equal(validations, 1);
+    assert.deepEqual(launches(decisions), []);
+    assert.deepEqual(
+      holdsOf(decisions, 4),
+      [holdKeys.factory, holdKeys.model, holdKeys.configuration].sort(),
+    );
+  }
+});
+
+test("a deferred merge candidate retains its holds while a needs-input claim resumes", () => {
+  const mergeCandidate = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const repo = repository(
+    widgets,
+    [issue(4, [...claimed, "model:unavailable"])],
+    {
+      claims: [
+        { issue: 4, pullRequest: "open", inputResume: { pullRequests: [] } },
+      ],
+    },
+  );
+  const decisions = decide({
+    repositories: [repo],
+    runs: [
+      run(4, {
+        ended: { timedOut: false, pullRequest: "open", mergeCandidate },
+      }),
+    ],
+  });
+  assert.deepEqual(launches(decisions), []);
+  assert.deepEqual(holdsOf(decisions, 4), [holdKeys.model]);
+});
