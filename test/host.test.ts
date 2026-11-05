@@ -7129,34 +7129,36 @@ test("without a factory hold label the factory reads no hold", async (t) => {
   assert.doesNotMatch(run.launched[0].options.prompt!, /Factory hold/);
 });
 
-test("a run owning two PRs is never held by its own labelled PR", async (t) => {
-  const bare = remote(t, releaseHoldFiles);
-  const run = host(t, {
-    repositories: { "acme/widgets": [{ number: 4 }] },
-    remotes: { "acme/widgets": bare },
+for (const close of [0, 1])
+  test(`a run owning two PRs is never held by its own labelled PR, close: ${close}`, async (t) => {
+    const bare = remote(t, releaseHoldFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+    run.github.releaseHolds["acme/widgets"] = [40];
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    assert.ok(
+      !issue.comments.some((comment) =>
+        comment.includes("scriptorium:hold:release-hold"),
+      ),
+    );
+    issue.branchPullRequests[close].state = "closed";
+    if (close === 0) run.github.releaseHolds["acme/widgets"] = [];
+    await run.restart().tick();
+    assert.equal(
+      run.launched.length,
+      1,
+      "a self-label creates no deferred merge",
+    );
   });
-  await run.tick();
-  const issue = run.github.find("acme/widgets", 4);
-  const pr = publishedPR(bare);
-  issue.branchPullRequests.push(pr, { ...pr, number: 41 });
-  run.github.releaseHolds["acme/widgets"] = [40];
-  run.launched[0].finish();
-  await run.drain();
-  await run.tick();
-  assert.equal(run.launched.length, 1);
-  assert.ok(
-    !issue.comments.some((comment) =>
-      comment.includes("scriptorium:hold:release-hold"),
-    ),
-  );
-  issue.branchPullRequests[1].state = "closed";
-  await run.restart().tick();
-  assert.equal(
-    run.launched.length,
-    1,
-    "a self-label creates no deferred merge",
-  );
-});
 
 for (const settled of [false, true])
   test(`v3.0.1 hold records restore deferred merges, settled: ${settled}`, async (t) => {
@@ -7178,7 +7180,7 @@ for (const settled of [false, true])
     );
     const record = JSON.parse(readFileSync(path, "utf8"));
     delete record.holdObserved;
-    if (record.ended) delete record.ended.ownedPullRequests;
+    delete record.ownedPullRequests;
     record.releaseHoldObserved = [80];
     if (settled) {
       record.releaseHoldSettled = true;
@@ -7240,3 +7242,33 @@ for (const factory of [false, true])
       "the unheld attempt consumes the head once",
     );
   });
+
+test("an interrupted merge refreshes ownership before excluding its own labelled PRs", async (t) => {
+  const bare = remote(t, factoryHoldFiles);
+  const pr = publishedPR(bare);
+  advanceDefault(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["factory:running"], branchPullRequests: [pr] },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests.push({ ...pr, number: 41 });
+  run.github.factoryHolds["acme/widgets"] = { issues: [], pullRequests: [41] };
+  await run.tick();
+  run.interrupt();
+  run.launched[0].finish();
+  await run.drain();
+  await run.restart().tick();
+  assert.equal(run.launched.length, 2);
+  assert.ok(
+    !issue.comments.some((comment) =>
+      comment.includes("scriptorium:hold:factory-hold"),
+    ),
+  );
+});

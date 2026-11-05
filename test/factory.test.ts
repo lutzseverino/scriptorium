@@ -3550,10 +3550,10 @@ test("owned PRs never create repository holds for their run", () => {
       runs: [
         run(4, {
           holdObserved: [40],
+          ownedPullRequests: [40, 41],
           ended: {
             timedOut: false,
             pullRequest: "open",
-            ownedPullRequests: [40, 41],
             mergeCandidate: {
               number,
               headCommit: "a".repeat(40),
@@ -3579,10 +3579,10 @@ test("foreign repository holds remain visible for every owned PR", () => {
     runs: [
       run(4, {
         holdObserved: [50],
+        ownedPullRequests: [40, 41],
         ended: {
           timedOut: false,
           pullRequest: "open",
-          ownedPullRequests: [40, 41],
         },
       }),
     ],
@@ -3605,10 +3605,10 @@ test("an unreadable repository hold during a run holds all its owned PRs", () =>
     runs: [
       run(4, {
         holdObserved: null,
+        ownedPullRequests: [40, 41],
         ended: {
           timedOut: false,
           pullRequest: "open",
-          ownedPullRequests: [40, 41],
         },
       }),
     ],
@@ -3620,3 +3620,34 @@ test("an unreadable repository hold during a run holds all its owned PRs", () =>
       assert.doesNotMatch(decision.reason, /#40|#41/);
     }
 });
+
+for (const ended of [
+  { interrupted: true as const },
+  {
+    paused: { cause: "usage limit" as const, reset: null, at: now, until: now },
+    commented: true,
+  },
+])
+  test(`a continuing merge excludes every owned PR, ending: ${"interrupted" in ended ? "interrupted" : "paused"}`, () => {
+    const repo = holdingRepository(widgets, [issue(4, claimed)], {
+      factoryHold: [41],
+    });
+    const decisions = decide({
+      repositories: [repo],
+      runs: [
+        run(4, {
+          holdObserved: [41],
+          ownedPullRequests: [40, 41],
+          ended,
+          mergeRelaunch: {
+            number: 40,
+            headCommit: "a".repeat(40),
+            baseBranch: "main",
+            createdAt: now,
+          },
+        }),
+      ],
+    });
+    assert.deepEqual(holdsOf(decisions, 4), []);
+    assert.equal(launches(decisions)[0]?.mergeRelaunch?.number, 40);
+  });

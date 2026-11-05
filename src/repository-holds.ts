@@ -45,17 +45,13 @@ export function repositoryGate(
     : repositoryHold("factory", repository, own);
 }
 
-// The observation is the authoritative complete owned set; a delivery target
+// Observations retain the complete owned set; a delivery target
 // supplies ownership for orphaned, interrupted and paused merge launches.
 export function ownedPullRequests(
   run?: Run,
   target = run?.mergeRelaunch,
 ): number[] {
-  return (
-    (run?.ended && "ownedPullRequests" in run.ended
-      ? run.ended.ownedPullRequests
-      : undefined) ?? (target ? [target.number] : [])
-  );
+  return run?.ownedPullRequests ?? (target ? [target.number] : []);
 }
 
 // Null records an unreadable read during the run. Historical evidence survives

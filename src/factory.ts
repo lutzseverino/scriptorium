@@ -87,6 +87,8 @@ export type Run = {
   inputResume?: InputResume;
   // Observed hold numbers; null means a read failed during the run.
   holdObserved?: number[] | null;
+  // PRs the run owns, retaining ownership of PRs that have since closed.
+  ownedPullRequests?: number[];
   startedAt: string;
   log: string;
   ended:
@@ -97,7 +99,6 @@ export type Run = {
         timedOut: boolean;
         orphaned?: true;
         pullRequest: PullRequestState;
-        ownedPullRequests?: number[];
         closesIssue?: true;
         mergeCandidate?: MergeRelaunch;
         // Paths under the host's unpushable paths in commits the remote lacks.
@@ -523,6 +524,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       if (
         previous?.ended &&
         "pullRequest" in previous.ended &&
+        previous.ended.pullRequest === "open" &&
         heldPullRequests(previous.holdObserved, own).length
       )
         for (const scope of ["release", "factory"] as const) {

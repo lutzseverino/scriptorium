@@ -366,7 +366,10 @@ export function createHost(
     for (const run of runs.filter(
       (run) =>
         run.repository === name &&
-        (!run.ended || !("ownedPullRequests" in run.ended)),
+        (!run.ended ||
+          "interrupted" in run.ended ||
+          "paused" in run.ended ||
+          !run.ownedPullRequests),
     )) {
       run.holdObserved = observeHolds(run.holdObserved, pass);
       record(run);
@@ -374,18 +377,24 @@ export function createHost(
     try {
       const issues = await platform.readIssues();
       for (const run of runs.filter(
-        (run) => run.repository === name && run.exited && !run.interrupted,
+        (run) => run.repository === name && run.exited,
       )) {
         await run.finished;
-        if (pausedEnding(run)) continue;
         const observation = await platform.pullRequestObservation(
           run.issue,
           run.pullRequestSince,
         );
-        const held = heldPullRequests(
-          run.holdObserved,
-          observation.ownedPullRequests,
-        );
+        run.ownedPullRequests = [
+          ...new Set([
+            ...(run.ownedPullRequests ?? []),
+            ...observation.ownedPullRequests,
+          ]),
+        ];
+        if (run.interrupted || pausedEnding(run)) {
+          record(run);
+          continue;
+        }
+        const held = heldPullRequests(run.holdObserved, run.ownedPullRequests);
         // A hold-stopped merge attempt did not spend its head's recovery.
         if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
           run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
@@ -399,7 +408,7 @@ export function createHost(
           run.mergeRelaunchHeads ?? [],
           pass,
           run.holdObserved,
-          observation.ownedPullRequests,
+          run.ownedPullRequests,
         );
         run.ended = {
           ...(mergeCandidate && { mergeCandidate }),
@@ -411,7 +420,6 @@ export function createHost(
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
           pullRequest: observation.state,
-          ownedPullRequests: observation.ownedPullRequests,
           ...(observation.closesIssue && { closesIssue: true }),
         };
         const paths = await readUnpushableChanges(
@@ -753,15 +761,20 @@ export function createHost(
         if (recorded.settled) continue;
         if (recorded.configuration)
           conventions.set(name, recorded.configuration);
+        const holdSettled =
+          recorded.releaseHoldSettled ||
+          (recorded.ended && "pullRequest" in recorded.ended);
         recovered.push({
           ...recorded,
+          ownedPullRequests: holdSettled
+            ? (recorded.ownedPullRequests ?? [])
+            : undefined,
           // v3.0.1 stored derived held PRs. Preserve settled classification;
           // unsettled records retain their observations until the first read.
           holdObserved:
             "holdObserved" in recorded
               ? recorded.holdObserved
-              : recorded.releaseHoldSettled ||
-                  (recorded.ended && "pullRequest" in recorded.ended)
+              : holdSettled
                 ? recorded.releaseHeld?.length
                   ? null
                   : []
@@ -777,16 +790,7 @@ export function createHost(
               ? recoveredPause(recorded)
               : recorded.pausing
                 ? { paused: recorded.pausing, commented: false }
-                : {
-                    timedOut: false,
-                    pullRequest: "none",
-                    orphaned: true,
-                    ...((recorded.releaseHoldSettled ||
-                      (recorded.ended && "pullRequest" in recorded.ended)) && {
-                      ownedPullRequests:
-                        recorded.ended?.ownedPullRequests ?? [],
-                    }),
-                  },
+                : { timedOut: false, pullRequest: "none", orphaned: true },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
@@ -913,6 +917,7 @@ export function createHost(
       ...(decision.mergeRelaunch && { mergeRelaunch: decision.mergeRelaunch }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
       holdObserved: observeHolds(holdObserved, pass),
+      ownedPullRequests: previous?.ownedPullRequests,
       ...(decision.relaunch &&
         marker.awaitingMergeNotified && { awaitingMergeNotified: true }),
       startedAt,
@@ -1250,6 +1255,7 @@ export function createHost(
           ...(run.inputResume && { inputResume: run.inputResume }),
           ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
           holdObserved: run.holdObserved,
+          ownedPullRequests: run.ownedPullRequests,
           startedAt: run.startedAt,
           log: run.log,
           ended: run.exited ? run.ended : null,
