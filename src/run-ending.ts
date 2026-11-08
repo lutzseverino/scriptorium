@@ -322,13 +322,16 @@ export function settleEnding(
       true,
       facts.unpushedChanges,
     );
+  const closed = "its pull request closed without merging";
   return fail(
     facts.orphaned
       ? facts.pullRequest === "closed"
-        ? "its pull request closed without merging"
+        ? closed
         : "no factory run or open pull request holds its claim"
       : facts.timedOut
         ? limit
-        : "the run ended without an open pull request",
+        : facts.pullRequest === "closed"
+          ? closed
+          : "the run ended without an open pull request",
   );
 }

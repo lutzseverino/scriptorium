@@ -868,11 +868,11 @@ export function createHost(
               ? recoveredPause(recorded)
               : recorded.pausing
                 ? { paused: recorded.pausing, commented: false }
-                : // A run whose agent exited left its result, so it ended
-                  // by itself rather than with the earlier process.
-                  {
+                : {
                     timedOut: false,
                     pullRequest: "none",
+                    // A run that left its result ended by itself; one
+                    // without it ended with the earlier process.
                     ...(!recorded.result && { orphaned: true as const }),
                   },
           token: "",

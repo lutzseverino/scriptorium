@@ -240,6 +240,12 @@ test("only a failed first implement attempt retries, on an available retry model
     run: { repository: widgets, issue: 4, attempt: 1, log: null },
     failure: "its pull request closed without merging",
   });
+  // A run that ended by itself names its closed pull request too.
+  const closed = run({ pullRequest: "closed" });
+  assert.deepEqual(settle(closed), {
+    run: closed.run,
+    failure: "its pull request closed without merging",
+  });
   const overtime = run({ timedOut: true });
   assert.deepEqual(settle(overtime), {
     run: overtime.run,

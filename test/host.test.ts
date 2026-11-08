@@ -4197,10 +4197,7 @@ test("a second attempt awaiting merge cannot retry after its pull request closes
   assert.match(notices(issue)[0], /attempt 2/);
   // The attempt exited with its result, so the restart settles it as the
   // first process would have.
-  assert.match(
-    notices(issue)[1],
-    /run failed: the run ended without an open pull request/,
-  );
+  assert.match(notices(issue)[1], /run failed:.*pull request closed/);
 });
 
 for (const ended of ["timed out", "orphaned"] as const)
