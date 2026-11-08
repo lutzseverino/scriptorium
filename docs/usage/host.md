@@ -4,8 +4,11 @@ One factory process serves every repository its host configuration lists. It
 reads each repository's issues and pull requests from its
 [hosting platform](#hosting-platform), keeps a clone of it, launches agents in
 sandboxes built from the repository's toolchain image, and records what it is
-doing in a status file. Every repository shares one oldest-first queue, and
-provider caps and usage thresholds apply across all of them.
+doing in a status file. Every repository shares one queue: configured high
+priority first, then normal, then low; an issue without a priority label counts
+as normal. Within a priority, older issues go first, then repository name and
+issue number break ties. Provider caps and usage thresholds apply across all
+of them, and priority overrides no gate, hold or readiness requirement.
 
 ## Install and start
 

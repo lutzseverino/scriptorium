@@ -170,10 +170,13 @@ writes it, what it excludes and how the factory's transitions change it.
 | `paused` (`c5def5`)                             | 2, 3     | The factory                                  | The factory paused the run and resumes it by itself.                  |
 | `needsInput` (`fbca04`)                         | 2        | Agents; the factory provisions and clears it | Version 2's stop.                                                     |
 | `skip`, `hold`, `releaseHold`                   | 2, 3     | The repository                               | Delivery outside the factory and the repository's holds, as below.    |
-| `priorityHigh`, `priorityNormal`, `priorityLow` | 3        | People and runs                              | Named for the repository's priority labels.                           |
+| `priorityHigh`, `priorityNormal`, `priorityLow` | 3        | People and runs                              | Pickup order: high, normal (also no label), then low.                 |
 
 The factory creates or updates only the labels it writes, with the colours
-above, on every pass.
+above, on every pass. Priority uses the configured label names; an omitted
+priority role names no label. Within a priority, pickup keeps its order by issue
+creation time, repository name and issue number. Priority never overrides a
+gate, hold or readiness requirement.
 
 ### Triage readiness
 
