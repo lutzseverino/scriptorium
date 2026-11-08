@@ -20,13 +20,7 @@ import {
   type ConnectOptions,
   type ConnectionWithLinkAdditions,
 } from "@lutzseverino/postern";
-import {
-  updateClone,
-  unpushedChanges,
-  readRecovery,
-  type Recovery,
-  type Git,
-} from "./clone.ts";
+import { updateClone, readRecovery, type Recovery, type Git } from "./clone.ts";
 import {
   factoryConfigurationPath,
   launchArguments,
@@ -48,7 +42,6 @@ import {
 } from "./model-policy.ts";
 import {
   decideFactory,
-  handBackLimit,
   pullRequestIdentity,
   type Claim,
   type Decision,
@@ -59,11 +52,7 @@ import {
   type Settings,
   type Snapshot,
 } from "./factory.ts";
-import {
-  heldPullRequests,
-  repositoryHold,
-  observeHolds,
-} from "./repository-holds.ts";
+import { repositoryHold, observeHolds } from "./repository-holds.ts";
 import {
   relationshipSections,
   repositoryPlatform,
@@ -90,7 +79,21 @@ import {
   type Registry,
 } from "./providers.ts";
 import type { UsageWindow } from "./providers/usage.ts";
-import type { PullRequestState } from "./run-outcome.ts";
+import {
+  handBackLimit,
+  mergeHead,
+  observeEnding,
+  observeOwnership,
+  type EndingReads,
+} from "./run-ending.ts";
+import {
+  postedLabels,
+  readRunResult,
+  resultFile,
+  resultGuidance,
+  resultPost,
+  sandboxResultDirectory,
+} from "./run-result.ts";
 import { createOwner } from "./owner.ts";
 import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
@@ -144,6 +147,8 @@ type HostRun = Run & {
   // Successful awaiting-merge notice for this attempt, independent of the
   // ending observation refreshed on each pass and on startup.
   awaitingMergeNotified?: true;
+  // Its run result's comment and labels are on the issue.
+  resultPosted?: true;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
   launchResult?: LaunchResult;
@@ -486,44 +491,60 @@ export function createHost(
           ...served.authorization,
         });
       }
+      const reads: EndingReads = {
+        platform,
+        git,
+        clone,
+        configuration: pass.configuration,
+        paused: pass.paused !== null,
+        unpushablePaths: configuration.unpushablePaths,
+      };
       for (const run of runs.filter(
         (run) => run.repository === name && run.exited,
       )) {
         await run.finished;
-        const observation = await platform.pullRequestObservation(
-          run.issue,
-          run.pullRequestSince,
-          run.runKind === "review",
-          run.target?.number,
-        );
-        run.ownedPullRequests = [
-          ...new Set([
-            ...(run.ownedPullRequests ?? []),
-            ...observation.ownedPullRequests,
-          ]),
-        ];
+        const issue = issues.find((issue) => issue.number === run.issue);
+        const ended = {
+          ...run,
+          since: run.pullRequestSince,
+          review: run.runKind === "review",
+        };
+        // An interrupted or paused run launches again; only its owned PRs
+        // accumulate.
         if (run.interrupted || pausedEnding(run)) {
+          run.ownedPullRequests = (
+            await observeOwnership(platform, ended)
+          ).owned;
           record(run);
           continue;
         }
-        const held = heldPullRequests(run.holdObserved, run.ownedPullRequests);
-        // A hold-stopped merge attempt did not spend its head's recovery.
-        if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
-          run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
-            (head) => head !== mergeHead(run.mergeRelaunch!),
+        // The result's comment and labels land before its ending is
+        // observed, so the ending reads the state it asked for.
+        if (
+          issue &&
+          run.result &&
+          !("invalid" in run.result) &&
+          !run.resultPosted
+        ) {
+          const post = resultPost(
+            run.result,
+            {
+              ...run,
+              id: run.provenance?.id ?? run.startedAt,
+              kind: run.runKind ?? "implement",
+            },
+            run.configuration,
           );
-        const mergeCandidate = await readMergeCandidate(
-          git,
-          clone,
-          issues.find((issue) => issue.number === run.issue),
-          observation.mergeCandidate,
-          run.mergeRelaunchHeads ?? [],
-          pass,
-          run.holdObserved,
-          run.ownedPullRequests,
-        );
+          await platform.postResult(run.issue, post);
+          issue.labels = postedLabels(issue.labels, post);
+          run.resultPosted = true;
+          record(run);
+        }
+        const ending = await observeEnding(reads, issue, ended);
+        run.ownedPullRequests = ending.ownedPullRequests;
+        run.mergeRelaunchHeads = ending.mergeRelaunchHeads;
         run.ended = {
-          ...(mergeCandidate && { mergeCandidate }),
+          ...ending.facts,
           // Sandcastle's idle timeout can end a run at its limit before the
           // factory stops it, so the time it ran decides, not who ended it.
           timedOut:
@@ -531,21 +552,7 @@ export function createHost(
             run.exitedAt!.getTime() - Date.parse(run.startedAt) >=
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
-          pullRequest: observation.state,
-          ...(observation.closesIssue && { closesIssue: true }),
-          ...(observation.state === "open" &&
-            observation.mergeCandidate && {
-              openPullRequest: observation.mergeCandidate,
-            }),
         };
-        const paths = await readUnpushableChanges(
-          git,
-          clone,
-          issues.find((issue) => issue.number === run.issue),
-          run.ended.pullRequest,
-          pass.configuration,
-        );
-        if (paths.length) run.ended.unpushedChanges = paths;
         unobserved.delete(run);
         record(run);
       }
@@ -564,13 +571,7 @@ export function createHost(
         }),
         modelPolicy: pass.modelPolicy,
         ...(pass.gated !== undefined && { gated: pass.gated }),
-        claims: await readClaims(
-          name,
-          platform,
-          issues,
-          pass.configuration,
-          pass,
-        ),
+        claims: await readClaims(name, platform, issues, reads),
       };
     } catch (error) {
       pause(`its platform reads failed: ${error}`);
@@ -631,10 +632,9 @@ export function createHost(
     name: string,
     platform: RepositoryPlatform,
     issues: Issue[],
-    conventions: FactoryConfiguration,
-    pass: Pass,
+    reads: EndingReads,
   ): Promise<Claim[]> {
-    const { labels } = conventions;
+    const { labels } = reads.configuration;
     const held = (number: number) =>
       runs.some((run) => run.repository === name && run.issue === number);
     const claims: Claim[] = [];
@@ -658,8 +658,6 @@ export function createHost(
           .map((issue) => issue.number),
       ]),
     ];
-    const { clone } = directory(name);
-    const git = hostGit(name);
     for (const number of numbers) {
       if (held(number)) continue;
       const marker = readClaimMarker(name, number);
@@ -680,21 +678,13 @@ export function createHost(
           (label) => !released.includes(label),
         );
       }
-      const observation = await platform.pullRequestObservation(
-        number,
-        marker.inputResume?.since,
-        false,
-        marker.inputResume?.review?.target.number ??
-          issue?.pullRequest?.target.number,
-      );
-      const mergeCandidate = await readMergeCandidate(
-        git,
-        clone,
-        issues.find((issue) => issue.number === number),
-        observation.mergeCandidate,
-        marker.mergeRelaunchHeads ?? [],
-        pass,
-      );
+      const ending = await observeEnding(reads, issue, {
+        issue: number,
+        since: marker.inputResume?.since,
+        target:
+          marker.inputResume?.review?.target ?? issue?.pullRequest?.target,
+        mergeRelaunchHeads: marker.mergeRelaunchHeads,
+      });
       const claim: Claim = {
         issue: number,
         ...(marker.inputResume && {
@@ -704,24 +694,14 @@ export function createHost(
               ...new Map(
                 [
                   ...marker.inputResume.pullRequests,
-                  ...observation.pullRequests,
+                  ...ending.pullRequests,
                 ].map((pr) => [pr.number, pr]),
               ).values(),
             ],
           },
         }),
-        pullRequest: observation.state,
-        ...(observation.closesIssue && { closesIssue: true }),
-        ...(mergeCandidate && { mergeCandidate }),
+        ...ending.facts,
       };
-      const paths = await readUnpushableChanges(
-        git,
-        clone,
-        issues.find((issue) => issue.number === number),
-        claim.pullRequest,
-        conventions,
-      );
-      if (paths.length) claim.unpushedChanges = paths;
       claims.push(claim);
     }
     // A label-only claim's notice lives as long as the observed claim. Keep
@@ -749,81 +729,6 @@ export function createHost(
   } {
     const path = claimNoticePath(repository, issue);
     return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-  }
-
-  // This is observation only. Delivery Git operations stay with the agent.
-  // rev-list is empty exactly when origin/HEAD is an ancestor of the head,
-  // including diverged histories without relying on a platform freshness fact.
-  async function readMergeCandidate(
-    git: Git,
-    clone: string,
-    issue: Issue | undefined,
-    candidate: MergeRelaunch | undefined,
-    consumed: string[],
-    pass: Pass,
-    holdObserved?: number[] | null,
-    own: number[] = [],
-  ): Promise<MergeRelaunch | undefined> {
-    if (
-      !candidate ||
-      !issue ||
-      pass.paused !== null ||
-      isStopped(issue.labels, pass.configuration!.labels) ||
-      issue.labels.includes(pass.configuration!.labels.failed) ||
-      consumed.includes(mergeHead(candidate))
-    )
-      return undefined;
-    const defaultRef = (
-      await git(clone, ["symbolic-ref", "refs/remotes/origin/HEAD"])
-    ).trim();
-    if (
-      candidate.baseBranch !== defaultRef.slice("refs/remotes/origin/".length)
-    )
-      return undefined;
-    if (heldPullRequests(holdObserved, own).includes(candidate.number))
-      return candidate;
-    await git(clone, [
-      "fetch",
-      "--quiet",
-      "--no-tags",
-      "origin",
-      candidate.headCommit,
-    ]);
-    const behind = (
-      await git(clone, [
-        "rev-list",
-        "--max-count=1",
-        `${candidate.headCommit}..refs/remotes/origin/HEAD`,
-      ])
-    ).trim();
-    return behind ? candidate : undefined;
-  }
-
-  function mergeHead(target: MergeRelaunch): string {
-    return `${target.number}:${target.headCommit}`;
-  }
-
-  // Earlier outcome rows settle without consulting the branch. Both runs
-  // and claims assess delivery against the same refreshed remote default branch.
-  async function readUnpushableChanges(
-    git: Git,
-    clone: string,
-    issue: Issue | undefined,
-    pullRequest: PullRequestState,
-    conventions: FactoryConfiguration,
-  ): Promise<string[]> {
-    if (
-      !issue ||
-      !["none", "closed"].includes(pullRequest) ||
-      isStopped(issue.labels, conventions.labels)
-    )
-      return [];
-    return unpushedChanges(
-      git,
-      clone,
-      runBranch(issue.number),
-      configuration.unpushablePaths,
-    );
   }
 
   function find(decision: { repository: string; issue: number }) {
@@ -963,7 +868,13 @@ export function createHost(
               ? recoveredPause(recorded)
               : recorded.pausing
                 ? { paused: recorded.pausing, commented: false }
-                : { timedOut: false, pullRequest: "none", orphaned: true },
+                : {
+                    timedOut: false,
+                    pullRequest: "none",
+                    // A run that left its result ended by itself; one
+                    // without it ended with the earlier process.
+                    ...(!recorded.result && { orphaned: true as const }),
+                  },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
@@ -1075,6 +986,7 @@ export function createHost(
     let github, follower;
     try {
       await mkdir(join(sandbox, "github"), { mode: 0o700 });
+      await mkdir(join(sandbox, "result"), { mode: 0o700 });
       github = await writeSandboxToken(join(sandbox, "github"), token);
       follower = await followRunLog(raw, log, redactor.redact);
     } catch (error) {
@@ -1189,6 +1101,7 @@ export function createHost(
                 invocationArguments,
               ),
             pass.hasReviewPolicy,
+            resultGuidance(pass.configuration!, kind),
             decision.retry,
             recovery,
             decision.mergeRelaunch,
@@ -1206,7 +1119,13 @@ export function createHost(
         branch: runBranch(issue),
         log: raw,
         idleTimeoutSeconds: settings.timeLimitMinutes * 60,
-        mounts: [github],
+        mounts: [
+          github,
+          {
+            hostPath: join(sandbox, "result"),
+            sandboxPath: sandboxResultDirectory,
+          },
+        ],
         env: sandboxEnvironment,
         signal: controller.signal,
         delivered: redactor.add,
@@ -1259,7 +1178,15 @@ export function createHost(
         // at the pause threshold decides how the run ended, whatever the log
         // says.
         if (run.pausing) run.ended = { paused: run.pausing, commented: false };
-        else
+        else {
+          run.result = readRunResult(
+            join(sandbox, "result", resultFile),
+            run.configuration,
+            kind,
+          );
+          report(
+            `${repository}#${issue} ${"invalid" in run.result ? `ended without a valid run result: ${run.result.invalid}` : `ended with its run result, ${run.result.outcome}${run.result.reason ? `: ${run.result.reason}` : ""}`}`,
+          );
           try {
             const limit = registry.providers
               .get(run.provider)!
@@ -1281,6 +1208,7 @@ export function createHost(
               `run for ${repository}#${issue} could not read its raw log's end: ${error}`,
             );
           }
+        }
         try {
           // A token outlives no run.
           await rm(sandbox, { recursive: true, force: true });
@@ -1351,7 +1279,7 @@ export function createHost(
           if (!run.awaitingMergeNotified && !decision.quiet) {
             await platform.awaitingMerge(
               decision.issue,
-              awaitingMergeComment(pass.configuration!, run),
+              awaitingMergeComment(pass.configuration!, decision.reason, run),
             );
             run.awaitingMergeNotified = true;
           }
@@ -1361,7 +1289,7 @@ export function createHost(
           if (!existsSync(path)) {
             await platform.awaitingMerge(
               decision.issue,
-              awaitingMergeComment(pass.configuration!),
+              awaitingMergeComment(pass.configuration!, decision.reason),
             );
             mkdirSync(directory(decision.repository).claims, {
               recursive: true,
@@ -1519,6 +1447,7 @@ export function createHost(
           }),
           holdObserved: run.holdObserved,
           ownedPullRequests: run.ownedPullRequests,
+          ...(run.result && { result: run.result }),
           startedAt: run.startedAt,
           log: run.log,
           ended: run.exited ? run.ended : null,
@@ -1653,6 +1582,7 @@ export function createHost(
 export function prompt(
   start: string,
   hasReviewPolicy: boolean,
+  result: string,
   retry?: { failure: string; log: string },
   recovery?: Recovery,
   mergeRelaunch?: MergeRelaunch,
@@ -1667,7 +1597,8 @@ export function prompt(
     "Before every delivery push, fetch origin and resolve its remote default branch again (for example, git fetch --prune origin, then git remote set-head origin --auto). Inspect the outgoing commits, including per-parent patches for merges (git log --stat --patch -m origin/HEAD..HEAD), and the change against that refreshed base (git diff origin/HEAD...HEAD). Keep both history and diff limited to the issue's work. A clean final diff can conceal reverted workflow edits or unrelated rewritten commits. When an update is needed, safely rebase or replay only the issue's own changes onto the current base. Never merge the default branch into the issue branch. Intentional workflow edits must remain visible; never discard them to bypass permissions. Revalidate a reconstructed change before publication.",
     "Preserve committed, staged, unstaged and untracked work and existing PR, review and handoff context before changing history. Continuing a branch does not require retaining unrelated history or override an owner's explicit request to reconstruct the issue's changes on the current base. If ownership is uncertain or reconstruction has conflicts, preserve the work and hand off under the repository's owner-question rules. After any permission refusal, stop with an explicit owner handoff: no second push, credential discovery or identity switch. Do not assume broader App permissions are necessary; ask the owner how to proceed.",
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
-    `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes still determine delivery.`,
+    `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded, in your run result for a stop. The signal is loop control; GitHub outcomes and your run result still determine delivery.`,
+    result,
     ...(releaseHoldLabel === undefined
       ? []
       : [
@@ -1757,6 +1688,7 @@ function recoveredPause(recorded: {
 // A retained claim without a host run has no model or log to name.
 function awaitingMergeComment(
   configuration: FactoryConfiguration,
+  reason?: string,
   run?: HostRun,
 ): string {
   return renderComment("awaitingMerge", configuration.comments?.awaitingMerge, {
@@ -1765,6 +1697,7 @@ function awaitingMergeComment(
     effort: run?.effort,
     attempt: run?.attempt,
     log: run?.log,
+    reason,
     label: configuration.labels.running,
   });
 }

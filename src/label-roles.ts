@@ -30,6 +30,8 @@ type Role = {
   gate?: true;
   // Pickup order: lower ranks go first; an absent label counts as normal.
   priority?: number;
+  // A run's result may ask for it, from a family its kind may request.
+  requestable?: true;
   // Each exclusion of the listed continuations; across roles, the lowest
   // precedence gives the reason.
   excludes?: Exclusion[];
@@ -134,6 +136,7 @@ export const labelRoles = {
   },
   skip: {
     versions: { 2: "optional", 3: "optional" },
+    requestable: true,
     excludes: [
       {
         precedence: 1,
@@ -150,9 +153,17 @@ export const labelRoles = {
   },
   releaseHold: { versions: { 2: "optional", 3: "optional" } },
   hold: { versions: { 2: "optional", 3: "optional" } },
-  priorityHigh: { versions: { 3: "optional" }, priority: -1 },
-  priorityNormal: { versions: { 3: "optional" }, priority: 0 },
-  priorityLow: { versions: { 3: "optional" }, priority: 1 },
+  priorityHigh: {
+    versions: { 3: "optional" },
+    priority: -1,
+    requestable: true,
+  },
+  priorityNormal: {
+    versions: { 3: "optional" },
+    priority: 0,
+    requestable: true,
+  },
+  priorityLow: { versions: { 3: "optional" }, priority: 1, requestable: true },
 } satisfies Record<string, Role>;
 
 export type RoleName = keyof typeof labelRoles;

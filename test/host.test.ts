@@ -787,8 +787,19 @@ function fakePlatform(
   };
 }
 
+// The run result a finished fake agent leaves unless its test gives another.
+const doneResult = { outcome: "done", body: "The run finished its work." };
+
+// The issue's comments other than the run results the host posted.
+const notices = ({ comments }: { comments: string[] }) =>
+  comments.filter(
+    (comment) => !comment.includes("<!-- scriptorium:run-result "),
+  );
+
 // Sandcastle that records each run, with the token the sandbox would read,
-// until the test finishes it or its sandbox is removed.
+// until the test finishes it or its sandbox is removed. A finished agent
+// writes its run result, `doneResult` unless the test gives another, as text
+// or a value, or null for none.
 function fakeSandcastle() {
   let closing = false;
   // While set, an aborted agent keeps running until it finishes.
@@ -797,7 +808,11 @@ function fakeSandcastle() {
     options: RunOptions;
     docker: DockerOptions;
     hosts: string;
-    finish(error?: Error, result?: Partial<RunResult>): void;
+    finish(
+      error?: Error,
+      result?: Partial<RunResult>,
+      runResult?: object | string | null,
+    ): void;
     removed: boolean;
   }[] = [];
   let docker: DockerOptions;
@@ -817,6 +832,22 @@ function fakeSandcastle() {
         const github = docker.mounts?.find(
           (mount) => mount.sandboxPath === "/run/factory/github",
         );
+        const results = docker.mounts?.find(
+          (mount) => mount.sandboxPath === "/run/factory/result",
+        );
+        const leave = (runResult: object | string | null = doneResult) => {
+          if (runResult === null || !results) return;
+          try {
+            writeFileSync(
+              join(results.hostPath, "result.json"),
+              typeof runResult === "string"
+                ? runResult
+                : JSON.stringify(runResult),
+            );
+          } catch {
+            // A sandbox removed meanwhile took its result directory.
+          }
+        };
         return new Promise<RunResult>((resolve, reject) => {
           const complete = (result?: Partial<RunResult>) =>
             resolve({
@@ -835,8 +866,11 @@ function fakeSandcastle() {
             hosts: github
               ? readFileSync(join(github.hostPath, "hosts.yml"), "utf8")
               : "",
-            finish: (error, result) =>
-              error ? reject(error) : complete(result),
+            finish: (error, result, runResult) => {
+              if (error) return reject(error);
+              leave(runResult);
+              complete(result);
+            },
             removed: false,
           });
           options.signal?.addEventListener("abort", () => {
@@ -2164,14 +2198,14 @@ test("a failed first run retries with its failure and log tail after the provide
     invocation(run.launched[1].options.prompt),
     [
       "$implement #4",
-      "First attempt failure: the run ended without an open pull request",
+      "First attempt failure: the run left no run result at /run/factory/result/result.json",
       "First attempt log tail:\nfirst line\nlast line\n",
     ].join("\n\n"),
   );
   run.launched[1].finish();
   await settled();
   await run.tick();
-  const [comment] = run.github.find("acme/widgets", 4).comments;
+  const [comment] = notices(run.github.find("acme/widgets", 4));
   assert.equal(
     comment,
     [
@@ -2529,7 +2563,7 @@ for (const timedOut of [false, true])
     ]);
     await run.tick();
     assert.equal(run.launched.length, 2, "the awaiting claim holds no slot");
-    const comments = run.github.find("acme/widgets", 4).comments;
+    const comments = notices(run.github.find("acme/widgets", 4));
     assert.equal(comments.length, 1);
     assert.match(comments[0], /claim without a live agent/);
   });
@@ -2543,26 +2577,26 @@ test("an ended run awaiting merge tells its issue once across polls, label remov
   const issue = run.github.find("acme/widgets", 4);
   issue.pullRequests.push("OPEN");
   await run.tick();
-  assert.deepEqual(issue.comments, [], "a live run needs no notice");
+  assert.deepEqual(notices(issue), [], "a live run needs no notice");
   run.launched[0].finish();
   await run.drain();
   await run.tick();
-  assert.equal(issue.comments.length, 1);
+  assert.equal(notices(issue).length, 1);
   assert.match(
-    issue.comments[0],
+    notices(issue)[0],
     /agent run has ended.*pull request remains open/s,
   );
-  assert.match(issue.comments[0], /retains.*claim without a live agent/);
-  assert.match(issue.comments[0], /owner must.*merging or closing/i);
-  assert.match(issue.comments[0], /continue observing/);
-  assert.match(issue.comments[0], /attempt 1/);
-  assert.doesNotMatch(issue.comments[0], /pick this issue up again/);
+  assert.match(notices(issue)[0], /retains.*claim without a live agent/);
+  assert.match(notices(issue)[0], /owner must.*merging or closing/i);
+  assert.match(notices(issue)[0], /continue observing/);
+  assert.match(notices(issue)[0], /attempt 1/);
+  assert.doesNotMatch(notices(issue)[0], /pick this issue up again/);
   await run.tick();
   issue.labels = ["ready-for-agent"];
   const restarted = run.restart();
   await restarted.tick();
   await restarted.tick();
-  assert.equal(issue.comments.length, 1);
+  assert.equal(notices(issue).length, 1);
   assert.equal(run.launched.length, 1);
   assert.ok(
     run
@@ -2574,8 +2608,8 @@ test("an ended run awaiting merge tells its issue once across polls, label remov
   issue.pullRequests = ["MERGED"];
   const decisions = await restarted.tick();
   assert.equal(decisions[0].kind, "fail");
-  assert.equal(issue.comments.length, 2);
-  assert.match(issue.comments[1], /merged without closing the issue/);
+  assert.equal(notices(issue).length, 2);
+  assert.match(notices(issue)[1], /merged without closing the issue/);
 });
 
 test("orphan claims awaiting merge are notified once, retry failed delivery and reset after release", async (t) => {
@@ -2661,20 +2695,20 @@ for (const comments of [
     assert.equal(previous.awaitingMergeNotified, undefined);
     run.github.refused.add("acme/widgets#4");
     await run.restart().tick();
-    assert.equal(issue.comments.length, 0);
+    assert.equal(notices(issue).length, 0);
     assert.equal(recordOf(run.state, 4, 1).awaitingMergeNotified, undefined);
     run.github.refused.clear();
     const restarted = run.restart();
     await restarted.tick();
     if (comments?.awaitingMerge)
       assert.equal(
-        issue.comments[0],
+        notices(issue)[0],
         `Held: claude-code/claude-sonnet-5-5@high #1 (${join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-1.log")}); factory:running`,
       );
-    else assert.match(issue.comments[0], /factory agent run has ended/);
+    else assert.match(notices(issue)[0], /factory agent run has ended/);
     await restarted.tick();
     await run.restart().tick();
-    assert.equal(issue.comments.length, 1);
+    assert.equal(notices(issue).length, 1);
     assert.equal(run.launched.length, 1);
     const recovered = recordOf(run.state, 4, 1);
     assert.equal(recovered.attempt, 1);
@@ -2851,7 +2885,7 @@ for (const scenario of [
           "repositories/acme/widgets/logs/issue-4-attempt-1.log",
         ),
       });
-      const [comment] = run.github.find("acme/widgets", 4).comments;
+      const [comment] = notices(run.github.find("acme/widgets", 4));
       for (const path of paths)
         assert.ok(comment.includes(`- Unpushable: \`${path}\``), comment);
       assert.match(
@@ -3013,7 +3047,7 @@ test("the configured skill, arguments and state labels drive first attempts, ret
     "broken",
   ]);
   assert.equal(
-    run.github.find("acme/widgets", 4).comments[0],
+    notices(run.github.find("acme/widgets", 4))[0],
     `the run ended without an open pull request: claude-code/claude-opus-5-5@high #2 log=${join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-2.log")}; broken`,
   );
   assert.equal(
@@ -3310,7 +3344,8 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
       effort: "high",
       attempt: 2,
       retry: {
-        failure: "the run ended without an open pull request",
+        failure:
+          "the run left no run result at /run/factory/result/result.json",
         log: firstLog,
       },
       relaunch: true,
@@ -3422,7 +3457,7 @@ test("settlement after restart uses the last valid comment template while invali
   run.github.find("acme/widgets", 4).pullRequests.push("MERGED");
   await run.restart().tick();
   assert.equal(run.status().repositories[0].state, "paused");
-  assert.deepEqual(run.github.find("acme/widgets", 4).comments, [
+  assert.deepEqual(notices(run.github.find("acme/widgets", 4)), [
     "Saved wording: its pull request merged without closing the issue; close the issue if that finished it; factory:failed",
   ]);
   assert.deepEqual(run.github.find("acme/widgets", 5).labels, [
@@ -3641,7 +3676,7 @@ test("a retry that meets a stale result waits, and launches once the validator p
     held(run, 4)!,
     /^retry waits: its readiness waits: the issue changed after the validator's latest contract result/,
   );
-  assert.deepEqual(issue.comments, []);
+  assert.deepEqual(notices(issue), []);
   issue.discussion = [
     postedResult(4, "2026-10-09T11:00:05Z", {
       source: { type: "issue-body", editedAt: "2026-10-09T11:00:00Z" },
@@ -4133,7 +4168,7 @@ test("a timed-out run fails at once when its branch has unpushable commits", asy
   const [decision] = await run.tick();
   assert.equal(decision.kind, "fail");
   assert.match(
-    run.github.find("acme/widgets", 4).comments[0],
+    notices(run.github.find("acme/widgets", 4))[0],
     /Unpushable: `.github\/workflows\/new.yml`/,
   );
   assert.equal(run.launched.length, 1);
@@ -4158,9 +4193,11 @@ test("a second attempt awaiting merge cannot retry after its pull request closes
   const [decision] = await restarted.tick();
   assert.equal(decision.kind, "fail");
   assert.equal(run.launched.length, 2);
-  assert.equal(issue.comments.length, 2);
-  assert.match(issue.comments[0], /attempt 2/);
-  assert.match(issue.comments[1], /run failed:.*pull request closed/);
+  assert.equal(notices(issue).length, 2);
+  assert.match(notices(issue)[0], /attempt 2/);
+  // The attempt exited with its result, so the restart settles it as the
+  // first process would have.
+  assert.match(notices(issue)[1], /run failed:.*pull request closed/);
 });
 
 for (const ended of ["timed out", "orphaned"] as const)
@@ -4194,7 +4231,7 @@ for (const ended of ["timed out", "orphaned"] as const)
       issue: 4,
     });
     assert.deepEqual(issue.labels, ["ready-for-agent", "factory:needs-input"]);
-    assert.deepEqual(issue.comments, []);
+    assert.deepEqual(notices(issue), []);
     issue.labels = ["ready-for-agent"];
     const decisions = await active.tick();
     const launch = decisions.find((decision) => decision.kind === "launch");
@@ -4223,7 +4260,7 @@ test("an orphaned second attempt with no interrupted record fails after startup 
   assert.equal(decision.kind, "fail");
   assert.equal(run.launched.length, 2);
   assert.equal(run.launched[1].removed, true);
-  assert.match(run.github.find("acme/widgets", 4).comments[0], /attempt 2/);
+  assert.match(notices(run.github.find("acme/widgets", 4))[0], /attempt 2/);
   assert.equal(recordOf(run.state, 4, 2).settled, true);
 });
 
@@ -4922,7 +4959,8 @@ test("an overdue legacy paused record relaunches after a restart with usage stil
         effort: "high",
         attempt: 2,
         retry: {
-          failure: "the run ended without an open pull request",
+          failure:
+            "the run left no run result at /run/factory/result/result.json",
           log: join(
             run.state,
             "repositories/acme/widgets/logs/issue-4-attempt-1.log",
@@ -5223,7 +5261,7 @@ test("a run that exits before the pause threshold's stop settles as it ended", a
     { kind: "keep", repository: "acme/widgets", issue: 4 },
   ]);
   assert.equal(recordOf(run.state, 4, 1).pausing, null);
-  const comments = run.github.find("acme/widgets", 4).comments;
+  const comments = notices(run.github.find("acme/widgets", 4));
   assert.equal(comments.length, 1);
   assert.match(comments[0], /agent run has ended/);
   assert.doesNotMatch(comments[0], /paused this run/);
@@ -7702,22 +7740,28 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   legacyIssue.branchPullRequests.push(publishedPR(legacyRemote));
   v2.finish();
   const currentIssue = run.github.find("acme/current", 5);
-  currentIssue.labels = ["state:ready", "factory:running"];
+  triage.finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    body: "## Agent Brief",
+  });
+  await run.drain();
+  // Settlement applies the result's readiness and releases triage's claim.
+  // Without a configured triage result, the owner's readiness starts
+  // implement on the next pass.
+  await run.tick();
+  assert.deepEqual(currentIssue.labels, ["state:ready"]);
   currentIssue.timeline.push({
     event: "labeled",
     label: "state:ready",
     actor: "owner",
     at: "2026-10-09T12:00:00Z",
   });
-  triage.finish();
-  await run.drain();
-  // Settlement releases triage's claim; the next pass sees ready work.
-  await run.tick();
   await run.tick();
   assert.equal(run.launched.length, 3, run.reports.join("\n"));
   assert.equal(invocation(run.launched[2].options.prompt), "/implement #5");
   assert.equal(run.launched[2].options.agent.name, "claude-code");
-  assert.deepEqual(legacyIssue.comments, ["Legacy waiting: working"]);
+  assert.deepEqual(notices(legacyIssue), ["Legacy waiting: working"]);
 
   currentIssue.branchPullRequests.push({
     ...publishedPR(currentRemote, "factory/issue-5"),
@@ -7730,8 +7774,12 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   assert.equal(run.launched.length, 4);
   assert.equal(invocation(run.launched[3].options.prompt), "/review #42");
   assert.equal(run.launched[3].options.name, "acme/current#5");
-  assert.deepEqual(currentIssue.comments, []);
-  assert.deepEqual(legacyIssue.comments, ["Legacy waiting: working"]);
+  // Only the hold on the triage run's own readiness, which a configured
+  // triage result would back, preceded the owner's, and it is resolved.
+  assert.deepEqual(notices(currentIssue), [
+    "<!-- scriptorium:hold:readiness -->\nResolved: this reason no longer holds the issue.",
+  ]);
+  assert.deepEqual(notices(legacyIssue), ["Legacy waiting: working"]);
 });
 
 test("a version 3 issue goes from implement to review to a hand-back on the same PR, without an awaiting-merge notice", async (t) => {
@@ -7786,7 +7834,7 @@ test("a version 3 issue goes from implement to review to a hand-back on the same
     /Review hand-back: the latest review of PR #42 handed the work back \(hand-back 1 of at most 2\)/,
   );
   assert.equal(recordOf(run.state, 4, 1).handBacks, 1);
-  assert.deepEqual(issue.comments, []);
+  assert.deepEqual(notices(issue), []);
   assert.deepEqual(issue.labels, ["state:ready", "factory:running"]);
 });
 
@@ -7977,7 +8025,12 @@ test("only a new reporter author reply starts triage after a restart", async (t)
   await run.tick();
   assert.equal(run.launched.length, 1);
   assert.equal(invocation(run.launched[0].options.prompt), "/triage #4");
-  run.launched[0].finish();
+  // Triage asks its reporter again.
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:reporter",
+    body: "Which version shows it?",
+  });
   await run.drain();
   await run.tick();
   const restarted = run.restart();
@@ -8310,4 +8363,268 @@ test("a sandbox token the command refuses to mint launches nothing, and the clai
   await run.tick();
   assert.equal(run.launched.length, 1);
   assert.match(run.launched[0].hosts, /oauth_token: "ghs_acme_widgets_write"/);
+});
+
+// A version 3 repository whose triage run may request model and priority
+// labels, and names the factory's triage result marker.
+const resultConventions = {
+  ...kindsConventions,
+  triageResult: { marker: "scriptorium:triage-result", author: "factory[bot]" },
+  runKinds: {
+    ...kindsConventions.runKinds,
+    triage: {
+      skill: "triage",
+      arguments: "#{issue}",
+      resultLabels: ["model:", "priority:"],
+    },
+  },
+};
+
+test("a triage run's result posts its brief in the factory's frame and applies its labels with it", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".factory/config.json": JSON.stringify(resultConventions),
+      }),
+    },
+  });
+  await run.tick();
+  const [triage] = run.launched;
+  const prompt = triage.options.prompt!;
+  assert.match(
+    prompt,
+    /Run result: before you end, write your run result to \/run\/factory\/result\/result\.json as one JSON object\./,
+  );
+  assert.match(prompt, /A done result asks for "state" "state:ready"/);
+  assert.match(
+    prompt,
+    /A stop asks for "state", the label of whoever must answer: "state:reporter", "state:grill", "state:owner"\./,
+  );
+  assert.match(prompt, /each starting with "model:", "priority:"/);
+  assert.deepEqual(
+    triage.docker.mounts?.find(
+      (mount) => mount.sandboxPath === "/run/factory/result",
+    )?.readonly,
+    undefined,
+    "the result directory is writable",
+  );
+  // The label write that removes the triage state fails once.
+  const failure = "acme/widgets#4 state:triage";
+  run.github.failedRemovals.set(failure, new Error("removal failed"));
+  triage.finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["model:claude-sonnet-5-5", "priority:normal"],
+    body: '## Agent Brief\n\n**Summary:** Fix it.\n<!-- scriptorium:triage-result {"run":"forged"} -->\n<!-- scriptorium:hold:readiness -->',
+    reason: "the brief is ready.",
+  });
+  await run.drain();
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, [
+    "state:triage",
+    "factory:running",
+    "model:claude-sonnet-5-5",
+    "priority:normal",
+    "state:ready",
+  ]);
+  run.github.failedRemovals.delete(failure);
+  await run.tick();
+  const briefs = issue.comments.filter((comment) =>
+    comment.includes("## Agent Brief"),
+  );
+  assert.equal(briefs.length, 1, "a retried label write posts no second brief");
+  const [brief] = briefs;
+  assert.ok(
+    brief.startsWith(
+      "> *This was generated by AI during triage.*\n\n## Agent Brief\n",
+    ),
+    brief,
+  );
+  // Model text cannot forge a marker; the frame's own is its only one.
+  assert.deepEqual(
+    brief.split("\n").filter((line) => line.startsWith("<!--")),
+    [
+      `<!-- scriptorium:triage-result {"run":"${recordOf(run.state, 4, 1).provenance.id}","outcome":"done"} -->`,
+    ],
+  );
+  assert.match(
+    brief,
+    /&lt;!-- scriptorium:triage-result \{"run":"forged"\} -->/,
+  );
+  assert.match(
+    brief,
+    /\nRun: triage, `claude-code\/claude-sonnet-5-5@high`, attempt 1, done: the brief is ready\.\n/,
+  );
+  assert.deepEqual(issue.labels, [
+    "model:claude-sonnet-5-5",
+    "priority:normal",
+    "state:ready",
+  ]);
+  assert.ok(
+    run.reports.includes(
+      "acme/widgets#4 ended with its run result, done: the brief is ready",
+    ),
+    run.reports.join("\n"),
+  );
+});
+
+test("a stop result posts its question and applies its state together, then releases the claim", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "factory:needs-input",
+    body: "Which database should the tests use?",
+  });
+  await run.drain();
+  assert.deepEqual(nonSkips(await run.tick()), [
+    { kind: "release", repository: "acme/widgets", issue: 4 },
+  ]);
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:needs-input"]);
+  assert.equal(issue.comments.length, 1);
+  assert.match(
+    issue.comments[0],
+    /^> _This was generated by AI\._\n\nWhich database should the tests use\?\n\nRun: implement, `claude-code\/claude-sonnet-5-5@high`, attempt 1, stop\.\n<!-- scriptorium:run-result \{"run":"[0-9a-f-]{36}","outcome":"stop"\} -->$/,
+  );
+  // Answering the question resumes the work as a fresh attempt.
+  issue.labels = ["ready-for-agent"];
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.match(run.launched[1].options.prompt!, /Needs-input resume:/);
+});
+
+test("a failed result fails with its reason, and a run without a valid result fails with why", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "failed",
+    reason: "the tests need a database the sandbox lacks",
+    body: "I could not run the tests.",
+  });
+  await run.drain();
+  await run.tick();
+  assert.match(
+    run.launched[1].options.prompt!,
+    /First attempt failure: the tests need a database the sandbox lacks\n/,
+  );
+  run.launched[1].finish(undefined, undefined, null);
+  await run.drain();
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:failed"]);
+  assert.deepEqual(
+    issue.comments.map((comment) => comment.split("\n")[0]),
+    [
+      "> _This was generated by AI._",
+      "The factory run failed: the run left no run result at /run/factory/result/result.json.",
+    ],
+  );
+  assert.ok(
+    run.reports.includes(
+      "acme/widgets#4 ended without a valid run result: the run left no run result at /run/factory/result/result.json",
+    ),
+  );
+});
+
+for (const [result, failure] of [
+  ["not JSON", "its run result is not JSON"],
+  [
+    { outcome: "done", body: "Done.", note: "extra" },
+    "its run result has a field the run-result interface does not name",
+  ],
+  [{ outcome: "done", body: " " }, "its run result has no body"],
+  [
+    { outcome: "failed", body: "Stopped." },
+    "its run result fails without a reason",
+  ],
+  [
+    { outcome: "stop", state: "ready-for-agent", body: "Stopped." },
+    "its run result asks for no state of factory:needs-input",
+  ],
+  [
+    { outcome: "done", labels: ["model:gpt-5.5"], body: "Done." },
+    'its run result asks for the label "model:gpt-5.5", outside the families the implement run kind may request',
+  ],
+] as const)
+  test(`an invalid run result fails a normally exited run: ${failure}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    issue.pullRequests.push("OPEN");
+    run.launched[0].finish(undefined, undefined, result);
+    await run.drain();
+    await run.tick();
+    // Even with its PR open, the run retries with the reason, posting nothing
+    // and applying none of what it asked for.
+    assert.match(
+      run.launched[1].options.prompt!,
+      new RegExp(`First attempt failure: ${RegExp.escape(failure)}\n`),
+    );
+    assert.deepEqual(issue.comments, []);
+    assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
+  });
+
+test("a run that ends with its pull request open says why it ended, in the host's log and its notice", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.pullRequests.push("OPEN");
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "done",
+    reason: "its required checks were still running when the run ended",
+    body: "Opened the pull request; babysit was still waiting on its checks.",
+  });
+  await run.drain();
+  assert.deepEqual(nonSkips(await run.tick()), [
+    {
+      kind: "keep",
+      repository: "acme/widgets",
+      issue: 4,
+      reason: "its required checks were still running when the run ended",
+    },
+  ]);
+  assert.ok(
+    run.reports.includes(
+      "acme/widgets#4 ended with its run result, done: its required checks were still running when the run ended",
+    ),
+  );
+  assert.equal(issue.comments.length, 2);
+  assert.match(issue.comments[0], /babysit was still waiting on its checks/);
+  assert.match(
+    issue.comments[1],
+    /^The factory agent run has ended, but its pull request remains open\. It ended: its required checks were still running when the run ended\.\n/,
+  );
+});
+
+test("a run that exited with an invalid result still fails after a restart before it settled", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish(undefined, undefined, "not JSON");
+  await run.drain();
+  await run.restart().tick();
+  assert.equal(run.launched.length, 2);
+  assert.match(
+    run.launched[1].options.prompt!,
+    /First attempt failure: its run result is not JSON\n/,
+  );
 });

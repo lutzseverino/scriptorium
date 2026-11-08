@@ -28,8 +28,8 @@ result; a retry after failure starts a new one.
 _Avoid_: Status comment, progress comment
 
 **Run result**:
-The file a run's agent leaves for the host at exit, holding its outcome and
-the text the host posts in the factory's frame.
+The file a run's agent leaves for the host at exit, holding its outcome, the
+labels it asks for and the text the host posts in the factory's frame.
 _Avoid_: Agent comment, completion signal
 
 **Run kind**:
@@ -143,6 +143,7 @@ daemon's own builder and have no build cache pruned.
 _Avoid_: Build cache, default builder
 
 **Run outcome**:
-How a factory run ended, read from the hosting platform and the run's branch:
-done, awaiting merge, stopped, or failed.
+How a factory run ended, read from its run result first and otherwise from
+the hosting platform and the run's branch: done, awaiting merge, stopped, or
+failed.
 _Avoid_: Result, status

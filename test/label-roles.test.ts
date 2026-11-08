@@ -32,6 +32,9 @@ const consumers = [
   ["factory.ts", "exclusionReason", "function exclusion("],
   ["factory.ts", "priority", "function priorityFirst"],
   ["contract-result.ts", "configured", "function contractResultHold"],
+  ["run-result.ts", "configured", "function parseRunResult"],
+  ["run-result.ts", "stopLabels", "function stopStates"],
+  ["run-ending.ts", "isStopped", "function settleEnding"],
 ] as const;
 
 test("each label consumer imports its role set from the one declaration", () => {

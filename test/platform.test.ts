@@ -1116,11 +1116,6 @@ test("a run's pull request is its repository's own, opened since its first attem
         };
       }
     });
-  const state = (closing: unknown[], branch: unknown[], since?: string) =>
-    repositoryPlatform(
-      answers(closing, branch).connection,
-      configuration,
-    ).pullRequestState(4, since);
   const observed = async (
     closing: unknown[],
     branch: unknown[],
@@ -1224,18 +1219,21 @@ test("a run's pull request is its repository's own, opened since its first attem
       createdAt: "2026-10-09T12:00:00Z",
     },
   ]);
-  assert.equal(await state([], []), "none");
-  assert.equal(await state([pull(1, "CLOSED")], [pull(2, "MERGED")]), "merged");
-  assert.equal(await state([pull(1, "CLOSED")], [pull(2, "OPEN")]), "open");
-  assert.equal(await state([pull(1, "CLOSED")], []), "closed");
-  assert.equal(
-    await state([pull(1, "OPEN", { isCrossRepository: true })], []),
-    "none",
-  );
-  assert.equal(
-    await state([pull(1, "OPEN")], [], "2026-10-09T12:00:01Z"),
-    "none",
-  );
+  // A closed PR reads as closed, and one opened before the first attempt
+  // started is not the run's.
+  for (const [branch, since, state] of [
+    [[pull(1, "CLOSED")], undefined, "closed"],
+    [[pull(1, "OPEN")], "2026-10-09T12:00:01Z", "none"],
+  ] as const)
+    assert.equal(
+      (
+        await repositoryPlatform(
+          answers([], [...branch]).connection,
+          configuration,
+        ).pullRequestObservation(4, since)
+      ).state,
+      state,
+    );
 });
 
 test("closed claims include needs-input-only issues across every page with configured labels", async () => {

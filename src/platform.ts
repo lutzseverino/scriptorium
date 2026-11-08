@@ -12,10 +12,11 @@ import {
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { reconcileHolds, type HoldKey } from "./hold-comments.ts";
 import { renderComment } from "./comment-template.ts";
+import { postResultComment, type ResultPost } from "./run-result.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
-import type { PullRequestState } from "./run-outcome.ts";
+import type { PullRequestState } from "./run-ending.ts";
 import {
   contractResultHold,
   triageBacked,
@@ -631,15 +632,8 @@ export function repositoryPlatform(
 
     // A run's pull request is one from this repository, not a fork, that
     // closes its issue or comes from the run's branch, opened since the first
-    // attempt started (`since`). Issue closure is observed separately.
-    async pullRequestState(
-      number: number,
-      since?: string,
-    ): Promise<PullRequestState> {
-      return state((await candidates(number, since)).found);
-    },
-
-    // A closing reference is observation, not delivery authorization. Only
+    // attempt started (`since`). Issue closure is observed separately. A
+    // closing reference is observation, not delivery authorization. Only
     // the run branch or the supplied connection's verified identity owns a PR.
     // With `draft`, the owned open PR also says whether it is a draft.
     async pullRequestObservation(
@@ -739,6 +733,14 @@ export function repositoryPlatform(
       issue: number,
       holds: { key: HoldKey; reason: string }[],
     ) => reconcileHolds(issueTracker, issue, holds),
+
+    // A run result's comment, then its labels, so readiness a triage result
+    // applies finds its brief.
+    async postResult(issue: number, post: ResultPost) {
+      await postResultComment(issueTracker, issue, post);
+      if (post.add.length) await issueTracker.addLabels(issue, post.add);
+      for (const label of post.remove) await remove(issue, label);
+    },
 
     async awaitingMerge(issue: number, comment: string) {
       await issueTracker.createComment(issue, comment);

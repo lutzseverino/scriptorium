@@ -477,6 +477,52 @@ test("version 3 is validated against its own contract", (t) => {
   ]);
 });
 
+test("a run kind's result label families and the run result frame's disclaimers are optional and validated", (t) => {
+  const path = join(directory(t), "config.json");
+  const configured = {
+    ...implementOnly,
+    runKinds: {
+      implement: {
+        skill: "implement",
+        arguments: "#{issue}",
+        resultLabels: ["type:", "priority:"],
+      },
+    },
+    comments: {
+      disclaimer: "> Written by the factory's agent.",
+      triageDisclaimer: "> *Written by the factory's triage agent.*",
+    },
+  };
+  writeFileSync(path, JSON.stringify(configured));
+  assert.deepEqual(readFactoryConfiguration(path), configured);
+  invalid(
+    t,
+    {
+      ...implementOnly,
+      runKinds: {
+        implement: {
+          ...implementOnly.runKinds.implement,
+          resultLabels: "type:",
+        },
+        review: {
+          skill: "review",
+          arguments: "#{pullRequest}",
+          resultLabels: [" type:", 3, "Priority:", "priority:"],
+        },
+      },
+      comments: { disclaimer: "", triageDisclaimer: 1 },
+    },
+    [
+      "runKinds.implement.resultLabels: is not an array",
+      "runKinds.review.resultLabels[0]: is not a non-empty trimmed string",
+      "runKinds.review.resultLabels[1]: is not a non-empty trimmed string",
+      "runKinds.review.resultLabels: repeats a family, ignoring case",
+      "comments.disclaimer: is not a non-empty trimmed string",
+      "comments.triageDisclaimer: is not a non-empty trimmed string",
+    ],
+  );
+});
+
 test("arguments expand {issue}, and in version 3 {pullRequest}, which a launch without one cannot use", () => {
   const configuration = readFactoryConfiguration(fixture("version-3"));
   assert.equal(launchArguments(configuration, "review", 4, 42), "#42");
