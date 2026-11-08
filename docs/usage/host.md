@@ -279,26 +279,58 @@ claims; resume each provider to lift it.
 ### Token command
 
 The factory runs the `tokenCommand` of the repository's platform with the
-repository's `<owner>/<name>` appended as its last argument. The command must:
+repository's `<owner>/<name>` appended. For the repository's own token, that
+is its last argument. For a sandbox's token, a second argument follows: the
+[run kind's permission set](#run-kind-token-scopes) as one JSON object, in
+the form GitHub's
+[installation token request](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
+takes as `permissions`, such as
+`{"contents":"read","issues":"read","metadata":"read","pull_requests":"read"}`.
+The command must:
 
 - exit 0 and print exactly one token, with no whitespace inside it, on
   standard output, within 60 seconds, after which it is stopped;
 - print a token that stays valid for at least 45 minutes after it prints it,
-  such as a newly minted GitHub App installation token, which lasts an hour.
+  such as a newly minted GitHub App installation token, which lasts an hour;
+- given a permission set, print a token narrowed to exactly that set, such as
+  by passing it as the request's `permissions`, or fail.
 
-The factory caches each repository's token and reuses it for 30 minutes after
-the command printed it, then runs the command again. It refreshes a token when
-a pass needs it, and every minute, between and during passes, for each
-repository with a running sandbox. The token serves the factory's own
-[platform](#hosting-platform) reads and writes, its Git operations in the
-clone, and the
-[sandbox's GitHub access](#sandbox-github-access).
+The factory caches each repository's token, and each permission set's token
+apart from it, and reuses each for 30 minutes after the command printed it,
+then runs the command again. It refreshes the repository's token when a pass
+needs it, and every minute, between and during passes, each running sandbox's
+token within its run kind's permission set. The repository's token serves the
+factory's own [platform](#hosting-platform) reads and writes and its Git
+operations in the clone; it never reaches a sandbox. Only the
+[sandbox's GitHub access](#sandbox-github-access) uses the narrowed tokens.
 
 A command that fails, or prints no single token, pauses that repository for
 the pass, with the failure as the reason in the process log and the status
-file, and the other repositories continue. A running sandbox keeps its last
-token, which is still valid, and the factory retries the refresh every minute.
-The factory names the failure but never logs the command's output.
+file, and the other repositories continue. A sandbox's token that fails to
+mint at launch launches nothing, and the claimed issue launches on a later
+pass. A running sandbox keeps its last token, which is still valid, and the
+factory retries the refresh every minute. The factory names the failure but
+never logs the command's output.
+
+### Run kind token scopes
+
+Each [run kind](factory-configuration.md#run-kinds) gets a sandbox token
+narrowed to its own GitHub App permissions. The factory fixes these sets;
+neither the host nor the factory configuration can change or broaden them.
+The App must hold every permission a kind it runs requests.
+
+| Run kind  | Permissions                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------- |
+| Triage    | `contents`, `issues`, `metadata` and `pull_requests`: read                                            |
+| Implement | `contents` and `pull_requests`: write; `actions`, `checks`, `issues`, `metadata` and `statuses`: read |
+| Review    | `contents` and `pull_requests`: write; `actions`, `checks`, `issues`, `metadata` and `statuses`: read |
+
+A triage run cannot comment, label or push. Implement and review cannot
+comment on or label the issue either, but push, open, comment on and review
+pull requests, and read the checks they wait on. GitHub grants merging with
+the `contents` write a push needs, so a token cannot withhold merging from
+implement: with review on, only review's skill merges, and without it,
+implement's does.
 
 ## Providers
 
@@ -563,19 +595,23 @@ in place; that weaker guarantee is accepted.
 
 ## Sandbox GitHub access
 
-At launch the factory writes the repository's token, as GitHub CLI
-configuration readable only by the host's user, into a directory of its own
-for that run, and mounts the directory read-only at `/run/factory/github`.
+At launch the factory mints a token narrowed to the run's
+[kind](#run-kind-token-scopes) and writes it, as GitHub CLI configuration
+readable only by the host's user, into a directory of its own for that run,
+and mounts the directory read-only at `/run/factory/github`.
 The sandbox's environment points the GitHub CLI at that directory
 (`GH_CONFIG_DIR`) and makes Git ask the GitHub CLI for its `github.com`
 credentials, so neither reads the token from an environment variable. Each
-time the repository's token is refreshed, the factory replaces the files
-whole, so a run longer than a token's lifetime keeps its GitHub access. The
+time the run's token is refreshed, within the same permissions, the factory
+replaces the files whole, so a run longer than a token's lifetime keeps its
+GitHub access. Concurrent runs of different kinds in one repository each keep
+their own kind's token, and the factory's own reads and refreshes never
+replace it. The
 factory removes the directory when the run's agent exits, so a token outlives
 no run.
 
 That installation token is the sandbox agent's only GitHub identity, so a push
-the GitHub App can't make stays refused. The provider login a run signs in with
+the GitHub App or the run kind's permissions don't allow stays refused. The provider login a run signs in with
 adds none: the image's provider policy turns off ChatGPT apps for Codex and
 claude.ai connectors for Claude Code, which could otherwise act as the
 account's linked GitHub user. The

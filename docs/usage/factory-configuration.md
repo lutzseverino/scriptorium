@@ -135,7 +135,9 @@ records the split. Each kind is optional except implement:
   merges: a merge relaunch runs review.
 
 Each kind runs its configured skill under the factory's unattended execution
-guidance; a triage run and a review run log beside implement's, as
+guidance, with a sandbox token narrowed to the kind's fixed
+[permissions](host.md#run-kind-token-scopes), which no configuration changes;
+a triage run and a review run log beside implement's, as
 `issue-<n>-triage-attempt-1.log` and `issue-<n>-review-attempt-1.log`. Only
 an implement attempt retries.
 

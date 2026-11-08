@@ -28,7 +28,11 @@ import {
   type PullRequest,
   type SubIssueLinkAddition,
 } from "@lutzseverino/postern";
-import { sandboxEnvironment } from "../src/github-token.ts";
+import {
+  runKindPermissions,
+  sandboxEnvironment,
+  type GitHubPermissions,
+} from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
 import type { FactoryEvent } from "../src/events.ts";
 import {
@@ -972,6 +976,10 @@ function host(
   const builds: string[] = [];
   const reports: string[] = [];
   const tokenCommands: string[] = [];
+  // The permissions of each narrowed token the command printed.
+  const minted = new Map<string, GitHubPermissions>();
+  // Scopes the command refuses to mint, as an App lacking them would.
+  const refusedScopes = new Set<string>();
   const clock = { now: new Date("2026-10-09T12:00:00Z") };
   const starts: (() => void)[] = [];
   const usageReads: string[] = [];
@@ -995,11 +1003,20 @@ function host(
       gitCalls.push({ cwd, args });
       return git(cwd, args);
     },
-    async token(repository) {
-      tokenCommands.push(repository);
+    // A sandbox's token is the repository's narrowed to its permission set,
+    // named by whether the set writes.
+    async token(repository, permissions) {
+      const scope =
+        permissions &&
+        (Object.values(permissions).includes("write") ? "write" : "read");
+      tokenCommands.push(scope ? `${repository} ${scope}` : repository);
       const token = tokenOf[repository];
       if (token instanceof Error) throw token;
-      return token;
+      if (!scope) return token;
+      if (refusedScopes.has(scope))
+        throw new Error(`the token command for ${repository} failed with 1`);
+      minted.set(`${token}_${scope}`, permissions!);
+      return `${token}_${scope}`;
     },
     remoteUrl: (repository) => remotes[repository],
     imageStorageStatus: () => storage,
@@ -1078,6 +1095,8 @@ function host(
     reports,
     tokens: tokenOf,
     tokenCommands,
+    minted,
+    refusedScopes,
     clock,
     usage,
     usageReads,
@@ -1286,7 +1305,12 @@ test("a sandbox reads its repository's token from a mounted file that outlives n
     (mount) => mount.sandboxPath === "/run/factory/github",
   )!;
   assert.equal(github.readonly, true);
-  assert.match(launch.hosts, /oauth_token: "ghs_acme_widgets"/);
+  // The sandbox holds a token narrowed to its run kind, never the host's.
+  assert.match(launch.hosts, /oauth_token: "ghs_acme_widgets_write"/);
+  assert.deepEqual(
+    run.minted.get("ghs_acme_widgets_write"),
+    runKindPermissions.implement,
+  );
   assert.deepEqual(launch.docker.env, sandboxEnvironment);
   assert.equal(
     JSON.stringify(launch.options).includes("ghs_acme_widgets"),
@@ -1311,7 +1335,11 @@ test("a repository's token is reused, refreshed before it expires, and rewritten
     },
   });
   await run.tick();
-  assert.deepEqual(run.tokenCommands, ["acme/widgets", "acme/gadgets"]);
+  assert.deepEqual(run.tokenCommands, [
+    "acme/widgets",
+    "acme/gadgets",
+    "acme/widgets write",
+  ]);
   const github = run.launched[0].docker.mounts!.find(
     (mount) => mount.sandboxPath === "/run/factory/github",
   )!;
@@ -1319,21 +1347,26 @@ test("a repository's token is reused, refreshed before it expires, and rewritten
   run.clock.now = new Date("2026-10-09T12:29:59Z");
   await run.refreshTokens();
   await run.tick();
-  assert.equal(run.tokenCommands.length, 2, "the cached tokens are reused");
+  assert.equal(run.tokenCommands.length, 3, "the cached tokens are reused");
   run.tokens["acme/widgets"] = "ghs_widgets_refreshed";
   run.tokens["acme/gadgets"] = "ghs_gadgets_refreshed";
   run.clock.now = new Date("2026-10-09T12:30:00Z");
   await run.refreshTokens();
   assert.deepEqual(
-    run.tokenCommands.slice(2),
-    ["acme/widgets"],
-    "between passes only a repository with a running sandbox refreshes",
+    run.tokenCommands.slice(3),
+    ["acme/widgets write"],
+    "between passes only a running sandbox's token refreshes",
   );
-  assert.match(hosts(), /oauth_token: "ghs_widgets_refreshed"/);
+  assert.match(hosts(), /oauth_token: "ghs_widgets_refreshed_write"/);
   assert.doesNotMatch(hosts(), /ghs_acme_widgets/);
-  // GitHub accepts only the refreshed tokens.
+  // GitHub accepts only the refreshed tokens, and the host's own refresh
+  // leaves the sandbox's token as it is.
   await run.tick();
-  assert.deepEqual(run.tokenCommands.slice(3), ["acme/gadgets"]);
+  assert.deepEqual(run.tokenCommands.slice(4), [
+    "acme/widgets",
+    "acme/gadgets",
+  ]);
+  assert.match(hosts(), /oauth_token: "ghs_widgets_refreshed_write"/);
   assert.equal(run.status().repositories[1].state, "running");
 });
 
@@ -1361,14 +1394,14 @@ test("a token command that fails at refresh holds only its repository", async (t
   await run.refreshTokens();
   assert.ok(
     run.reports.includes(
-      `acme/widgets's token was not refreshed: Error: ${failure}`,
+      `acme/widgets#4's token was not refreshed: Error: ${failure}`,
     ),
     run.reports.join("\n"),
   );
   // The sandbox keeps its token, which is still valid, until a refresh works.
   assert.match(
     readFileSync(join(github.hostPath, "hosts.yml"), "utf8"),
-    /oauth_token: "ghs_acme_widgets"/,
+    /oauth_token: "ghs_acme_widgets_write"/,
   );
   run.github.find("acme/gadgets", 5).blockedBy = [];
   await run.tick();
@@ -8095,4 +8128,169 @@ test("historical PR ownership survives another run replacing the issue's current
     ),
     run.reports.join("\n"),
   );
+});
+
+// The token a launch's sandbox reads from its token file.
+const sandboxTokenOf = (launch: { hosts: string }) =>
+  launch.hosts.match(/^ {4}oauth_token: "(.*)"$/m)![1];
+
+test("concurrent triage, implement and review runs in one repository each keep their own kind's token through refresh and host reads", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["state:triage"] },
+        { number: 5, labels: ["state:ready"] },
+        { number: 6, labels: ["state:ready"] },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+    caps: { "claude-code": 3, codex: 1 },
+  });
+  await run.tick();
+  const names = () => run.launched.map(({ options }) => options.name);
+  assert.deepEqual(names(), [
+    "acme/widgets#4",
+    "acme/widgets#5",
+    "acme/widgets#6",
+  ]);
+  // Implement #6 ends with a draft PR, which review takes up beside the
+  // other two runs.
+  const issue = run.github.find("acme/widgets", 6);
+  issue.branchPullRequests.push({
+    ...publishedPR(bare, "factory/issue-6"),
+    number: 42,
+  });
+  run.github.drafts.add(42);
+  const implement = run.launched[2];
+  implement.finish();
+  await until(() => recordOf(run.state, 6, 1).exited === true);
+  await run.tick();
+  assert.equal(names()[3], "acme/widgets#6");
+  assert.equal(recordOf(run.state, 6, 1).runKind, "review");
+  const [triage, implementing, , review] = run.launched;
+
+  assert.deepEqual(
+    [triage, implementing, implement, review].map((launch) =>
+      run.minted.get(sandboxTokenOf(launch))!,
+    ),
+    [
+      runKindPermissions.triage,
+      runKindPermissions.implement,
+      runKindPermissions.implement,
+      runKindPermissions.review,
+    ],
+  );
+  assert.deepEqual(sandboxTokenOf(triage), "ghs_acme_widgets_read");
+  assert.deepEqual(sandboxTokenOf(review), "ghs_acme_widgets_write");
+
+  // A refresh renews each sandbox within its own kind's permissions, and the
+  // host's later reads replace none of them.
+  const hosts = (launch: (typeof run.launched)[number]) =>
+    readFileSync(
+      join(
+        launch.docker.mounts!.find(
+          (mount) => mount.sandboxPath === "/run/factory/github",
+        )!.hostPath,
+        "hosts.yml",
+      ),
+      "utf8",
+    );
+  run.tokens["acme/widgets"] = "ghs_refreshed";
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.refreshTokens();
+  await run.tick();
+  assert.deepEqual(
+    [triage, implementing, review]
+      .map(hosts)
+      .map((text) => sandboxTokenOf({ hosts: text })),
+    ["ghs_refreshed_read", "ghs_refreshed_write", "ghs_refreshed_write"],
+  );
+  assert.equal(
+    run.tokenCommands.filter((line) => line === "acme/widgets read").length,
+    2,
+    "one triage token at launch and one at refresh",
+  );
+});
+
+// The installation-token permission GitHub requires for each write a sandbox
+// agent might make.
+const requiredPermission = {
+  "comment on the issue": "issues",
+  "label the issue": "issues",
+  push: "contents",
+  "review the pull request": "pull_requests",
+  "comment on the pull request": "pull_requests",
+  merge: "contents",
+} as const;
+
+// A platform that accepts a write only from a token the command narrowed to
+// that write's permission.
+function sandboxPlatform(minted: Map<string, GitHubPermissions>) {
+  return (token: string) =>
+    Object.fromEntries(
+      Object.entries(requiredPermission).map(([write, permission]) => [
+        write,
+        minted.get(token)?.[permission] === "write" ? "accepted" : "refused",
+      ]),
+    );
+}
+
+test("a triage run's sandbox cannot comment, label or push", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["state:triage"] },
+        { number: 5, labels: ["state:ready"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  await run.tick();
+  const [triage, implement] = run.launched.map((launch) =>
+    sandboxPlatform(run.minted)(sandboxTokenOf(launch)),
+  );
+  assert.deepEqual(triage, {
+    "comment on the issue": "refused",
+    "label the issue": "refused",
+    push: "refused",
+    "review the pull request": "refused",
+    "comment on the pull request": "refused",
+    merge: "refused",
+  });
+  // Implement's issue output leaves through the run result too; on GitHub,
+  // the contents write its push needs also merges.
+  assert.deepEqual(implement, {
+    "comment on the issue": "refused",
+    "label the issue": "refused",
+    push: "accepted",
+    "review the pull request": "accepted",
+    "comment on the pull request": "accepted",
+    merge: "accepted",
+  });
+});
+
+test("a sandbox token the command refuses to mint launches nothing, and the claim launches once it mints", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  run.refusedScopes.add("write");
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.ok(
+    run.reports.includes(
+      "acme/widgets#4 launch failed, so acme/widgets waits for the next pass: Error: the token command for acme/widgets failed with 1",
+    ),
+    run.reports.join("\n"),
+  );
+  // Run start mints before it makes the sandbox's directory.
+  assert.equal(
+    existsSync(join(run.state, "repositories/acme/widgets/sandboxes")),
+    false,
+  );
+  run.refusedScopes.clear();
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.match(run.launched[0].hosts, /oauth_token: "ghs_acme_widgets_write"/);
 });

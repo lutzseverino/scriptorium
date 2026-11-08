@@ -1,12 +1,42 @@
 // GitHub tokens: the host's token command prints one for a repository, the
 // factory caches it until it is due for refresh, and a sandbox reads its
 // token from a file the factory writes into the run's directory, mounts
-// read-only and rewrites on every refresh.
+// read-only and rewrites on every refresh. The host's own reads and writes use
+// the repository's token; a sandbox's is narrowed to its run kind.
 import { execFile } from "node:child_process";
 import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { RunKindName } from "./factory-configuration.ts";
 import type { Mount } from "./providers.ts";
 import type { Redactor } from "./redaction.ts";
+
+// GitHub App permissions, as an installation token request names them.
+export type GitHubPermissions = Readonly<Record<string, "read" | "write">>;
+
+const reads = Object.freeze({
+  contents: "read",
+  issues: "read",
+  metadata: "read",
+  pull_requests: "read",
+} as const);
+// Implement and review push and open or review pull requests, and read the
+// checks they wait on. GitHub grants merging with the contents write a push
+// needs, so a token cannot withhold one from the other.
+const delivery = Object.freeze({
+  ...reads,
+  actions: "read",
+  checks: "read",
+  contents: "write",
+  pull_requests: "write",
+  statuses: "read",
+} as const);
+
+// The permissions each run kind's sandbox token is narrowed to. They are the
+// factory's, not configuration: triage only reads, and no kind writes the
+// issue itself.
+export const runKindPermissions: Readonly<
+  Record<RunKindName, GitHubPermissions>
+> = Object.freeze({ triage: reads, implement: delivery, review: delivery });
 
 // A token is reused until it is this old, then the command runs again. The
 // command must print tokens that stay valid for at least
@@ -15,56 +45,66 @@ import type { Redactor } from "./redaction.ts";
 export const tokenRefreshMinutes = 30;
 export const tokenLifetimeMinutes = 45;
 
+// Prints a token for the repository, narrowed to `permissions` when given.
+export type TokenCommand = (
+  repository: string,
+  permissions?: GitHubPermissions,
+) => Promise<string>;
+
 export type GitHubTokens = {
-  // The repository's token: the cached one, or a new one from the command
-  // once the cached one is due for refresh.
-  get(repository: string): Promise<string>;
+  // The repository's token, or with `permissions` a sandbox's token narrowed
+  // to them: the cached one, or a new one from the command once the cached
+  // one is due for refresh.
+  get: TokenCommand;
 };
 
-// Caches each repository's token from `command`, adding every token it
-// prints to `redactor`. Concurrent requests share one run of the command,
-// and a failed run caches nothing.
+// Caches each repository's token and each permission set's token apart from
+// `command`, adding every token it prints to `redactor`. Concurrent requests
+// share one run of the command, and a failed run caches nothing.
 export function githubTokens(
-  command: (repository: string) => Promise<string>,
+  command: TokenCommand,
   now: () => Date,
   redactor: Redactor,
 ): GitHubTokens {
   const cached = new Map<string, { token: string; printedAt: number }>();
   const pending = new Map<string, Promise<string>>();
   return {
-    get(repository) {
-      const entry = cached.get(repository);
+    get(repository, permissions) {
+      const key = JSON.stringify([repository, permissions ?? null]);
+      const entry = cached.get(key);
       if (
         entry &&
         now().getTime() - entry.printedAt < tokenRefreshMinutes * 60_000
       )
         return Promise.resolve(entry.token);
-      let request = pending.get(repository);
+      let request = pending.get(key);
       if (!request) {
-        request = command(repository)
+        request = command(repository, permissions)
           .then((token) => {
             redactor.add(token);
-            cached.set(repository, { token, printedAt: now().getTime() });
+            cached.set(key, { token, printedAt: now().getTime() });
             return token;
           })
-          .finally(() => pending.delete(repository));
-        pending.set(repository, request);
+          .finally(() => pending.delete(key));
+        pending.set(key, request);
       }
       return request;
     },
   };
 }
 
-// Runs the token command with `<owner>/<name>` appended and resolves the
-// token it prints.
-export function tokenCommand(
-  command: string[],
-): (repository: string) => Promise<string> {
-  return (repository) =>
+// Runs the token command with `<owner>/<name>` appended, then the permission
+// set as JSON for a sandbox's token, and resolves the token it prints.
+export function tokenCommand(command: string[]): TokenCommand {
+  return (repository, permissions) =>
     new Promise((resolve, reject) => {
       execFile(
         command[0],
-        [...command.slice(1), repository],
+        [
+          ...command.slice(1),
+          repository,
+          ...(permissions ? [JSON.stringify(permissions)] : []),
+        ],
         { timeout: 60_000, maxBuffer: 1024 * 1024 },
         (error, stdout) => {
           const token = stdout.trim();
