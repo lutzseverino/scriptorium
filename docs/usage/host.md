@@ -326,13 +326,17 @@ ignores the set hands every sandbox the App's whole permissions.
 | Triage    | `contents`, `issues`, `metadata` and `pull_requests`: read                                            |
 | Implement | `contents` and `pull_requests`: write; `actions`, `checks`, `issues`, `metadata` and `statuses`: read |
 | Review    | `contents` and `pull_requests`: write; `actions`, `checks`, `issues`, `metadata` and `statuses`: read |
+| Version 2 | `contents`, `issues` and `pull_requests`: write; `actions`, `checks`, `metadata` and `statuses`: read |
 
 A triage run cannot comment, label or push. Implement and review cannot
 comment on or label the issue either, but push, open, comment on and review
-pull requests, and read the checks they wait on. GitHub grants merging with
-the `contents` write a push needs, so a token cannot withhold merging from
-implement: with review on, only review's skill merges, and without it,
-implement's does.
+pull requests, and read the checks they wait on. A run in a repository on
+[factory configuration version 2](factory-configuration.md#version-2) gets
+implement's permissions with `issues` write as well, so its agent still asks
+its question on the issue and adds the needs-input label. GitHub grants
+merging with the `contents` write a push needs, so a token cannot withhold
+merging from implement: with review on, only review's skill merges, and
+without it, implement's does.
 
 ## Providers
 

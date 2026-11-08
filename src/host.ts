@@ -76,6 +76,7 @@ import {
   githubTokens,
   runKindPermissions,
   sandboxEnvironment,
+  version2Permissions,
   writeSandboxToken,
   type TokenCommand,
 } from "./github-token.ts";
@@ -995,9 +996,17 @@ export function createHost(
     ports.stopSandboxes();
   }
 
-  // A sandbox's token, narrowed to its run kind's permissions.
-  const sandboxToken = (repository: string, kind: RunKindName) =>
-    tokens.get(repository, runKindPermissions[kind]);
+  // A sandbox's token, narrowed to its run kind's permissions, or to version
+  // 2's for a repository on that configuration version.
+  const sandboxToken = (
+    repository: string,
+    { version }: FactoryConfiguration,
+    kind: RunKindName,
+  ) =>
+    tokens.get(
+      repository,
+      version === 2 ? version2Permissions : runKindPermissions[kind],
+    );
 
   // Refreshes every running sandbox's token within its run kind's
   // permissions, between passes as well as during them, so a run outlives
@@ -1007,7 +1016,11 @@ export function createHost(
       const name = `${run.repository}#${run.issue}`;
       let token;
       try {
-        token = await sandboxToken(run.repository, run.runKind ?? "implement");
+        token = await sandboxToken(
+          run.repository,
+          run.configuration,
+          run.runKind ?? "implement",
+        );
       } catch (error) {
         report(`${name}'s token was not refreshed: ${error}`);
         continue;
@@ -1036,7 +1049,7 @@ export function createHost(
     ) as string;
     const paths = directory(repository);
     // Run start mints the sandbox's token for its run kind alone.
-    const token = await sandboxToken(repository, kind);
+    const token = await sandboxToken(repository, pass.configuration!, kind);
     const git = hostGit(repository);
     const base = (await git(paths.clone, ["rev-parse", "HEAD"])).trim();
     const previous = find(decision);

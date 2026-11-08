@@ -44,6 +44,13 @@ export const runKindPermissions: Readonly<
   review: pullRequestWork,
 });
 
+// A version 2 run has no run result: its agent still asks its question on
+// the issue and adds the needs-input label itself.
+export const version2Permissions: GitHubPermissions = Object.freeze({
+  ...pullRequestWork,
+  issues: "write",
+});
+
 // A token is reused until it is this old, then the command runs again. The
 // command must print tokens that stay valid for at least
 // `tokenLifetimeMinutes`, so a refresh that fails is retried while the

@@ -14,6 +14,7 @@ import {
   githubTokens,
   runKindPermissions,
   sandboxEnvironment,
+  version2Permissions,
   tokenCommand,
   writeSandboxToken,
 } from "../src/github-token.ts";
@@ -71,6 +72,11 @@ test("each run kind's sandbox token requests its fixed permissions", () => {
     review: pullRequestWork,
   });
   assert.ok(Object.isFrozen(runKindPermissions.triage));
+  // A version 2 run's agent still asks its own question on the issue.
+  assert.deepEqual(version2Permissions, {
+    ...pullRequestWork,
+    issues: "write",
+  });
 });
 
 test("a failing or empty token command is refused without its output", async (t) => {

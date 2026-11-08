@@ -31,6 +31,7 @@ import {
 import {
   runKindPermissions,
   sandboxEnvironment,
+  version2Permissions,
   type GitHubPermissions,
 } from "../src/github-token.ts";
 import type { Decision } from "../src/factory.ts";
@@ -1305,12 +1306,21 @@ test("a sandbox reads its repository's token from a mounted file that outlives n
     (mount) => mount.sandboxPath === "/run/factory/github",
   )!;
   assert.equal(github.readonly, true);
-  // The sandbox holds a token narrowed to its run kind, never the host's.
+  // The sandbox holds a narrowed token, never the host's; a version 2 run
+  // keeps its agent's own question and needs-input label on the issue.
   assert.match(launch.hosts, /oauth_token: "ghs_acme_widgets_write"/);
   assert.deepEqual(
     run.minted.get("ghs_acme_widgets_write"),
-    runKindPermissions.implement,
+    version2Permissions,
   );
+  assert.deepEqual(sandboxPlatform(run.minted)("ghs_acme_widgets_write"), {
+    "comment on the issue": "accepted",
+    "label the issue": "accepted",
+    push: "accepted",
+    "review the pull request": "accepted",
+    "comment on the pull request": "accepted",
+    merge: "accepted",
+  });
   assert.deepEqual(launch.docker.env, sandboxEnvironment);
   assert.equal(
     JSON.stringify(launch.options).includes("ghs_acme_widgets"),
@@ -8148,12 +8158,15 @@ test("concurrent triage, implement and review runs in one repository each keep t
     caps: { "claude-code": 3, codex: 1 },
   });
   await run.tick();
-  const names = () => run.launched.map(({ options }) => options.name);
-  assert.deepEqual(names(), [
-    "acme/widgets#4",
-    "acme/widgets#5",
-    "acme/widgets#6",
-  ]);
+  // Launches start concurrently, so each is found by its issue.
+  const launchOf = (issue: number) =>
+    run.launched.filter(
+      ({ options }) => options.name === `acme/widgets#${issue}`,
+    );
+  assert.equal(run.launched.length, 3);
+  const [triage] = launchOf(4);
+  const [implementing] = launchOf(5);
+  const [implement] = launchOf(6);
   // Implement #6 ends with a draft PR, which review takes up beside the
   // other two runs.
   const issue = run.github.find("acme/widgets", 6);
@@ -8162,13 +8175,12 @@ test("concurrent triage, implement and review runs in one repository each keep t
     number: 42,
   });
   run.github.drafts.add(42);
-  const implement = run.launched[2];
   implement.finish();
   await until(() => recordOf(run.state, 6, 1).exited === true);
   await run.tick();
-  assert.equal(names()[3], "acme/widgets#6");
+  assert.equal(run.launched.length, 4);
   assert.equal(recordOf(run.state, 6, 1).runKind, "review");
-  const [triage, implementing, , review] = run.launched;
+  const [, review] = launchOf(6);
 
   assert.deepEqual(
     [triage, implementing, implement, review].map((launch) =>
@@ -8245,8 +8257,15 @@ test("a triage run's sandbox cannot comment, label or push", async (t) => {
     remotes: { "acme/widgets": remote(t, kindsFiles) },
   });
   await run.tick();
-  const [triage, implement] = run.launched.map((launch) =>
-    sandboxPlatform(run.minted)(sandboxTokenOf(launch.hosts)),
+  // Launches start concurrently, so each is found by its issue.
+  const [triage, implement] = [4, 5].map((issue) =>
+    sandboxPlatform(run.minted)(
+      sandboxTokenOf(
+        run.launched.find(
+          ({ options }) => options.name === `acme/widgets#${issue}`,
+        )!.hosts,
+      ),
+    ),
   );
   assert.deepEqual(triage, {
     "comment on the issue": "refused",
