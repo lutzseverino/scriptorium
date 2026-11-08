@@ -127,8 +127,13 @@ signals and restarts with a stateful fake of each repository's Postern
 connection, a fake Sandcastle behind the real provider registry, a fake
 sandbox removal, and real Git clones of local bare remotes, so they need Git. The decision core's tests in
 `test/factory.test.ts` drive it with snapshots, and `test/run-kinds.test.ts`
-drives version 3's run kinds, handoffs and model resolution through the same
-entry point over placeholder providers and models. `test/label-roles.test.ts`
+drives version 3's run kinds, handoffs, trusted triggers and model resolution
+through the same entry point over placeholder providers and models.
+`test/triggers.test.ts` checks machine finding citations against host launch
+provenance; platform tests verify current author roles, reporter comment
+identity and creation times, complete PR inventories and installation filing
+identity. Host tests cover trigger consumption and finding verification across
+restarts, plus independent draft PR review and explicit-target recovery. `test/label-roles.test.ts`
 checks that every label consumer derives its roles from `src/label-roles.ts`,
 and `test/model-policy.test.ts` reads repository model policies. The host
 configuration's tests read the fixture files in

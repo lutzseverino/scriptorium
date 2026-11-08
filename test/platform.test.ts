@@ -1781,3 +1781,239 @@ test("a review's draft state and the gated PRs are read through authenticated Gr
   );
   await assert.rejects(broken.readGated(), { reason: "invalidResponse" });
 });
+
+test("reporter replies use the issue author and comment creation time, ignoring other authors and edits", async () => {
+  const comments = [
+    {
+      id: 1,
+      author: { login: "REPORTER", bot: false },
+      body: "facts",
+      createdAt: "2026-10-06T00:00:00Z",
+      updatedAt: "2026-10-06T00:00:00Z",
+      nodeId: "IC_1",
+      url: "https://github.com/acme/widgets/issues/3#issuecomment-1",
+    },
+    {
+      id: 2,
+      author: { login: "other", bot: false },
+      body: "noise",
+      createdAt: "2026-10-07T00:00:00Z",
+      updatedAt: "2026-10-07T00:00:00Z",
+      nodeId: "IC_1",
+      url: "https://github.com/acme/widgets/issues/3#issuecomment-1",
+    },
+    {
+      id: 3,
+      author: { login: "reporter", bot: false },
+      body: "old edited",
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-08T00:00:00Z",
+      nodeId: "IC_1",
+      url: "https://github.com/acme/widgets/issues/3#issuecomment-1",
+    },
+  ];
+  const { connection } = github((request) => {
+    if (request === "PosternIssues")
+      return {
+        status: 200,
+        data: {
+          data: {
+            repository: {
+              issues: page([
+                issueNode(3, {
+                  author: { __typename: "User", login: "reporter" },
+                  labels: page([{ name: "state:reporter" }]),
+                  body: '<!-- scriptorium:filing-run {"run":"r1"} -->',
+                }),
+              ]),
+            },
+          },
+        },
+      };
+    if (request.endsWith("/events"))
+      return {
+        status: 200,
+        data: [
+          labeled(51, user("owner"), "2026-10-05T00:00:00Z", "state:reporter"),
+        ],
+      };
+    if (request.endsWith("/comments"))
+      return { status: 200, data: comments.map(restComment) };
+    if (request.endsWith("/owner/permission"))
+      return { status: 200, data: { permission: "admin", role_name: "admin" } };
+    if (request.endsWith("/reporter/permission"))
+      return { status: 200, data: { permission: "read", role_name: "read" } };
+  });
+  const platform = repositoryPlatform(connection, {
+    labels: { ...labels, triage: "state:triage", reporter: "state:reporter" },
+    contractResult,
+  });
+  let [issue] = await platform.readIssues();
+  assert.deepEqual(issue.author, {
+    kind: "user",
+    login: "reporter",
+    role: "read",
+  });
+  assert.equal(issue.authorReply, "2026-10-06T00:00:00Z");
+  assert.equal(issue.reporter?.actor.kind, "user");
+  assert.equal(issue.filingRun, "r1");
+  comments.shift();
+  [issue] = await platform.readIssues();
+  assert.equal(issue.authorReply, null);
+});
+
+test("the filing identity is read with the supplied installation credential through GraphQL", async () => {
+  const { connection, requests } = github((request) => {
+    assert.equal(request, "FactoryFilingAccount");
+    return {
+      status: 200,
+      data: { data: { viewer: { login: "factory[bot]" } } },
+    };
+  });
+  assert.equal(
+    await repositoryPlatform(connection, configuration).filingAccount(),
+    "factory[bot]",
+  );
+  assert.deepEqual(requests, ["FactoryFilingAccount"]);
+});
+
+test("PR inventory includes every page and preserves labels, draft state, author roles and explicit targets", async () => {
+  const prNode = (number: number) => ({
+    number,
+    fullDatabaseId: String(number),
+    id: `PR_${number}`,
+    url: `https://github.com/acme/widgets/pull/${number}`,
+    state: "OPEN",
+    title: "Decision",
+    body: "The specification",
+    createdAt: "2026-10-01T00:00:00Z",
+    author: { __typename: "User", login: "owner" },
+    headRefName: "grill/design",
+    headRefOid: "a".repeat(40),
+    baseRefName: "main",
+    isCrossRepository: false,
+    repository: { nameWithOwner: "acme/widgets" },
+  });
+  const { connection, requests } = github((request, body) => {
+    if (request === "FactoryReviewPullRequests") {
+      const first = body.variables.after === null;
+      return {
+        status: 200,
+        data: {
+          data: {
+            repository: {
+              pullRequests: {
+                totalCount: 2,
+                nodes: [
+                  {
+                    number: first ? 42 : 43,
+                    isDraft: first,
+                    labels: {
+                      totalCount: 1,
+                      nodes: [{ name: "gate:owner-review" }],
+                    },
+                  },
+                ],
+                pageInfo: {
+                  hasNextPage: first,
+                  endCursor: first ? "next" : null,
+                },
+              },
+            },
+          },
+        },
+      };
+    }
+    if (request === "PosternPullRequest")
+      return {
+        status: 200,
+        data: {
+          data: { repository: { pullRequest: prNode(body.variables.number) } },
+        },
+      };
+    if (request.endsWith("/permission"))
+      return { status: 200, data: { permission: "admin", role_name: "admin" } };
+    if (request === "FactoryPullRequestDraft")
+      return {
+        status: 200,
+        data: { data: { repository: { pullRequest: { isDraft: true } } } },
+      };
+    if (request === "PosternPullRequestsByHead")
+      return {
+        status: 200,
+        data: { data: { repository: { pullRequests: page([]) } } },
+      };
+    if (request === "GET /user") return { status: 200, data: user("factory") };
+  });
+  const platform = repositoryPlatform(connection, configuration);
+  const issues = await platform.readPullRequests();
+  assert.deepEqual(
+    issues.map((item) => [
+      item.number,
+      item.pullRequest?.draft,
+      item.author,
+      item.labels,
+    ]),
+    [
+      [
+        42,
+        true,
+        { kind: "user", login: "owner", role: "admin" },
+        ["gate:owner-review"],
+      ],
+      [
+        43,
+        false,
+        { kind: "user", login: "owner", role: "admin" },
+        ["gate:owner-review"],
+      ],
+    ],
+  );
+  assert.equal(
+    requests.filter((request) => request.endsWith("/permission")).length,
+    1,
+  );
+  const observation = await platform.pullRequestObservation(
+    42,
+    "2026-10-09T00:00:00Z",
+    true,
+    42,
+  );
+  assert.equal(observation.state, "open");
+  assert.equal(observation.mergeCandidate?.number, 42);
+  assert.equal(observation.mergeCandidate?.draft, true);
+  assert.deepEqual(observation.ownedPullRequests, [42]);
+  assert.ok(!requests.includes("PosternClosingPullRequests"));
+});
+
+test("incomplete or unreadable PR inventories never become trusted draft triggers", async () => {
+  for (const pullRequests of [
+    null,
+    { totalCount: 1, nodes: [], pageInfo: { hasNextPage: false } },
+    {
+      totalCount: 1,
+      nodes: [
+        {
+          number: 42,
+          isDraft: true,
+          labels: { totalCount: 2, nodes: [{ name: "one" }] },
+        },
+      ],
+      pageInfo: { hasNextPage: false },
+    },
+    {
+      totalCount: 0,
+      nodes: [],
+      pageInfo: { hasNextPage: true, endCursor: null },
+    },
+  ]) {
+    const { connection } = github(() => ({
+      status: 200,
+      data: { data: { repository: { pullRequests } } },
+    }));
+    await assert.rejects(
+      repositoryPlatform(connection, configuration).readPullRequests(),
+      { reason: "invalidResponse" },
+    );
+  }
+});

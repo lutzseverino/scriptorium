@@ -13,6 +13,7 @@ import type { PlatformConventions } from "./factory-configuration.ts";
 import { reconcileHolds, type HoldKey } from "./hold-comments.ts";
 import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
+import { filingRun } from "./triggers.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
 import type { PullRequestState } from "./run-outcome.ts";
 import {
@@ -189,6 +190,28 @@ export function repositoryPlatform(
     return draft;
   }
 
+  function actorLookup() {
+    const actors = new Map<string, Promise<Actor>>();
+    return (account: Account | null): Promise<Actor> => {
+      if (account === null) return Promise.resolve({ kind: "unknown" });
+      const { login } = account;
+      if (account.bot) return Promise.resolve({ kind: "bot", login });
+      if (!actors.has(login))
+        actors.set(
+          login,
+          access.role(login).then(
+            (role): Actor => ({ kind: "user", login, role }),
+            (error) => {
+              if (error instanceof PlatformError)
+                return { kind: "unreadable", login };
+              throw error;
+            },
+          ),
+        );
+      return actors.get(login)!;
+    };
+  }
+
   // An absent label counts as removed.
   async function remove(issue: number, label: string) {
     try {
@@ -211,17 +234,22 @@ export function repositoryPlatform(
   async function candidates(
     number: number,
     since?: string,
+    target?: number,
   ): Promise<{ found: PullRequest[]; closing: Set<number> }> {
-    const closing = pullRequests.capabilities.closingReferences
-      ? await pullRequests.closing(number)
-      : [];
+    const closing =
+      target !== number && pullRequests.capabilities.closingReferences
+        ? await pullRequests.closing(number)
+        : [];
     const found = [
+      ...(target !== undefined ? [await pullRequests.pullRequest(target)] : []),
       ...closing,
       ...(await pullRequests.byHeadBranch(runBranch(number))),
     ].filter(
       (pr) =>
-        !pr.crossRepository &&
-        (since === undefined || Date.parse(pr.createdAt) >= Date.parse(since)),
+        (pr.number === target || !pr.crossRepository) &&
+        (pr.number === target ||
+          since === undefined ||
+          Date.parse(pr.createdAt) >= Date.parse(since)),
     );
     return {
       found: [...new Map(found.map((pr) => [pr.number, pr])).values()],
@@ -309,6 +337,31 @@ export function repositoryPlatform(
   }
 
   return {
+    // GraphQL's viewer also identifies an installation token, for which the
+    // REST /user endpoint used by Postern's viewer need not be available.
+    // https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
+    async filingAccount(): Promise<string | null> {
+      if (connection.repository.platform !== "github")
+        return (await access.viewer())?.login ?? null;
+      const response = await access.request({
+        method: "POST",
+        path: "/graphql",
+        body: {
+          query: "query FactoryFilingAccount { viewer { login } }",
+        },
+      });
+      const result = response.data as {
+        errors?: unknown;
+        data?: { viewer?: { login?: unknown } };
+      } | null;
+      const login = result?.data?.viewer?.login;
+      if (result?.errors || typeof login !== "string" || !login.trim())
+        throw new PlatformError(
+          "invalidResponse",
+          "The filing credential's account could not be read",
+        );
+      return login;
+    },
     // The open PRs carrying the release hold label.
     async readReleaseHold(): Promise<number[]> {
       if (labels.releaseHold === undefined) return [];
@@ -368,30 +421,116 @@ export function repositoryPlatform(
         }
     },
 
+    // Postern has no PR listing/draft/label port. Read the inventory through
+    // its authenticated transport, then each PR and author role through Postern.
+    // Include ready PRs too, so an active review survives a draft-state change.
+    async readPullRequests(): Promise<Issue[]> {
+      if (connection.repository.platform !== "github") return [];
+      const [owner, name] = path.split("/");
+      const actor = actorLookup();
+      const items: Issue[] = [];
+      const cursors = new Set<string>();
+      let after: string | null = null;
+      for (;;) {
+        const response = await access.request({
+          method: "POST",
+          path: "/graphql",
+          body: {
+            query: `query FactoryReviewPullRequests($owner: String!, $name: String!, $after: String) {
+            repository(owner: $owner, name: $name) {
+              pullRequests(first: 100, after: $after, states: OPEN) {
+                totalCount nodes { number isDraft labels(first: 100) { totalCount nodes { name } } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }`,
+            variables: { owner, name, after },
+          },
+        });
+        const result = response.data as {
+          errors?: unknown;
+          data?: {
+            repository?: {
+              pullRequests?: {
+                totalCount: number;
+                nodes: {
+                  number: number;
+                  isDraft: boolean;
+                  labels: { totalCount: number; nodes: { name: string }[] };
+                }[];
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+              };
+            };
+          };
+        } | null;
+        const page = result?.data?.repository?.pullRequests;
+        const invalid = () =>
+          new PlatformError(
+            "invalidResponse",
+            "Review PR inventory could not be read completely",
+          );
+        if (
+          result?.errors ||
+          !page ||
+          !Array.isArray(page.nodes) ||
+          !Number.isInteger(page.totalCount) ||
+          typeof page.pageInfo?.hasNextPage !== "boolean"
+        )
+          throw invalid();
+        for (const node of page.nodes) {
+          if (
+            !Number.isSafeInteger(node.number) ||
+            node.number <= 0 ||
+            typeof node.isDraft !== "boolean" ||
+            !Array.isArray(node.labels?.nodes) ||
+            node.labels.nodes.length !== node.labels.totalCount ||
+            node.labels.nodes.some((label) => typeof label.name !== "string") ||
+            items.some((item) => item.number === node.number)
+          )
+            throw invalid();
+          const pr = await pullRequests.pullRequest(node.number);
+          items.push({
+            number: pr.number,
+            createdAt: pr.createdAt,
+            labels: node.labels.nodes.map((label) => label.name),
+            author: await actor(pr.author),
+            pullRequest: {
+              target: {
+                number: pr.number,
+                headCommit: pr.headCommit,
+                baseBranch: pr.baseBranch,
+                createdAt: pr.createdAt,
+              },
+              draft: node.isDraft,
+              headBranch: pr.headBranch,
+            },
+            ready: null,
+            editedAt: null,
+            contractHold: null,
+            nativeParent: null,
+            latestLink: null,
+            linkAdditions: null,
+            subIssues: [],
+            blockedBy: [],
+          });
+        }
+        if (!page.pageInfo.hasNextPage) {
+          if (items.length !== page.totalCount) throw invalid();
+          return items;
+        }
+        const cursor = page.pageInfo.endCursor;
+        if (!cursor || cursors.has(cursor)) throw invalid();
+        cursors.add(cursor);
+        after = cursor;
+      }
+    },
+
     // The repository's open issues. The role of each ready label's latest
     // actor is read once per account per call, which a pass makes once. A
     // time the platform doesn't offer is null, never invented.
     async readIssues(): Promise<Issue[]> {
       const { capabilities } = issueTracker;
-      const actors = new Map<string, Promise<Actor>>();
-      const actor = (account: Account | null): Promise<Actor> => {
-        if (account === null) return Promise.resolve({ kind: "unknown" });
-        const { login } = account;
-        if (account.bot) return Promise.resolve({ kind: "bot", login });
-        if (!actors.has(login))
-          actors.set(
-            login,
-            access.role(login).then(
-              (role): Actor => ({ kind: "user", login, role }),
-              (error) => {
-                if (error instanceof PlatformError)
-                  return { kind: "unreadable", login };
-                throw error;
-              },
-            ),
-          );
-        return actors.get(login)!;
-      };
+      const actor = actorLookup();
       const issues: Issue[] = [];
       for (const issue of await issueTracker.issues()) {
         // Changes arrive in platform order, so the last match is the latest.
@@ -408,6 +547,26 @@ export function repositoryPlatform(
             : undefined;
         const ready = latest(labels.ready);
         const triage = latest(labels.triage);
+        const reporter = latest(labels.reporter);
+        const triggers = labels.triage !== undefined;
+        const author = triggers ? await actor(issue.author) : undefined;
+        const replies = reporter
+          ? await issueTracker.comments(issue.number)
+          : [];
+        const authorReply =
+          replies
+            .filter(
+              (comment) =>
+                issue.author &&
+                comment.author &&
+                comment.author.login.toLowerCase() ===
+                  issue.author.login.toLowerCase() &&
+                !comment.author.bot &&
+                Date.parse(comment.createdAt) > Date.parse(reporter!.time),
+            )
+            .map((comment) => comment.createdAt)
+            .sort()
+            .at(-1) ?? null;
         const readyActor = ready && (await actor(ready.actor));
         const contract = ready
           ? await readContractResult(issue.number, {
@@ -421,6 +580,11 @@ export function repositoryPlatform(
         issues.push({
           number: issue.number,
           createdAt: issue.createdAt,
+          ...(author && { author, filingRun: filingRun(issue) }),
+          ...(reporter && {
+            reporter: { at: reporter.time, actor: await actor(reporter.actor) },
+            authorReply,
+          }),
           labels: issue.labels,
           ready: ready
             ? {
@@ -482,6 +646,7 @@ export function repositoryPlatform(
       number: number,
       since?: string,
       draft = false,
+      target?: number,
     ): Promise<{
       state: PullRequestState;
       closesIssue?: true;
@@ -489,7 +654,7 @@ export function repositoryPlatform(
       ownedPullRequests: number[];
       mergeCandidate?: MergeRelaunch & { draft?: true };
     }> {
-      const { found, closing } = await candidates(number, since);
+      const { found, closing } = await candidates(number, since, target);
       const open = found.filter((pr) => pr.state === "open");
       let viewer: Account | null = null;
       if (open.some((pr) => pr.headBranch !== runBranch(number))) {
@@ -501,6 +666,7 @@ export function repositoryPlatform(
       }
       const owned = open.filter(
         (pr) =>
+          pr.number === target ||
           pr.headBranch === runBranch(number) ||
           (viewer !== null &&
             pr.author?.login.toLowerCase() === viewer.login.toLowerCase()),

@@ -371,6 +371,10 @@ test("a person's triage label starts a claimed triage run on the host's triage d
         runKind: "triage",
         provider: "provider-a",
         model: "model-triage",
+        trigger: {
+          id: "label:2026-10-04T00:00:00Z",
+          at: "2026-10-04T00:00:00Z",
+        },
         effort: "medium",
         selection: "host-default",
         attempt: 1,
@@ -1179,4 +1183,216 @@ test("a hand-back's failed implement attempt retries on the same PR", () => {
   assert.equal(launch.attempt, 2);
   assert.deepEqual(launch.target, pr);
   assert.equal(launch.handBacks, 1);
+});
+
+test("an authorized issue author triggers triage without a label, including under a validator fallback", () => {
+  for (const issueLabels of [[], [labels.triage]]) {
+    const candidate = issue(4, issueLabels, {
+      author: owner,
+      triage: { at: now, actor: { kind: "bot", login: "validator[bot]" } },
+    });
+    assert.equal(launchOf(decide({ issues: [candidate] }))?.runKind, "triage");
+    for (const stopped of [
+      labels.ready,
+      labels.reporter,
+      labels.grill,
+      labels.owner,
+    ])
+      assert.notEqual(
+        launchOf(decide({ issues: [{ ...candidate, labels: [stopped] }] }))
+          ?.runKind,
+        "triage",
+      );
+  }
+});
+
+test("outside issue text waits for a person's trusted label, never a bot fallback", () => {
+  const outsider: Actor = { kind: "user", login: "reporter", role: null };
+  assert.equal(
+    launchOf(decide({ issues: [issue(4, [], { author: outsider })] })),
+    undefined,
+  );
+  for (const actor of [
+    outsider,
+    { kind: "bot", login: "validator[bot]" },
+    { kind: "unknown" },
+    { kind: "unreadable", login: "owner" },
+    { kind: "user", login: "writer", role: "write" },
+  ] as Actor[]) {
+    assert.equal(
+      launchOf(
+        decide({
+          issues: [
+            issue(4, [labels.triage], {
+              author: outsider,
+              triage: { at: now, actor },
+            }),
+          ],
+        }),
+      ),
+      undefined,
+      actor.kind,
+    );
+  }
+  assert.equal(
+    launchOf(
+      decide({ issues: [issue(4, [labels.triage], { author: outsider })] }),
+    )?.runKind,
+    "triage",
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        issues: [issue(4, [], { author: owner })],
+        details: {
+          authorization: {
+            authorizedRoles: ["admin"],
+            neverAuthorize: ["OwNeR"],
+          },
+        },
+      }),
+    ),
+    undefined,
+  );
+});
+
+test("only a new reporter-state author reply retriggers triage, once, under a trusted stop", () => {
+  const candidate = issue(4, [labels.reporter], {
+    author: { kind: "user", login: "reporter", role: null },
+    reporter: { at: "2026-10-08T00:00:00Z", actor: owner },
+    authorReply: "2026-10-09T00:00:00Z",
+  });
+  assert.equal(launchOf(decide({ issues: [candidate] }))?.runKind, "triage");
+  for (const details of [
+    { authorReply: null },
+    { authorReply: candidate.reporter!.at },
+    { lastTriageAt: now },
+    { reporter: null },
+    {
+      reporter: {
+        at: candidate.reporter!.at,
+        actor: { kind: "bot", login: "outside[bot]" } as Actor,
+      },
+    },
+  ])
+    assert.equal(
+      launchOf(decide({ issues: [{ ...candidate, ...details }] })),
+      undefined,
+    );
+  assert.equal(
+    launchOf(
+      decide({
+        issues: [
+          {
+            ...candidate,
+            trustedHistory: true,
+            reporter: {
+              at: candidate.reporter!.at,
+              actor: { kind: "bot", login: "factory[bot]" },
+            },
+          },
+        ],
+      }),
+    )?.runKind,
+    "triage",
+  );
+});
+
+test("a consumed opening or label cannot repeat triage; a later trusted label can", () => {
+  const candidate = issue(4, [], { author: owner, lastTriageAt: now });
+  assert.equal(launchOf(decide({ issues: [candidate] })), undefined);
+  assert.equal(
+    launchOf(
+      decide({
+        issues: [
+          {
+            ...candidate,
+            labels: [labels.triage],
+            triage: { actor: owner, at: "2026-10-10T00:00:00Z" },
+          },
+        ],
+      }),
+    )?.runKind,
+    "triage",
+  );
+});
+
+test("a host-verified factory finding triggers triage; an unverified bot citation does not", () => {
+  const candidate = issue(4, [], {
+    author: { kind: "bot", login: "factory[bot]" },
+    filingRun: "run-id",
+  });
+  assert.equal(launchOf(decide({ issues: [candidate] })), undefined);
+  assert.equal(
+    launchOf(decide({ issues: [{ ...candidate, filedByTrustedRun: true }] }))
+      ?.runKind,
+    "triage",
+  );
+});
+
+test("trusted unowned draft PRs start review with and without linked issues, through the shared gate", () => {
+  for (const nativeParent of [null, 3]) {
+    const candidate = issue(42, [], {
+      createdAt: pr.createdAt,
+      author: owner,
+      nativeParent,
+      pullRequest: { target: pr, draft: true },
+    });
+    const review = launchOf(decide({ issues: [candidate] }));
+    assert.equal(review?.runKind, "review");
+    assert.equal(review?.issue, 42);
+    assert.equal(review?.target?.number, 42);
+    for (const details of [
+      { author: { kind: "user", login: "outsider", role: null } as Actor },
+      { author: { kind: "bot", login: "app[bot]" } as Actor },
+      { pullRequest: { target: pr, draft: false } },
+      { reviewedHeads: [pr.headCommit] },
+    ])
+      assert.equal(
+        launchOf(decide({ issues: [{ ...candidate, ...details }] })),
+        undefined,
+      );
+    for (const details of [
+      { ownedPullRequests: [42] },
+      { factoryHold: [90] },
+      {
+        authorization: {
+          authorizedRoles: ["admin"],
+          neverAuthorize: ["OWNER"],
+        },
+      },
+    ])
+      assert.equal(
+        launchOf(decide({ issues: [candidate], details })),
+        undefined,
+      );
+    assert.equal(
+      launchOf(
+        decide({ issues: [{ ...candidate, labels: ["model:forbidden"] }] }),
+      ),
+      undefined,
+    );
+    assert.equal(
+      launchOf(decide({ issues: [candidate], kinds: { review: false } })),
+      undefined,
+    );
+    assert.equal(
+      launchOf(
+        decide({
+          issues: [
+            {
+              ...candidate,
+              pullRequest: {
+                target: pr,
+                draft: true,
+                headBranch: "factory/issue-4",
+              },
+            },
+          ],
+          runs: [run()],
+        }),
+      ),
+      undefined,
+    );
+  }
 });
