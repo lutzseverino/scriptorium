@@ -7445,6 +7445,252 @@ const kindsFiles = {
   ".factory/config.json": JSON.stringify(kindsConventions),
 };
 
+for (const configuration of [conventions, kindsConventions])
+  test(`version ${configuration.version} trusts only its configured contract-result author and marker`, async (t) => {
+    const identity = { marker: "custom:contract", author: "validator[bot]" };
+    const label = configuration.labels.ready;
+    const result = postedResult(4, "2026-10-09T11:00:00Z", { label });
+    const body = result.body.replace(contractResult.marker, identity.marker);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: [label],
+            validator: false,
+            timeline: [
+              {
+                event: "labeled",
+                label,
+                actor: "owner",
+                id: 42,
+                at: "2026-10-05T00:00:00Z",
+              },
+            ],
+            discussion: [{ ...result, body }],
+          },
+        ],
+      },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".factory/config.json": JSON.stringify({
+            ...configuration,
+            contractResult: identity,
+          }),
+        }),
+      },
+    });
+    await run.tick();
+    assert.equal(
+      run.launched.length,
+      0,
+      "another author's result grants no readiness",
+    );
+    const issue = run.github.find("acme/widgets", 4);
+    issue.discussion = [
+      { ...result, author: { login: identity.author, bot: true } },
+    ];
+    await run.tick();
+    assert.equal(run.launched.length, 0, "another marker grants no readiness");
+    issue.discussion = [
+      { ...result, body, author: { login: identity.author, bot: true } },
+    ];
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    assert.equal(invocation(run.launched[0].options.prompt), "/implement #4");
+  });
+
+for (const [name, configuration, problem] of [
+  [
+    "malformed v2",
+    { ...conventions, arguments: null },
+    "arguments: is not a string",
+  ],
+  [
+    "unknown v2",
+    { ...conventions, runKinds: {} },
+    "runKinds: is not a factory configuration field",
+  ],
+  [
+    "malformed v3",
+    {
+      ...kindsConventions,
+      runKinds: { implement: { skill: "implement", arguments: null } },
+    },
+    "runKinds.implement.arguments: is not a string",
+  ],
+  [
+    "unknown v3",
+    { ...kindsConventions, skill: "implement" },
+    "skill: is not a factory configuration field",
+  ],
+  ["past version", { ...conventions, version: 1 }, "version: must be 2 or 3"],
+  [
+    "future version",
+    { ...kindsConventions, version: 4 },
+    "version: must be 2 or 3",
+  ],
+] as const)
+  test(`the host refuses ${name} configuration before launching`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".factory/config.json": JSON.stringify(configuration),
+        }),
+      },
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 0);
+    const [repository] = run.status().repositories;
+    assert.equal(repository.state, "paused");
+    assert.ok(repository.reason.includes(problem), repository.reason);
+  });
+
+for (const [name, policy] of [
+  ["malformed", "{not JSON"],
+  [
+    "valid",
+    JSON.stringify({
+      version: 1,
+      fallback: "wait",
+      runKinds: {
+        implement: {
+          initial: { provider: "codex", model: "gpt-5.5" },
+          retry: { provider: "claude-code", model: "claude-opus-5-5" },
+        },
+      },
+    }),
+  ],
+])
+  test(`a version 2 repository ignores a ${name} version 3 model policy`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...factoryFiles,
+          ".github/factory-model-policy.json": policy,
+        }),
+      },
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    assert.equal(invocation(run.launched[0].options.prompt), "/implement #4");
+    assert.equal(run.launched[0].options.agent.name, "claude-code");
+    assert.deepEqual(run.github.find("acme/widgets", 4).comments, []);
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.equal(run.launched.length, 2);
+    assert.equal(run.launched[1].options.agent.name, "codex");
+  });
+
+test("one host preserves version 2 conventions beside version 3 triage, implement and review", async (t) => {
+  const legacy = {
+    version: 2,
+    labels: {
+      ready: "queued",
+      running: "working",
+      failed: "broken",
+      needsInput: "question",
+      paused: "waiting",
+      skip: "manual",
+      releaseHold: "release",
+      hold: "hold",
+    },
+    contractResult,
+    modelLabelPrefix: "agent:",
+    skill: "ship",
+    arguments: " #{issue}\n{issue} {pullRequest} ",
+    comments: { awaitingMerge: "Legacy waiting: {label}" },
+  };
+  const policy = JSON.stringify({
+    version: 1,
+    fallback: "wait",
+    runKinds: {
+      triage: { provider: "codex", model: "gpt-5.5", effort: "low" },
+      implement: {
+        initial: { provider: "claude-code", model: "claude-opus-5-5" },
+      },
+    },
+  });
+  const legacyRemote = remote(t, {
+    ...factoryFiles,
+    ".factory/config.json": JSON.stringify(legacy),
+    ".github/factory-model-policy.json": policy,
+  });
+  const currentRemote = remote(t, {
+    ...kindsFiles,
+    ".github/factory-model-policy.json": policy,
+  });
+  const run = host(t, {
+    repositories: {
+      "acme/legacy": [
+        { number: 4, labels: ["queued", "agent:gpt-5.5"] },
+        { number: 6, labels: ["queued", "question"] },
+      ],
+      "acme/current": [{ number: 5, labels: ["state:triage"] }],
+    },
+    remotes: { "acme/legacy": legacyRemote, "acme/current": currentRemote },
+    caps: { "claude-code": 2, codex: 2 },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 2, run.reports.join("\n"));
+  const launch = (name: string) =>
+    run.launched.find(({ options }) => options.name === name)!;
+  const v2 = launch("acme/legacy#4");
+  const triage = launch("acme/current#5");
+  assert.equal(invocation(v2.options.prompt), "$ship  #4\n4 {pullRequest} ");
+  assert.equal(v2.options.agent.name, "codex");
+  assert.equal(invocation(triage.options.prompt), "$triage #5");
+  assert.equal(triage.options.agent.name, "codex");
+  assert.deepEqual(
+    run.github.labels.get("acme/legacy"),
+    new Set(["working", "broken", "question", "waiting"]),
+  );
+  assert.deepEqual(run.github.find("acme/legacy", 6).labels, [
+    "queued",
+    "question",
+  ]);
+
+  const legacyIssue = run.github.find("acme/legacy", 4);
+  legacyIssue.branchPullRequests.push(publishedPR(legacyRemote));
+  v2.finish();
+  const currentIssue = run.github.find("acme/current", 5);
+  currentIssue.labels = ["state:ready", "factory:running"];
+  currentIssue.timeline.push({
+    event: "labeled",
+    label: "state:ready",
+    actor: "owner",
+    at: "2026-10-09T12:00:00Z",
+  });
+  triage.finish();
+  await run.drain();
+  // Settlement releases triage's claim; the next pass sees ready work.
+  await run.tick();
+  await run.tick();
+  assert.equal(run.launched.length, 3, run.reports.join("\n"));
+  assert.equal(invocation(run.launched[2].options.prompt), "/implement #5");
+  assert.equal(run.launched[2].options.agent.name, "claude-code");
+  assert.deepEqual(legacyIssue.comments, ["Legacy waiting: working"]);
+
+  currentIssue.branchPullRequests.push({
+    ...publishedPR(currentRemote, "factory/issue-5"),
+    number: 42,
+  });
+  run.github.drafts.add(42);
+  run.launched[2].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(run.launched.length, 4);
+  assert.equal(invocation(run.launched[3].options.prompt), "/review #42");
+  assert.equal(run.launched[3].options.name, "acme/current#5");
+  assert.deepEqual(currentIssue.comments, []);
+  assert.deepEqual(legacyIssue.comments, ["Legacy waiting: working"]);
+});
+
 test("a version 3 issue goes from implement to review to a hand-back on the same PR, without an awaiting-merge notice", async (t) => {
   const bare = remote(t, kindsFiles);
   const run = host(t, {

@@ -80,7 +80,7 @@ test("the contract result's marker and author are required, with no default", (t
   }
 });
 
-test("version 1 prompt configurations are refused without a compatibility layer", (t) => {
+test("version 1 prompt configurations are outside the compatibility window", (t) => {
   const path = join(directory(t), "config.json");
   const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   delete configuration.skill;
@@ -376,6 +376,35 @@ function invalid(t: TestContext, value: unknown, problems: string[]) {
     message: `The factory configuration ${path} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
   });
 }
+
+test("version 2 refuses version 3 fields rather than synthesizing run kinds or labels", (t) => {
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  invalid(
+    t,
+    {
+      ...configuration,
+      runKinds: implementOnly.runKinds,
+      triageResult: { marker: "triage", author: "factory[bot]" },
+      labels: { ...configuration.labels, triage: "state:triage" },
+    },
+    [
+      "runKinds: is not a factory configuration field",
+      "triageResult: is not a factory configuration field",
+      "labels.triage: is not a factory configuration field",
+    ],
+  );
+});
+
+test("only numeric versions 2 and 3 fall inside the compatibility window", (t) => {
+  const path = join(directory(t), "config.json");
+  for (const version of [0, 1, 4, 99, "2", "3", null, true]) {
+    writeFileSync(path, JSON.stringify({ ...implementOnly, version }));
+    assert.throws(
+      () => readFactoryConfiguration(path),
+      /version: must be 2 or 3/,
+    );
+  }
+});
 
 test("implement alone is a complete version 3 configuration", (t) => {
   const path = join(directory(t), "config.json");

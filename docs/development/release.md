@@ -41,6 +41,12 @@ require a new major and a deliberate host update; the host stays on its pinned
 major otherwise. Compatible capabilities receive a minor and compatible fixes
 receive a patch.
 
+Scriptorium v4.0.0 must include both version 3 run kinds (#115) and the N/N−1
+configuration reader (#124). Its supported configuration versions are 3 and 2;
+a version-3-only intermediate implementation is not the release contract.
+The rolling [compatibility window](../usage/factory-configuration.md#compatibility-window)
+lets a host upgrade precede repository adoption without a synchronized switch.
+
 ## Prepare the release pull request
 
 Each release is one pull request into `main`, titled `<type>: release vX.Y.Z`

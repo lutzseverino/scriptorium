@@ -368,8 +368,10 @@ host's capabilities holds the same way.
 
 ### Repository model policy
 
-The optional repository-owned `.github/factory-model-policy.json` holds the
-repository's preferences. The factory reads it from the same default-branch
+For version 3 factory configurations, the optional repository-owned
+`.github/factory-model-policy.json` holds the repository's preferences.
+Version 2 ignores this file and keeps its issue-label selection and host defaults.
+The factory reads it from the same default-branch
 revision as `.factory/config.json`, never from a run's pull request. Without
 the file, every launch takes the host's defaults, including `models.retry`.
 A present file that is unreadable, not JSON or invalid pauses the repository
