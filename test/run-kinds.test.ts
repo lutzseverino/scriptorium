@@ -132,36 +132,19 @@ const pr: MergeRelaunch = {
   createdAt: "2026-10-09T11:30:00Z",
 };
 
-function run(details: Partial<Run> & Partial<Continuation> = {}): Run {
-  const {
-    attempt = 1,
-    retry,
-    inputResume,
-    mergeRelaunch,
-    runKind,
-    target,
-    handBacks,
-    implementedBy,
-    relaunch,
-    ...rest
-  } = details;
+function run(
+  details: Partial<Omit<Run, "continuation">> & {
+    continuation?: Partial<Continuation>;
+  } = {},
+): Run {
+  const { continuation, ...rest } = details;
   return {
     repository: widgets,
     issue: 4,
     provider: "provider-a",
     model: "model-impl",
     effort: "medium",
-    continuation: {
-      attempt,
-      ...(retry && { retry }),
-      ...(inputResume && { inputResume }),
-      ...(mergeRelaunch && { mergeRelaunch }),
-      ...(runKind && { runKind }),
-      ...(target && { target }),
-      ...(handBacks !== undefined && { handBacks }),
-      ...(implementedBy !== undefined && { implementedBy }),
-      ...(relaunch && { relaunch }),
-    },
+    continuation: { attempt: 1, ...continuation },
     startedAt: "2026-10-09T11:00:00Z",
     log: "/srv/factory/logs/issue-4-attempt-1.log",
     ended: null,
@@ -171,7 +154,9 @@ function run(details: Partial<Run> & Partial<Continuation> = {}): Run {
 
 // An ended run whose one open PR is `pr`, still a draft when `draft`.
 function ended(
-  details: Partial<Run> & Partial<Continuation> = {},
+  details: Partial<Omit<Run, "continuation">> & {
+    continuation?: Partial<Continuation>;
+  } = {},
   draft = false,
 ): Run {
   return run({
@@ -438,7 +423,7 @@ test("without triage, a triage-labelled issue waits for a person's readiness", (
 
 test("a triage run releases its claim once its issue leaves triage, and fails if it never does", () => {
   const triage = run({
-    runKind: "triage",
+    continuation: { runKind: "triage" },
     ended: { timedOut: false, pullRequest: "none" },
   });
   assert.deepEqual(
@@ -507,7 +492,13 @@ test("an implement run ending with a draft PR starts review on that PR, quietly 
 
 test("a review left a draft hands back to implement on the same PR, at most twice", () => {
   const review = (handBacks: number) =>
-    ended({ runKind: "review", provider: "provider-b", handBacks }, true);
+    ended(
+      {
+        continuation: { runKind: "review", handBacks },
+        provider: "provider-b",
+      },
+      true,
+    );
   for (const handBacks of [0, 1]) {
     const decisions = decide({
       issues: [issue(4, claimed)],
@@ -533,7 +524,7 @@ test("a review left a draft hands back to implement on the same PR, at most twic
   const next = launchOf(
     decide({
       issues: [issue(4, claimed)],
-      runs: [ended({ handBacks: 1, target: pr })],
+      runs: [ended({ continuation: { handBacks: 1, target: pr } })],
     }),
   )!;
   assert.equal(next.continuation.runKind, "review");
@@ -543,7 +534,9 @@ test("a review left a draft hands back to implement on the same PR, at most twic
 test("a review whose PR is ready awaits merge like a run without review", () => {
   const decisions = decide({
     issues: [issue(4, claimed)],
-    runs: [ended({ runKind: "review", provider: "provider-b" })],
+    runs: [
+      ended({ continuation: { runKind: "review" }, provider: "provider-b" }),
+    ],
   });
   assert.deepEqual(decisions[0], { kind: "keep", ...at });
   assert.equal(launchOf(decisions), undefined);
@@ -554,7 +547,7 @@ test("a run ending in a state stop leaves its issue there", () => {
     for (const runKind of [undefined, "review"] as const) {
       const decisions = decide({
         issues: [issue(4, [stop, labels.running])],
-        runs: [ended({ ...(runKind && { runKind }) })],
+        runs: [ended({ continuation: { ...(runKind && { runKind }) } })],
       });
       assert.deepEqual(decisions, [{ kind: "release", ...at }], stop);
     }
@@ -694,7 +687,7 @@ test("run kinds pass the shared gate: invalid model labels and holds wait on eve
       "hand-back",
       {
         issues: [issue(4, claimed)],
-        runs: [ended({ runKind: "review" }, true)],
+        runs: [ended({ continuation: { runKind: "review" } }, true)],
       },
     ],
   ];
@@ -749,7 +742,7 @@ test("a review merges its own held PR: the factory hold exempts the review's tar
 
 test("with review on, a stale PR's merge relaunch runs review, keeping the release-hold asymmetry", () => {
   const stale = run({
-    runKind: "review",
+    continuation: { runKind: "review" },
     ended: {
       timedOut: false,
       pullRequest: "open",
@@ -775,8 +768,8 @@ test("with review on, a stale PR's merge relaunch runs review, keeping the relea
   );
   // ...while an interrupted one resumes, as before review existed.
   const interrupted = run({
-    runKind: "review",
-    mergeRelaunch: pr,
+    continuation: { runKind: "review", mergeRelaunch: pr },
+
     ended: { interrupted: true },
   });
   assert.equal(
@@ -1203,8 +1196,8 @@ test("a hand-back's failed implement attempt retries on the same PR", () => {
       issues: [issue(4, claimed)],
       runs: [
         run({
-          target: pr,
-          handBacks: 1,
+          continuation: { target: pr, handBacks: 1 },
+
           ended: { timedOut: false, pullRequest: "none" },
         }),
       ],
