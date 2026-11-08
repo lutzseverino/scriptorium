@@ -51,17 +51,6 @@ export type MergeRelaunch = Pick<
 // Work a stop released, which resumes on the same PRs once it is answered. A
 // review stopped with its PR ready to merge resumes as review, and one
 // stopped at a gate resumes once the gate is cleared.
-// The identity of an open PR the factory continues, without the rest of its
-// observation.
-export function pullRequestIdentity({
-  number,
-  headCommit,
-  baseBranch,
-  createdAt,
-}: MergeRelaunch): MergeRelaunch {
-  return { number, headCommit, baseBranch, createdAt };
-}
-
 export type InputResume = {
   since?: string;
   pullRequests: Pick<

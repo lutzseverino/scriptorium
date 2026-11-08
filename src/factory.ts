@@ -24,11 +24,7 @@ import {
 } from "./repository-holds.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
-import {
-  pullRequestIdentity,
-  type MergeRelaunch,
-  type InputResume,
-} from "./platform.ts";
+import type { MergeRelaunch, InputResume } from "./platform.ts";
 import {
   closes,
   readinessExclusion,
@@ -480,6 +476,17 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         });
   }
   return decisions;
+}
+
+// The identity of an open PR the factory continues, without the rest of its
+// observation.
+export function pullRequestIdentity({
+  number,
+  headCommit,
+  baseBranch,
+  createdAt,
+}: MergeRelaunch): MergeRelaunch {
+  return { number, headCommit, baseBranch, createdAt };
 }
 
 function key(repository: string, issue: number): string {

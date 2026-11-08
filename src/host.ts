@@ -46,6 +46,7 @@ import {
 import {
   decideFactory,
   handBackLimit,
+  pullRequestIdentity,
   type Claim,
   type Decision,
   type Issue,
@@ -61,7 +62,6 @@ import {
   observeHolds,
 } from "./repository-holds.ts";
 import {
-  pullRequestIdentity,
   relationshipSections,
   repositoryPlatform,
   runBranch,
