@@ -1664,6 +1664,26 @@ function replay(run: ReturnType<typeof host>): FactoryEvent[] {
     .map((line) => JSON.parse(line));
 }
 
+test("interrupted work retained across a restart occupies no sandbox slot in status", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { usage: thresholds },
+  });
+  await run.tick();
+  assert.equal(run.status().providers[0].running, 1);
+  assert.equal(run.status().providers[0].free, 1);
+  run.interrupt();
+  run.usage["claude-code"] = 96;
+  await run.restart().tick();
+  const provider = run.status().providers[0];
+  assert.equal(provider.running, 0);
+  assert.equal(provider.retained, 1);
+  assert.equal(provider.paused, 0);
+  assert.equal(provider.free, 2);
+  assert.equal(provider.claimsHeld, true);
+});
+
 test("empty-frontier status and events expose simultaneous providers, including a pause threshold with zero running work", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [] },
@@ -1684,6 +1704,10 @@ test("empty-frontier status and events expose simultaneous providers, including 
       thresholds: { ...thresholds, effectiveDrainThreshold: 90 },
       running: 0,
       paused: 0,
+      counting: "non-ended-runs",
+      cap: 2,
+      free: 2,
+      retained: 0,
       claimsHeld: true,
       pauseAtThreshold: false,
       drained: true,
@@ -1700,6 +1724,10 @@ test("empty-frontier status and events expose simultaneous providers, including 
       thresholds: { ...thresholds, effectiveDrainThreshold: 90 },
       running: 0,
       paused: 0,
+      counting: "non-ended-runs",
+      cap: 1,
+      free: 1,
+      retained: 0,
       claimsHeld: true,
       pauseAtThreshold: true,
       drained: true,
@@ -2615,6 +2643,11 @@ test("an ended run awaiting merge shows it on its run comment across polls, labe
     run.github.calls.filter(([, operation]) => operation === "updateComment")
       .length;
   const edited = edits();
+  const retained = run.status().providers[0];
+  assert.equal(retained.running, 0);
+  assert.equal(retained.free, retained.cap);
+  assert.equal(retained.retained, 1);
+  assert.equal(retained.counting, "non-ended-runs");
   await run.tick();
   issue.labels = ["ready-for-agent"];
   const restarted = run.restart();
@@ -5209,6 +5242,8 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
   const provider = run.status().providers[0];
   assert.equal(provider.running, 0);
   assert.equal(provider.paused, 2);
+  assert.equal(provider.retained, 2);
+  assert.equal(provider.free, provider.cap);
   assert.equal(provider.drained, true);
   const thresholdEvents = replay(run).filter(
     ({ type }) => type === "paused_at_threshold",

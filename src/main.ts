@@ -1,7 +1,8 @@
 // The factory process: `node src/main.ts <host configuration>` serves every
 // repository the host configuration lists until it is stopped, and
 // `node src/main.ts resume <host configuration> <provider>` queues the owner's
-// resume request for it.
+// resume request for it. `status <host configuration> [--json]` reads the
+// operational observations without serving repositories.
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -14,7 +15,17 @@ import { createImageStorage, observeImageStorage } from "./image-storage.ts";
 import { createRegistry } from "./providers.ts";
 import { pruneSandboxCache, retainSandboxImages } from "./image-retention.ts";
 import { resume, resumeUsage } from "./resume.ts";
+import { status, statusUsage } from "./status-command.ts";
 import { buildSandboxImage, docker, stopSandboxes } from "./sandbox-image.ts";
+
+if (process.argv[2] === "status")
+  process.exit(
+    await status(process.argv.slice(3), {
+      now: () => new Date(),
+      print: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }),
+  );
 
 if (process.argv[2] === "resume")
   process.exit(
@@ -28,7 +39,7 @@ if (process.argv[2] === "resume")
 const path = process.argv[2];
 if (process.argv.length !== 3) {
   console.error(
-    `Usage: node src/main.ts <host configuration>\n   or: ${resumeUsage}`,
+    `Usage: node src/main.ts <host configuration>\n   or: ${resumeUsage}\n   or: ${statusUsage}`,
   );
   process.exit(2);
 }
