@@ -1,8 +1,8 @@
 # Repository factory configuration
 
-Each repository names its conventions in `.factory/config.json`. The factory
+Each repository names its conventions in `.scriptorium/config.json`. The factory
 reads it from the repository's default branch on every pass, alongside
-`.factory/Dockerfile`. Labels, the contract result, the model-label prefix,
+`.scriptorium/Dockerfile`. Labels, the contract result, the model-label prefix,
 the skills and their arguments have no defaults. Optional comment templates default to the factory's own wording; see
 [the ownership decision](../adr/0005-default-the-factorys-own-comment-wording.md)
 and [ADR 0008](../adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md),
@@ -11,6 +11,36 @@ which replaced its per-comment templates with the run and action comments.
 Version 3 maps up to three [run kinds](#run-kinds) to skills; version 2 runs
 one implement skill. Each version is validated against its own contract,
 described below, and every other version is refused.
+
+## Repository layout and schema
+
+Scriptorium v4.0.0 immediately renames the repository input directory to
+`.scriptorium/`. Move `config.json` and `Dockerfile` there before using this
+host release. It reads only those canonical inputs; a legacy directory supplies
+neither file, even when a canonical file is missing or invalid. Missing,
+unreadable or invalid configuration, a missing Dockerfile or an image-build
+failure pauses pickup with a diagnostic naming the canonical input. The
+configured label names, `factory` and `factory-workflow` keep their names.
+
+Both supported versions accept an optional `$schema` string for editor
+validation and documentation discovery. Add this line at the start of either
+configuration example below:
+
+```json
+"$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json"
+```
+
+The public schema is pinned to the shipping release; its description links
+that same tag's configuration and sandbox-image documentation. The host
+accepts a non-empty trimmed string as metadata without fetching it or changing
+the selected version's behavior. Every other field retains its version's
+validation. The schema checks structure; the host additionally checks label
+uniqueness ignoring case and balanced, known comment-template names.
+
+The directory change applies to both configuration versions and is separate
+from their compatibility window. Repo Canon's producer migration follows the
+Scriptorium v4.0.0 release; changing its installers or consumer files is a
+separate change.
 
 ## Compatibility window
 
@@ -37,6 +67,7 @@ malformed values are invalid.
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
   "version": 3,
   "labels": {
     "ready": "state:ready",
@@ -61,6 +92,7 @@ factory profile ships every run kind and label role:
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
   "version": 3,
   "labels": {
     "triage": "state:triage",
@@ -290,6 +322,7 @@ values are invalid.
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
   "version": 2,
   "labels": {
     "ready": "queued",
@@ -464,7 +497,7 @@ appends its unattended execution guidance, including the release-hold and
 factory-hold instructions when configured, after that invocation. A retry uses the current invocation
 followed by the factory's fixed context block: the first attempt's failure and, when
 readable, the end of its log (at most 200 lines and 16 KiB). The branch
-`factory/issue-<n>`, retry context and `.factory/Dockerfile` path are fixed by
+`factory/issue-<n>`, retry context and `.scriptorium/Dockerfile` path are fixed by
 the factory.
 
 ## Comment templates
@@ -609,5 +642,5 @@ no issue writes there. Pause reasons appear in the process log and the
 [host status file](host.md#status-file); a repository pause never adds the
 paused label or posts on an issue.
 
-Agents can edit `.factory/`, and the factory does not guard it. An operator
+Agents can edit `.scriptorium/`, and the factory does not guard it. An operator
 who wants it protected uses CODEOWNERS or branch protection.

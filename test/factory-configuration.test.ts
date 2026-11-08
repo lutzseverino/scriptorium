@@ -34,17 +34,34 @@ test("a repository's factory configuration is read without convention defaults",
   });
 });
 
-test("the configuration this repository uses is accepted", () => {
-  const configured = fileURLToPath(
-    new URL(`../${factoryConfigurationPath}`, import.meta.url),
-  );
-  const configuration = readFactoryConfiguration(configured);
-  assert.equal(configuration.version, 2);
-  assert.deepEqual(configuration.contractResult, {
-    marker: "repo-canon:issue-contract-state",
-    author: "github-actions[bot]",
-  });
+test("the canonical configuration path is .scriptorium/config.json", () => {
+  assert.equal(factoryConfigurationPath, ".scriptorium/config.json");
 });
+
+for (const name of ["valid", "version-3"])
+  test(`${name} accepts optional schema metadata without relaxing its contract`, (t) => {
+    const configuration = readFactoryConfiguration(fixture(name));
+    const path = join(directory(t), "config.json");
+    const $schema =
+      "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json";
+    writeFileSync(path, JSON.stringify({ ...configuration, $schema }));
+    assert.deepEqual(readFactoryConfiguration(path), {
+      ...configuration,
+      $schema,
+    });
+    for (const value of [null, 3, {}, [], "", " schema.json", "schema.json "]) {
+      writeFileSync(path, JSON.stringify({ ...configuration, $schema: value }));
+      assert.throws(() => readFactoryConfiguration(path), /\$schema:/);
+    }
+    writeFileSync(
+      path,
+      JSON.stringify({ ...configuration, $schema, extra: true }),
+    );
+    assert.throws(
+      () => readFactoryConfiguration(path),
+      /extra: is not a factory configuration field/,
+    );
+  });
 
 test("the contract result's marker and author are required, with no default", (t) => {
   const path = join(directory(t), "config.json");

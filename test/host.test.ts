@@ -1176,8 +1176,8 @@ const conventions = {
   arguments: "#{issue}",
 };
 const factoryFiles = {
-  ".factory/config.json": JSON.stringify(conventions),
-  ".factory/Dockerfile": toolchain,
+  ".scriptorium/config.json": JSON.stringify(conventions),
+  ".scriptorium/Dockerfile": toolchain,
   "README.md": "base\n",
   ".github/workflows/old.yml": "old\n",
 };
@@ -1221,7 +1221,7 @@ test("one process launches each repository's ready issues from that repository's
   const widgets = remote(t, factoryFiles);
   const gadgets = remote(t, {
     ...factoryFiles,
-    ".factory/Dockerfile": "FROM ubuntu:24.04\n",
+    ".scriptorium/Dockerfile": "FROM ubuntu:24.04\n",
   });
   const run = host(t, {
     repositories: {
@@ -1596,7 +1596,7 @@ test("the status file lists each repository's state and its held issues", async 
     remotes: {
       "acme/widgets": remote(t, factoryFiles),
       "acme/gadgets": remote(t, {
-        ".factory/config.json": JSON.stringify(conventions),
+        ".scriptorium/config.json": JSON.stringify(conventions),
         "README.md": "no factory\n",
       }),
       "acme/tools": remote(t, factoryFiles),
@@ -1618,11 +1618,11 @@ test("the status file lists each repository's state and its held issues", async 
       {
         repository: "acme/gadgets",
         state: "paused",
-        reason: "it has no .factory/Dockerfile",
+        reason: "it has no .scriptorium/Dockerfile",
         held: [
           {
             issue: 2,
-            reason: "acme/gadgets is paused: it has no .factory/Dockerfile",
+            reason: "acme/gadgets is paused: it has no .scriptorium/Dockerfile",
           },
         ],
       },
@@ -1643,7 +1643,7 @@ test("the status file lists each repository's state and its held issues", async 
   ]);
   assert.ok(
     run.reports.includes(
-      "acme/gadgets is paused: it has no .factory/Dockerfile",
+      "acme/gadgets is paused: it has no .scriptorium/Dockerfile",
     ),
     run.reports.join("\n"),
   );
@@ -2076,12 +2076,13 @@ test("an image that does not build pauses only its repository until it builds", 
   assert.deepEqual(run.status().repositories[0], {
     repository: "acme/widgets",
     state: "paused",
-    reason: "its sandbox image did not build: Error: apt-get exited with 100",
+    reason:
+      "its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100",
     held: [
       {
         issue: 4,
         reason:
-          "acme/widgets is paused: its sandbox image did not build: Error: apt-get exited with 100",
+          "acme/widgets is paused: its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100",
       },
     ],
   });
@@ -2315,8 +2316,8 @@ test("custom skill invocations and retries retain the unattended execution and c
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify({
-          ...JSON.parse(factoryFiles[".factory/config.json"]),
+        ".scriptorium/config.json": JSON.stringify({
+          ...JSON.parse(factoryFiles[".scriptorium/config.json"]),
           skill: "ship",
           arguments: "#{issue}",
         }),
@@ -2719,7 +2720,10 @@ for (const comments of [
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".factory/config.json": JSON.stringify({ ...conventions, comments }),
+          ".scriptorium/config.json": JSON.stringify({
+            ...conventions,
+            comments,
+          }),
         }),
       },
     });
@@ -2969,7 +2973,7 @@ test("the repository's skip label holds fresh attempts without factory label wri
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify(configuration),
+        ".scriptorium/config.json": JSON.stringify(configuration),
       }),
     },
     caps: { "claude-code": 3, codex: 1 },
@@ -3052,7 +3056,7 @@ test("the configured skill, arguments and state labels drive first attempts, ret
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify(configuration),
+        ".scriptorium/config.json": JSON.stringify(configuration),
       }),
     },
     configuration: {
@@ -3138,10 +3142,10 @@ for (const fault of [
     await settled();
     const work = join(dirname(bare), "work");
     if (fault === "invalid configuration")
-      write(work, { ".factory/config.json": "{}" });
+      write(work, { ".scriptorium/config.json": "{}" });
     else if (fault === "invalid comment template")
       write(work, {
-        ".factory/config.json": JSON.stringify({
+        ".scriptorium/config.json": JSON.stringify({
           ...conventions,
           comments: { run: "{unknown}" },
         }),
@@ -3151,8 +3155,8 @@ for (const fault of [
         "rm",
         "--quiet",
         fault === "missing configuration"
-          ? ".factory/config.json"
-          : ".factory/Dockerfile",
+          ? ".scriptorium/config.json"
+          : ".scriptorium/Dockerfile",
       ]);
     git(work, ["commit", "--quiet", "-am", "break factory input"]);
     git(work, ["push", "--quiet", bare, "main"]);
@@ -3180,7 +3184,7 @@ for (const fault of [
     assert.match(
       status.reason,
       fault === "missing Dockerfile"
-        ? /no .factory\/Dockerfile/
+        ? /no .scriptorium\/Dockerfile/
         : /factory configuration.*(?:unreadable|invalid)/,
     );
     assert.ok(
@@ -3213,7 +3217,7 @@ test("a repository without configuration at startup pauses without guessing conv
       "acme/gadgets": [{ number: 3 }],
     },
     remotes: {
-      "acme/widgets": remote(t, { ".factory/Dockerfile": toolchain }),
+      "acme/widgets": remote(t, { ".scriptorium/Dockerfile": toolchain }),
       "acme/gadgets": remote(t, factoryFiles),
     },
   });
@@ -3242,7 +3246,7 @@ test("skill edits on the default branch apply on the next pass, ignoring run bra
   await run.tick();
   const work = join(dirname(bare), "work");
   write(work, {
-    ".factory/config.json": JSON.stringify({
+    ".scriptorium/config.json": JSON.stringify({
       ...conventions,
       skill: "ship",
       arguments: "#{issue}",
@@ -3251,7 +3255,7 @@ test("skill edits on the default branch apply on the next pass, ignoring run bra
   git(work, ["commit", "--quiet", "-am", "new skill"]);
   git(work, ["push", "--quiet", bare, "main"]);
   git(work, ["checkout", "--quiet", "-b", "factory/issue-4"]);
-  write(work, { ".factory/config.json": "{}" });
+  write(work, { ".scriptorium/config.json": "{}" });
   git(work, ["commit", "--quiet", "-am", "invalid run branch config"]);
   git(work, ["push", "--quiet", bare, "factory/issue-4"]);
   run.launched[0].finish();
@@ -3273,7 +3277,7 @@ test("configuration follows a changed remote default branch on the next pass", a
   const work = join(dirname(bare), "work");
   git(work, ["checkout", "--quiet", "-b", "next"]);
   write(work, {
-    ".factory/config.json": JSON.stringify({
+    ".scriptorium/config.json": JSON.stringify({
       ...conventions,
       skill: "ship",
       arguments: "#{issue}",
@@ -3454,7 +3458,7 @@ test("recovered runs retain configured state labels while invalid configuration 
   };
   const bare = remote(t, {
     ...factoryFiles,
-    ".factory/config.json": JSON.stringify(configuration),
+    ".scriptorium/config.json": JSON.stringify(configuration),
   });
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4, labels: ["queued"] }] },
@@ -3463,7 +3467,7 @@ test("recovered runs retain configured state labels while invalid configuration 
   await run.tick();
   run.interrupt();
   const work = join(dirname(bare), "work");
-  write(work, { ".factory/config.json": "{}" });
+  write(work, { ".scriptorium/config.json": "{}" });
   git(work, ["commit", "--quiet", "-am", "invalid configuration"]);
   git(work, ["push", "--quiet", bare, "main"]);
   const restarted = run.restart();
@@ -3487,7 +3491,7 @@ test("settlement after restart uses the last valid comment template while invali
   };
   const bare = remote(t, {
     ...factoryFiles,
-    ".factory/config.json": JSON.stringify(configuration),
+    ".scriptorium/config.json": JSON.stringify(configuration),
   });
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
@@ -3499,7 +3503,7 @@ test("settlement after restart uses the last valid comment template while invali
   await run.drain();
   const work = join(dirname(bare), "work");
   write(work, {
-    ".factory/config.json": JSON.stringify({
+    ".scriptorium/config.json": JSON.stringify({
       ...configuration,
       comments: { close: "{failure}" },
     }),
@@ -4193,7 +4197,7 @@ test("the parent close template controls the whole comment and iterates ticket r
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify({
+        ".scriptorium/config.json": JSON.stringify({
           ...conventions,
           comments: { close: "Completed:{#tickets} [{tickets}]{/tickets}" },
         }),
@@ -4338,7 +4342,7 @@ for (const override of [false, true])
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".factory/config.json": JSON.stringify({
+          ".scriptorium/config.json": JSON.stringify({
             ...conventions,
             comments: override
               ? {
@@ -4430,7 +4434,7 @@ test("a failed claim without a run supplies empty run facts to its template", as
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify({
+        ".scriptorium/config.json": JSON.stringify({
           ...conventions,
           comments: {
             run: "{#implement}{state}{#provider} provider={provider}{/provider}{/implement}|{#merge}{state}: {reason}{#provider} provider={provider}{/provider}{#model} model={model}{/model}{#effort} effort={effort}{/effort}{#attempt} attempt={attempt}{/attempt}{#unpushable} path={unpushable}{/unpushable}{/merge}",
@@ -4564,7 +4568,7 @@ for (const cause of ["usage limit", "pause threshold"] as const)
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".factory/config.json": JSON.stringify({
+          ".scriptorium/config.json": JSON.stringify({
             ...conventions,
             comments: {
               run: "{#implement}{provider}/{model}@{effort} #{attempt}: {state}{#reason} {reason}{/reason}{#reset} reset={reset}{/reset}{/implement}",
@@ -5598,7 +5602,10 @@ for (const configured of [false, true])
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".factory/config.json": JSON.stringify({ ...conventions, labels }),
+          ".scriptorium/config.json": JSON.stringify({
+            ...conventions,
+            labels,
+          }),
         }),
       },
     });
@@ -6163,12 +6170,12 @@ for (const orphan of [true, false])
     run.usage["claude-code"] = 85;
     // A missing Dockerfile pauses the repository independently of provider usage.
     const work = join(dirname(bare), "work");
-    git(work, ["rm", "--quiet", ".factory/Dockerfile"]);
+    git(work, ["rm", "--quiet", ".scriptorium/Dockerfile"]);
     git(work, ["commit", "--quiet", "-m", "pause repository"]);
     git(work, ["push", "--quiet", bare, "main"]);
     await restarted.tick();
     assert.equal(run.launched.length, orphan ? 0 : 1);
-    write(work, { ".factory/Dockerfile": toolchain });
+    write(work, { ".scriptorium/Dockerfile": toolchain });
     git(work, ["add", "."]);
     git(work, ["commit", "--quiet", "-m", "resume repository"]);
     git(work, ["push", "--quiet", bare, "main"]);
@@ -6311,7 +6318,7 @@ for (const orphan of [false, true])
   test(`the configured skip label reserves stale PR delivery for the orchestrating agent, orphan: ${orphan}`, async (t) => {
     const bare = remote(t, {
       ...factoryFiles,
-      ".factory/config.json": JSON.stringify({
+      ".scriptorium/config.json": JSON.stringify({
         ...conventions,
         labels: { ...conventions.labels, skip: "owner:delivery" },
       }),
@@ -6531,7 +6538,7 @@ test("removing the configured failed label retries only once the other pickup ga
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify({ ...conventions, labels }),
+        ".scriptorium/config.json": JSON.stringify({ ...conventions, labels }),
       }),
     },
   });
@@ -6790,7 +6797,7 @@ test("open blockers including a parent's blocker, provider holds, caps and facto
     remotes: {
       [name]: remote(t, {
         ...factoryFiles,
-        ".factory/config.json": JSON.stringify({
+        ".scriptorium/config.json": JSON.stringify({
           ...conventions,
           labels: { ...conventions.labels, skip: "factory:skip" },
         }),
@@ -6879,7 +6886,7 @@ test("concurrent readiness, parent, model and configuration holds resolve only w
 
 const releaseHoldFiles = {
   ...factoryFiles,
-  ".factory/config.json": JSON.stringify({
+  ".scriptorium/config.json": JSON.stringify({
     ...conventions,
     labels: { ...conventions.labels, releaseHold: "factory:release-hold" },
   }),
@@ -7076,7 +7083,7 @@ for (const scenario of [
       case "repository pause": {
         const work = join(dirname(bare), "work");
         write(work, {
-          ".factory/config.json":
+          ".scriptorium/config.json":
             scenario === "repository pause"
               ? "{}"
               : JSON.stringify({
@@ -7271,7 +7278,7 @@ test("closed historical held PRs do not keep the surviving release PR's hold com
 
 const factoryHoldFiles = {
   ...factoryFiles,
-  ".factory/config.json": JSON.stringify({
+  ".scriptorium/config.json": JSON.stringify({
     ...conventions,
     labels: { ...conventions.labels, hold: "factory:hold" },
   }),
@@ -7622,7 +7629,7 @@ const kindsConventions = {
 };
 const kindsFiles = {
   ...factoryFiles,
-  ".factory/config.json": JSON.stringify(kindsConventions),
+  ".scriptorium/config.json": JSON.stringify(kindsConventions),
 };
 
 for (const configuration of [conventions, kindsConventions])
@@ -7654,7 +7661,7 @@ for (const configuration of [conventions, kindsConventions])
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".factory/config.json": JSON.stringify({
+          ".scriptorium/config.json": JSON.stringify({
             ...configuration,
             contractResult: identity,
           }),
@@ -7718,7 +7725,7 @@ for (const [name, configuration, problem] of [
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".factory/config.json": JSON.stringify(configuration),
+          ".scriptorium/config.json": JSON.stringify(configuration),
         }),
       },
     });
@@ -7798,7 +7805,7 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   });
   const legacyRemote = remote(t, {
     ...factoryFiles,
-    ".factory/config.json": JSON.stringify(legacy),
+    ".scriptorium/config.json": JSON.stringify(legacy),
     ".github/factory-model-policy.json": policy,
   });
   const currentRemote = remote(t, {
@@ -9078,3 +9085,82 @@ test("settled legacy records retain PR ownership without blocking startup", asyn
     ["/implement #4"],
   );
 });
+
+for (const metadata of [false, true])
+  for (const configuration of [conventions, kindsConventions])
+    test(`canonical v${configuration.version} pickup with schema=${metadata} ignores conflicting legacy inputs`, async (t) => {
+      const run = host(t, {
+        repositories: {
+          "acme/widgets": [{ number: 4, labels: [configuration.labels.ready] }],
+        },
+        remotes: {
+          "acme/widgets": remote(t, {
+            ...factoryFiles,
+            ".scriptorium/config.json": JSON.stringify({
+              ...configuration,
+              ...(metadata
+                ? {
+                    $schema:
+                      "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
+                  }
+                : {}),
+            }),
+            ".factory/config.json": "invalid legacy configuration",
+            ".factory/Dockerfile": "invalid legacy Dockerfile",
+          }),
+        },
+      });
+      await run.tick();
+      assert.equal(run.launched.length, 1, run.reports.join("\n"));
+      assert.equal(invocation(run.launched[0].options.prompt), "/implement #4");
+      assert.deepEqual(run.builds, [toolchain]);
+    });
+
+for (const fault of [
+  "legacy only",
+  "legacy Dockerfile only",
+  "unreadable configuration",
+  "invalid JSON",
+  "invalid configuration",
+  "image build",
+])
+  test(`${fault} pauses canonical pickup even with legacy inputs`, async (t) => {
+    const files: Record<string, string> = {
+      ".factory/config.json": JSON.stringify(conventions),
+      ".factory/Dockerfile": toolchain,
+      "README.md": "repository\n",
+    };
+    if (fault !== "legacy only")
+      files[".scriptorium/config.json"] =
+        fault === "invalid JSON"
+          ? "{"
+          : fault === "invalid configuration"
+            ? "{}"
+            : JSON.stringify(conventions);
+    if (!["legacy only", "legacy Dockerfile only"].includes(fault))
+      files[".scriptorium/Dockerfile"] = toolchain;
+    if (fault === "unreadable configuration") {
+      delete files[".scriptorium/config.json"];
+      files[".scriptorium/config.json/unreadable"] = "directory";
+    }
+    const bare = remote(t, files);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+      imageFailures:
+        fault === "image build" ? [new Error("build refused")] : [],
+    });
+    await run.tick();
+    const [status] = run.status().repositories;
+    assert.equal(status.state, "paused");
+    assert.match(
+      status.reason,
+      fault === "legacy Dockerfile only"
+        ? /no \.scriptorium\/Dockerfile/
+        : fault === "image build"
+          ? /\.scriptorium\/Dockerfile.*build refused/
+          : /\.scriptorium\/config\.json.*(?:unreadable|not JSON|invalid)/s,
+    );
+    assert.equal(run.launched.length, 0);
+    assert.deepEqual(run.builds, fault === "image build" ? [toolchain] : []);
+  });
