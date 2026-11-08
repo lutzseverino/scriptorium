@@ -28,19 +28,21 @@ type Role = {
   stop?: true;
   // A gate stops review at ready-to-merge until the owner removes it.
   gate?: true;
-  // Excludes the listed continuations; across roles, the lowest precedence
-  // gives the reason.
-  excludes?: {
-    precedence: number;
-    from: Continuing[];
-    reason(label: string, ready: string): string;
-  };
+  // Each exclusion of the listed continuations; across roles, the lowest
+  // precedence gives the reason.
+  excludes?: Exclusion[];
   // The transitions that add it and that remove it.
   adds?: Transition[];
   removes?: Transition[];
 };
 
-const stopped: Role["excludes"] = {
+type Exclusion = {
+  precedence: number;
+  from: Continuing[];
+  reason(label: string, ready: string): string;
+};
+
+const stopped: Exclusion = {
   precedence: 2,
   from: ["fresh", "retry", "merge", "resume"],
   reason: (label, ready) =>
@@ -52,11 +54,11 @@ export const labelRoles = {
     versions: { 3: "optional" },
     applied: true,
     stop: true,
-    excludes: stopped,
+    excludes: [stopped],
   },
-  reporter: { versions: { 3: "optional" }, stop: true, excludes: stopped },
-  grill: { versions: { 3: "optional" }, stop: true, excludes: stopped },
-  owner: { versions: { 3: "optional" }, stop: true, excludes: stopped },
+  reporter: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
+  grill: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
+  owner: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
   ready: {
     versions: { 2: "required", 3: "required" },
     applied: true,
@@ -67,34 +69,46 @@ export const labelRoles = {
   running: {
     versions: { 2: "required", 3: "required" },
     color: "0052cc",
-    excludes: {
-      precedence: 3,
-      from: ["triage", "fresh"],
-      reason: () => "claimed by a running factory run",
-    },
+    excludes: [
+      {
+        precedence: 3,
+        from: ["triage", "fresh"],
+        reason: () => "claimed by a running factory run",
+      },
+    ],
     adds: ["claim", "unpause"],
     removes: ["release", "fail", "pause", "closed"],
   },
   failed: {
     versions: { 2: "required", 3: "required" },
     color: "b60205",
-    excludes: {
-      precedence: 5,
-      from: ["triage", "fresh", "retry", "merge"],
-      reason: (label) => `labelled ${label}; remove the label to run it again`,
-    },
+    excludes: [
+      {
+        precedence: 5,
+        from: ["triage", "fresh", "retry"],
+        reason: (label) =>
+          `labelled ${label}; remove the label to run it again`,
+      },
+      {
+        precedence: 6,
+        from: ["merge"],
+        reason: (label) => `labelled ${label}`,
+      },
+    ],
     adds: ["fail"],
     removes: ["complete"],
   },
   paused: {
     versions: { 2: "required", 3: "required" },
     color: "c5def5",
-    excludes: {
-      precedence: 4,
-      from: ["triage", "fresh"],
-      reason: (label) =>
-        `labelled ${label}; the factory resumes its run by itself`,
-    },
+    excludes: [
+      {
+        precedence: 4,
+        from: ["triage", "fresh"],
+        reason: (label) =>
+          `labelled ${label}; the factory resumes its run by itself`,
+      },
+    ],
     adds: ["pause"],
     removes: ["release", "fail", "unpause", "closed"],
   },
@@ -102,20 +116,30 @@ export const labelRoles = {
     versions: { 2: "required" },
     color: "fbca04",
     stop: true,
-    excludes: {
-      ...stopped,
-      reason: (label) =>
-        `labelled ${label}; answer the question and remove the label to run it again`,
-    },
+    excludes: [
+      {
+        ...stopped,
+        reason: (label) =>
+          `labelled ${label}; answer the question and remove the label to run it again`,
+      },
+    ],
     removes: ["closed"],
   },
   skip: {
     versions: { 2: "optional", 3: "optional" },
-    excludes: {
-      precedence: 1,
-      from: ["fresh", "merge"],
-      reason: (label) => `labelled \`${label}\`; delivered outside the factory`,
-    },
+    excludes: [
+      {
+        precedence: 1,
+        from: ["fresh"],
+        reason: (label) =>
+          `labelled \`${label}\`; delivered outside the factory`,
+      },
+      {
+        precedence: 7,
+        from: ["merge"],
+        reason: (label) => `labelled ${label}; delivered outside the factory`,
+      },
+    ],
   },
   releaseHold: { versions: { 2: "optional", 3: "optional" } },
   hold: { versions: { 2: "optional", 3: "optional" } },
@@ -189,12 +213,12 @@ export function exclusionReason(
   continuing: Continuing,
 ): string | null {
   const excluded = roles
-    .flatMap(([name, { excludes }]) => {
+    .flatMap(([name, { excludes = [] }]) => {
       const label = labels[name];
-      return excludes?.from.includes(continuing) &&
-        label !== undefined &&
-        issueLabels.includes(label)
-        ? [{ ...excludes, label }]
+      return label !== undefined && issueLabels.includes(label)
+        ? excludes
+            .filter(({ from }) => from.includes(continuing))
+            .map((exclusion) => ({ ...exclusion, label }))
         : [];
     })
     .sort((left, right) => left.precedence - right.precedence)[0];

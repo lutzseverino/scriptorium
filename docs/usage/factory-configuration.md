@@ -177,8 +177,8 @@ above, on every pass.
 
 ### Triage readiness
 
-The factory accepts readiness only from a person, except readiness the
-factory's own triage run applied. That readiness counts when its latest
+The factory accepts readiness only from a person, except, with
+`runKinds.triage` on, readiness the factory's own triage run applied. That readiness counts when its latest
 application is by `triageResult.author`, and the validator's current result
 approves it with, as its contract source, a comment by that account that names
 the triage run on exactly one `triageResult.marker` line. A result by another

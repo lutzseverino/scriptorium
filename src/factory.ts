@@ -24,7 +24,11 @@ import {
 } from "./repository-holds.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
-import type { MergeRelaunch, InputResume } from "./platform.ts";
+import {
+  pullRequestIdentity,
+  type MergeRelaunch,
+  type InputResume,
+} from "./platform.ts";
 import {
   closes,
   readinessExclusion,
@@ -420,7 +424,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       configured(
         labels,
         (role) =>
-          role.excludes?.from.includes("fresh") &&
+          role.excludes?.some(({ from }) => from.includes("fresh")) &&
           !(reconcile.pending && role.removes?.includes("release")),
       ).some((label) => issue.labels.includes(label)) ||
       !decisions.some(
@@ -514,7 +518,7 @@ type SettlingRun = Pick<
 type Retry = { run: SettlingRun; failure: string };
 
 // The hand-backs an issue's reviews may make before its rounds fail.
-const handBackLimit = 2;
+export const handBackLimit = 2;
 
 // A running run over the time limit is stopped, and so is one whose provider's
 // usage reached the pause threshold, which pauses it. An ended run releases its
@@ -800,12 +804,7 @@ function continuation(
       : undefined;
   const open =
     ended?.pullRequest === "open" ? ended.openPullRequest : undefined;
-  const pullRequest = open && {
-    number: open.number,
-    headCommit: open.headCommit,
-    baseBranch: open.baseBranch,
-    createdAt: open.createdAt,
-  };
+  const pullRequest = open && pullRequestIdentity(open);
   const handBacks = previous?.handBacks ?? 0;
   const handoff: ContinuationState | undefined =
     reviews && previous && pullRequest && !isStopped(issue.labels, labels)

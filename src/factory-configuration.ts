@@ -44,7 +44,10 @@ export type FactoryConfiguration =
 export type PlatformConventions = Pick<
   FactoryConfiguration,
   "labels" | "contractResult" | "comments"
-> & { triageResult?: { marker: string; author: string } };
+> & {
+  runKinds?: { triage?: RunKind };
+  triageResult?: { marker: string; author: string };
+};
 
 export const factoryConfigurationPath = ".factory/config.json";
 

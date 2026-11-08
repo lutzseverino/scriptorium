@@ -1599,6 +1599,7 @@ async function triagedIssue(
   {
     applier = factoryAccount,
     triage = triageResult as typeof triageResult | null,
+    triaging = true,
     events = [] as unknown[],
   } = {},
 ) {
@@ -1650,6 +1651,9 @@ async function triagedIssue(
     labels,
     contractResult,
     ...(triage && { triageResult: triage }),
+    ...(triaging && {
+      runKinds: { triage: { skill: "triage", arguments: "#{issue}" } },
+    }),
   }).readIssues();
   return { issue, hold: readinessExclusion(issue, [issue], policy) };
 }
@@ -1666,6 +1670,7 @@ test("false or stale triage evidence grants no readiness", async () => {
   const marked = 'Brief.\n\n<!-- scriptorium:run {"run":"triage-7"} -->';
   for (const [name, brief, options] of [
     ["no triage result configured", triageBrief(marked), { triage: null }],
+    ["triage turned off", triageBrief(marked), { triaging: false }],
     ["a brief by another account", triageBrief(marked, "owner"), {}],
     ["another bot's readiness", triageBrief(marked), { applier: "other[bot]" }],
     [

@@ -157,7 +157,9 @@ export function triageBacked(
   facts: ContractFacts,
   configuration: PlatformConventions,
 ): boolean {
-  if (!configuration.triageResult) return false;
+  // Without triage, readiness comes only from a person.
+  if (!configuration.triageResult || !configuration.runKinds?.triage)
+    return false;
   const { marker, author } = configuration.triageResult;
   const by = (login: string | undefined) =>
     login?.toLowerCase() === author.toLowerCase();

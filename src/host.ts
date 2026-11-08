@@ -45,6 +45,7 @@ import {
 } from "./model-policy.ts";
 import {
   decideFactory,
+  handBackLimit,
   type Claim,
   type Decision,
   type Issue,
@@ -60,6 +61,7 @@ import {
   observeHolds,
 } from "./repository-holds.ts";
 import {
+  pullRequestIdentity,
   relationshipSections,
   repositoryPlatform,
   runBranch,
@@ -1257,12 +1259,7 @@ export function createHost(
               : undefined;
           const review = ready
             ? {
-                target: {
-                  number: ready.number,
-                  headCommit: ready.headCommit,
-                  baseBranch: ready.baseBranch,
-                  createdAt: ready.createdAt,
-                },
+                target: pullRequestIdentity(ready),
                 ...(previous!.implementedBy !== undefined && {
                   implementedBy: previous!.implementedBy,
                 }),
@@ -1543,7 +1540,7 @@ export function prompt(
       : []),
     ...(handBack
       ? [
-          `Review hand-back: the latest review of PR #${handBack.target.number} handed the work back (hand-back ${handBack.handBacks} of at most 2). Continue this same PR from its branch and that review's findings; never open a replacement PR.`,
+          `Review hand-back: the latest review of PR #${handBack.target.number} handed the work back (hand-back ${handBack.handBacks} of at most ${handBackLimit}). Continue this same PR from its branch and that review's findings; never open a replacement PR.`,
         ]
       : []),
     ...(inputResume

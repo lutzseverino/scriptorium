@@ -185,6 +185,16 @@ test("labels exclude their continuations in one precedence", () => {
   for (const continuing of ["retry", "merge", "resume"] as const)
     assert.equal(reason(["busy", "resting"], continuing), null);
   assert.equal(reason(["manual"], "retry"), null);
+  // A merge relaunch keeps version 2's own wording and precedence.
+  assert.equal(
+    reason(["manual", "stuck", "grilling"], "merge"),
+    "labelled grilling; answer it and return the issue to go to run it again",
+  );
+  assert.equal(reason(["manual", "stuck"], "merge"), "labelled stuck");
+  assert.equal(
+    reason(["manual"], "merge"),
+    "labelled manual; delivered outside the factory",
+  );
   assert.equal(reason(["owner-gate", "go"], "fresh"), null);
   assert.equal(
     exclusionReason(["question"], v2, "resume"),
