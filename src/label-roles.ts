@@ -28,6 +28,8 @@ type Role = {
   stop?: true;
   // A gate stops review at ready-to-merge until the owner removes it.
   gate?: true;
+  // Pickup order: lower ranks go first; an absent label counts as normal.
+  priority?: number;
   // Each exclusion of the listed continuations; across roles, the lowest
   // precedence gives the reason.
   excludes?: Exclusion[];
@@ -143,9 +145,9 @@ export const labelRoles = {
   },
   releaseHold: { versions: { 2: "optional", 3: "optional" } },
   hold: { versions: { 2: "optional", 3: "optional" } },
-  priorityHigh: { versions: { 3: "optional" } },
-  priorityNormal: { versions: { 3: "optional" } },
-  priorityLow: { versions: { 3: "optional" } },
+  priorityHigh: { versions: { 3: "optional" }, priority: -1 },
+  priorityNormal: { versions: { 3: "optional" }, priority: 0 },
+  priorityLow: { versions: { 3: "optional" }, priority: 1 },
 } satisfies Record<string, Role>;
 
 export type RoleName = keyof typeof labelRoles;
@@ -228,3 +230,15 @@ export function exclusionReason(
 // Whether the issue's labels hold it in a stop, waiting on an answer.
 export const isStopped = (issueLabels: string[], labels: Labels) =>
   stopLabels(labels).some((label) => issueLabels.includes(label));
+
+// The issue's configured priority, or normal when it has no priority label.
+export function priority(issueLabels: string[], labels: Labels): number {
+  return (
+    roles.find(
+      ([name, role]) =>
+        role.priority !== undefined &&
+        labels[name] !== undefined &&
+        issueLabels.includes(labels[name]),
+    )?.[1].priority ?? 0
+  );
+}

@@ -30,6 +30,7 @@ const consumers = [
   ["host.ts", "claimLabels", "async function readClaims"],
   ["factory.ts", "exclusionReason", "function continuationExclusions"],
   ["factory.ts", "exclusionReason", "function exclusion("],
+  ["factory.ts", "priority", "function priorityFirst"],
   ["contract-result.ts", "configured", "function contractResultHold"],
 ] as const;
 

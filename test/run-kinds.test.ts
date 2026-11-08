@@ -166,6 +166,8 @@ function decide({
   policy,
   settings = {},
   details = {},
+  repositories,
+  usage = {},
 }: {
   issues?: Issue[];
   runs?: Run[];
@@ -174,10 +176,12 @@ function decide({
   policy?: ModelPolicy;
   settings?: Partial<Settings>;
   details?: Partial<Repository>;
+  repositories?: Repository[];
+  usage?: Snapshot["usage"];
 } = {}): Decision[] {
   const snapshot: Snapshot = {
     now,
-    repositories: [
+    repositories: repositories ?? [
       {
         name: widgets,
         configuration: configuration(kinds),
@@ -190,7 +194,7 @@ function decide({
       },
     ],
     runs,
-    usage: {},
+    usage,
     holds: {},
     owners: {},
     settings: {
@@ -220,6 +224,138 @@ function skipOf(decisions: Decision[]) {
 
 // A version 3 issue's labels while a run holds it.
 const claimed = [labels.ready, labels.running];
+
+// Custom names prove pickup reads roles from each repository's configuration.
+const priorityLabels = {
+  ...labels,
+  priorityHigh: "urgent",
+  priorityNormal: "ordinary",
+  priorityLow: "later",
+};
+const priorityConfiguration: FactoryConfiguration = {
+  ...configuration(),
+  labels: priorityLabels,
+};
+const launchedIssues = (decisions: Decision[]) =>
+  decisions
+    .filter((decision) => decision.kind === "launch")
+    .map(({ repository, issue }) => `${repository}#${issue}`);
+
+test("pickup orders high, normal and unlabelled, then low before issue age", () => {
+  assert.deepEqual(
+    launchedIssues(
+      decide({
+        issues: [
+          issue(1, [labels.ready, "later"]),
+          issue(2),
+          issue(3, [labels.ready, "ordinary"]),
+          issue(4, [labels.ready, "urgent"]),
+        ],
+        details: { configuration: priorityConfiguration },
+        settings: { caps: { "provider-a": 4 } },
+      }),
+    ),
+    [widgets + "#4", widgets + "#2", widgets + "#3", widgets + "#1"],
+  );
+});
+
+test("priority takes the available cap slot without bypassing issue gates", () => {
+  const decisions = decide({
+    issues: [
+      issue(1, [labels.ready, "later"]),
+      issue(2),
+      issue(3, [labels.ready, "urgent"], {
+        blockedBy: [{ number: 1, state: "open" }],
+      }),
+      issue(4, ["urgent"]),
+      issue(5, [labels.ready, "urgent"], { ready: null }),
+      issue(6, [labels.ready, labels.skip, "urgent"]),
+      issue(7, [labels.ready, "urgent"]),
+    ],
+    details: { configuration: priorityConfiguration },
+    settings: { caps: { "provider-a": 1 } },
+  });
+  assert.deepEqual(launchedIssues(decisions), [widgets + "#7"]);
+});
+
+test("priority does not bypass repository or provider holds", () => {
+  for (const details of [
+    { paused: "repository configuration is unreadable" },
+    { factoryHold: [42] },
+  ]) {
+    assert.deepEqual(
+      launchedIssues(
+        decide({
+          issues: [issue(4, [labels.ready, "urgent"])],
+          details: { configuration: priorityConfiguration, ...details },
+        }),
+      ),
+      [],
+    );
+  }
+  assert.deepEqual(
+    launchedIssues(
+      decide({
+        issues: [issue(4, [labels.ready, "urgent"])],
+        details: { configuration: priorityConfiguration },
+        usage: { "provider-a": { used: 80, at: now } },
+      }),
+    ),
+    [],
+  );
+});
+
+test("priority is configured per repository and preserves age, repository and number ties", () => {
+  const base: Repository = {
+    name: widgets,
+    configuration: priorityConfiguration,
+    authorization: { authorizedRoles: ["admin"], neverAuthorize: [] },
+    paused: null,
+    issues: [],
+    claims: [],
+  };
+  const sameAge = { createdAt: "2026-10-01T00:00:00Z" };
+  assert.deepEqual(
+    launchedIssues(
+      decide({
+        repositories: [
+          {
+            ...base,
+            issues: [
+              issue(2, [labels.ready, "urgent"], sameAge),
+              issue(1, [labels.ready, "urgent"], sameAge),
+              issue(3, [labels.ready, "urgent"], {
+                createdAt: "2026-09-30T00:00:00Z",
+              }),
+              issue(4),
+            ],
+          },
+          {
+            ...base,
+            name: "acme/gadgets",
+            configuration: {
+              ...configuration(),
+              labels: { ...labels, priorityHigh: "important" },
+            },
+            issues: [
+              issue(5, [labels.ready, "important"], sameAge),
+              issue(6, [labels.ready, "urgent"], sameAge),
+            ],
+          },
+        ],
+        settings: { caps: { "provider-a": 6 } },
+      }),
+    ),
+    [
+      "acme/widgets#3",
+      "acme/gadgets#5",
+      "acme/widgets#1",
+      "acme/widgets#2",
+      "acme/gadgets#6",
+      "acme/widgets#4",
+    ],
+  );
+});
 
 test("a person's triage label starts a claimed triage run on the host's triage default", () => {
   assert.deepEqual(

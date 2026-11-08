@@ -12,6 +12,7 @@ import {
   exclusionReason,
   gateLabels,
   isStopped,
+  priority,
   stopLabels,
   type Continuing,
 } from "./label-roles.ts";
@@ -372,7 +373,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       ),
     ),
   );
-  for (const next of oldestFirst(continuations)) {
+  for (const next of priorityFirst(continuations)) {
     const { repository, issue } = next;
     const at = { repository: repository.name, issue: issue.number };
     if (closing.has(key(repository.name, issue.number))) {
@@ -1480,13 +1481,15 @@ function labelModel(
   return null;
 }
 
-// One queue across every repository: oldest issue first, then by repository
-// and number.
-function oldestFirst<T extends { repository: Repository; issue: Issue }>(
+// One queue across every repository: priority first, then oldest issue,
+// repository and number. Admission still enforces every gate.
+function priorityFirst<T extends { repository: Repository; issue: Issue }>(
   continuations: T[],
 ): T[] {
   return [...continuations].sort(
     (left, right) =>
+      priority(left.issue.labels, left.repository.configuration.labels) -
+        priority(right.issue.labels, right.repository.configuration.labels) ||
       Date.parse(left.issue.createdAt) - Date.parse(right.issue.createdAt) ||
       (left.repository.name < right.repository.name
         ? -1
