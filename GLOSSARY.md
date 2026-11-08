@@ -143,6 +143,7 @@ daemon's own builder and have no build cache pruned.
 _Avoid_: Build cache, default builder
 
 **Run outcome**:
-How a factory run ended, read from the hosting platform and the run's branch:
-done, awaiting merge, stopped, or failed.
+How a factory run ended, read from its run result first and otherwise from
+the hosting platform and the run's branch: done, awaiting merge, stopped, or
+failed.
 _Avoid_: Result, status

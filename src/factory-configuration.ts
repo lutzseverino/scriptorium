@@ -6,11 +6,13 @@ import { versionRoles, type Labels } from "./label-roles.ts";
 export const runKindNames = ["triage", "implement", "review"] as const;
 export type RunKindName = (typeof runKindNames)[number];
 
-// A run kind's skill and arguments; review may ask for a different provider
-// than the implement attempt that produced its pull request.
+// A run kind's skill and arguments, and the label families its run results
+// may request; review may ask for a different provider than the implement
+// attempt that produced its pull request.
 export type RunKind = {
   skill: string;
   arguments: string;
+  resultLabels?: string[];
   differentProvider?: boolean;
 };
 
@@ -25,6 +27,10 @@ type Common = {
     failure?: string;
     close?: string;
     awaitingMerge?: string;
+    // The disclaimers that start the frame of a run result, and of a triage
+    // run's result.
+    disclaimer?: string;
+    triageDisclaimer?: string;
   };
 };
 
@@ -201,14 +207,29 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
       for (const name of runKindNames) {
         if (!kinds || !Object.hasOwn(kinds, name)) continue;
         const path = `runKinds.${name}`;
-        const kind = object(
-          kinds[name],
-          ["skill", "arguments"],
-          `${path}.`,
-          name === "review" ? ["differentProvider"] : [],
-        );
+        const kind = object(kinds[name], ["skill", "arguments"], `${path}.`, [
+          "resultLabels",
+          ...(name === "review" ? ["differentProvider"] : []),
+        ]);
         if (!kind) continue;
         if (Object.hasOwn(kind, "skill")) text(kind.skill, `${path}.skill`);
+        if (Object.hasOwn(kind, "resultLabels")) {
+          const families = kind.resultLabels;
+          if (!Array.isArray(families))
+            problems.push(`${path}.resultLabels: is not an array`);
+          else {
+            families.forEach((family, index) =>
+              text(family, `${path}.resultLabels[${index}]`),
+            );
+            if (
+              new Set(families.map((family) => `${family}`.toLowerCase()))
+                .size !== families.length
+            )
+              problems.push(
+                `${path}.resultLabels: repeats a family, ignoring case`,
+              );
+          }
+        }
         if (Object.hasOwn(kind, "arguments"))
           if (typeof kind.arguments !== "string")
             problems.push(`${path}.arguments: is not a string`);
@@ -239,7 +260,12 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
         "failure",
         "close",
         "awaitingMerge",
+        "disclaimer",
+        "triageDisclaimer",
       ]);
+      for (const name of ["disclaimer", "triageDisclaimer"])
+        if (comments && Object.hasOwn(comments, name))
+          text(comments[name], `comments.${name}`);
       if (comments)
         for (const name of [
           "pause",

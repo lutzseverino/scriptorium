@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { Git } from "../src/clone.ts";
 import type {
@@ -166,7 +168,7 @@ test("an ended run and an orphaned claim settle through one table, in order", ()
   // records no run kind to hand it to review.
   assert.deepEqual(
     settle(claim({ pullRequest: "open", openPullRequest: pr })),
-    [{ kind: "keep", ...at }],
+    [{ kind: "keep", ...at, reason: "no factory run holds its claim" }],
   );
   assert.deepEqual(
     settle(run({ pullRequest: "open", openPullRequest: pr })),
@@ -353,4 +355,109 @@ test("an ending reads the platform and its branch once, accumulating owned PRs",
     { pullRequest: "none" },
   );
   assert.deepEqual(closed.calls, ["observe 4 undefined undefined"]);
+});
+
+test("only the run-ending module assembles an ending or settles one", () => {
+  const source = join(import.meta.dirname, "../src");
+  assert.equal(existsSync(join(source, "run-outcome.ts")), false);
+  assert.doesNotMatch(
+    readFileSync(join(source, "platform.ts"), "utf8"),
+    /pullRequestState/,
+  );
+  for (const file of readdirSync(source).filter(
+    (file) => file.endsWith(".ts") && file !== "run-ending.ts",
+  )) {
+    const text = readFileSync(join(source, file), "utf8");
+    // Endings are observed and settled here alone: no other module reads a
+    // merge candidate or unpushable changes, or turns a PR observation's
+    // state into an ending's facts.
+    assert.doesNotMatch(
+      text,
+      /await unpushedChanges\(|readMergeCandidate|observation\.state|runOutcome/,
+      file,
+    );
+  }
+});
+
+test("a run's result comes first, and its platform and branch facts are the fallback", () => {
+  const open = { pullRequest: "open" as const };
+  const invalid = { invalid: "its run result is not JSON" };
+  const log = "/srv/factory/issue-4-attempt-1.log";
+  // A normally exited run without a valid result fails with the reason, open
+  // PR or not, and retries as any first implement failure does.
+  const exited = run(open, { result: invalid });
+  assert.deepEqual(settle(exited), {
+    run: exited.run,
+    failure: "its run result is not JSON",
+  });
+  // An orphaned or timed-out run keeps its evidence-based recovery.
+  assert.deepEqual(
+    settle(run({ ...open, orphaned: true }, { result: invalid })),
+    [{ kind: "keep", ...at, reason: "no factory run holds its claim" }],
+  );
+  assert.deepEqual(
+    settle(run({ ...open, timedOut: true }, { result: invalid })),
+    [
+      {
+        kind: "keep",
+        ...at,
+        reason: "the run exceeded the time limit of 240 minutes",
+      },
+    ],
+  );
+  // A failed result fails with its own reason; a stop releases the claim
+  // even with its PR open; a closed issue is done whatever the result said.
+  const failed = run(open, {
+    result: { outcome: "failed", body: "x", reason: "no database" },
+  });
+  assert.deepEqual(settle(failed), { run: failed.run, failure: "no database" });
+  assert.deepEqual(
+    settle(
+      run(
+        { ...open, openPullRequest: pr },
+        {
+          result: { outcome: "stop", state: labels.owner, body: "?" },
+        },
+      ),
+    ),
+    [{ kind: "release", ...at }],
+  );
+  assert.deepEqual(settle(run({}, { result: invalid }), repository([])), [
+    { kind: "release", ...at },
+  ]);
+  // Done leaves delivery to the facts, carrying the result's reason.
+  assert.deepEqual(
+    settle(
+      run(open, {
+        result: { outcome: "done", body: "x", reason: "checks still ran" },
+      }),
+      repository(undefined, false),
+    ),
+    [{ kind: "keep", ...at, reason: "checks still ran" }],
+  );
+  const delivered = run({}, { result: { outcome: "done", body: "x" } });
+  assert.deepEqual(settle(delivered), {
+    run: delivered.run,
+    failure: "the run ended without an open pull request",
+  });
+  // A triage result decides its run, whatever labels remain; without one,
+  // the triage state still does.
+  const still = repository([issue([labels.triage, labels.running])]);
+  assert.deepEqual(
+    settle(
+      run(
+        {},
+        {
+          runKind: "triage",
+          result: { outcome: "done", state: labels.ready, body: "Brief." },
+        },
+      ),
+      still,
+    ),
+    [{ kind: "release", ...at }],
+  );
+  assert.deepEqual(
+    settle(run({}, { runKind: "triage", result: invalid }), still),
+    [{ kind: "fail", ...at, failure: "its run result is not JSON", log }],
+  );
 });

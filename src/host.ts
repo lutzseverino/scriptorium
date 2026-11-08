@@ -85,6 +85,13 @@ import {
   observeEnding,
   type EndingReads,
 } from "./run-ending.ts";
+import {
+  readRunResult,
+  resultFile,
+  resultGuidance,
+  resultPost,
+  sandboxResultDirectory,
+} from "./run-result.ts";
 import { createOwner } from "./owner.ts";
 import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
@@ -138,6 +145,8 @@ type HostRun = Run & {
   // Successful awaiting-merge notice for this attempt, independent of the
   // ending observation refreshed on each pass and on startup.
   awaitingMergeNotified?: true;
+  // Its run result's comment and labels are on the issue.
+  resultPosted?: true;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
   launchResult?: LaunchResult;
@@ -510,6 +519,33 @@ export function createHost(
           ];
           record(run);
           continue;
+        }
+        // The result's comment and labels land before its ending is
+        // observed, so the ending reads the state it asked for.
+        if (
+          issue &&
+          run.result &&
+          !("invalid" in run.result) &&
+          !run.resultPosted
+        ) {
+          const post = resultPost(
+            run.result,
+            {
+              ...run,
+              id: run.provenance?.id ?? run.startedAt,
+              kind: run.runKind ?? "implement",
+            },
+            run.configuration,
+          );
+          await platform.postResult(run.issue, post);
+          issue.labels = [
+            ...new Set([
+              ...issue.labels.filter((label) => !post.remove.includes(label)),
+              ...post.add,
+            ]),
+          ];
+          run.resultPosted = true;
+          record(run);
         }
         const ending = await observeEnding(reads, issue, {
           ...run,
@@ -955,6 +991,7 @@ export function createHost(
     let github, follower;
     try {
       await mkdir(join(sandbox, "github"), { mode: 0o700 });
+      await mkdir(join(sandbox, "result"), { mode: 0o700 });
       github = await writeSandboxToken(join(sandbox, "github"), token);
       follower = await followRunLog(raw, log, redactor.redact);
     } catch (error) {
@@ -1069,6 +1106,7 @@ export function createHost(
                 invocationArguments,
               ),
             pass.hasReviewPolicy,
+            resultGuidance(pass.configuration!, kind),
             decision.retry,
             recovery,
             decision.mergeRelaunch,
@@ -1086,7 +1124,13 @@ export function createHost(
         branch: runBranch(issue),
         log: raw,
         idleTimeoutSeconds: settings.timeLimitMinutes * 60,
-        mounts: [github],
+        mounts: [
+          github,
+          {
+            hostPath: join(sandbox, "result"),
+            sandboxPath: sandboxResultDirectory,
+          },
+        ],
         env: sandboxEnvironment,
         signal: controller.signal,
         delivered: redactor.add,
@@ -1139,7 +1183,15 @@ export function createHost(
         // at the pause threshold decides how the run ended, whatever the log
         // says.
         if (run.pausing) run.ended = { paused: run.pausing, commented: false };
-        else
+        else {
+          run.result = readRunResult(
+            join(sandbox, "result", resultFile),
+            run.configuration,
+            kind,
+          );
+          report(
+            `${repository}#${issue} ${"invalid" in run.result ? `ended without a valid run result: ${run.result.invalid}` : `ended with its run result, ${run.result.outcome}${run.result.reason ? `: ${run.result.reason}` : ""}`}`,
+          );
           try {
             const limit = registry.providers
               .get(run.provider)!
@@ -1161,6 +1213,7 @@ export function createHost(
               `run for ${repository}#${issue} could not read its raw log's end: ${error}`,
             );
           }
+        }
         try {
           // A token outlives no run.
           await rm(sandbox, { recursive: true, force: true });
@@ -1231,7 +1284,7 @@ export function createHost(
           if (!run.awaitingMergeNotified && !decision.quiet) {
             await platform.awaitingMerge(
               decision.issue,
-              awaitingMergeComment(pass.configuration!, run),
+              awaitingMergeComment(pass.configuration!, decision.reason, run),
             );
             run.awaitingMergeNotified = true;
           }
@@ -1241,7 +1294,7 @@ export function createHost(
           if (!existsSync(path)) {
             await platform.awaitingMerge(
               decision.issue,
-              awaitingMergeComment(pass.configuration!),
+              awaitingMergeComment(pass.configuration!, decision.reason),
             );
             mkdirSync(directory(decision.repository).claims, {
               recursive: true,
@@ -1399,6 +1452,7 @@ export function createHost(
           }),
           holdObserved: run.holdObserved,
           ownedPullRequests: run.ownedPullRequests,
+          ...(run.result && { result: run.result }),
           startedAt: run.startedAt,
           log: run.log,
           ended: run.exited ? run.ended : null,
@@ -1533,6 +1587,7 @@ export function createHost(
 export function prompt(
   start: string,
   hasReviewPolicy: boolean,
+  result: string,
   retry?: { failure: string; log: string },
   recovery?: Recovery,
   mergeRelaunch?: MergeRelaunch,
@@ -1547,7 +1602,8 @@ export function prompt(
     "Before every delivery push, fetch origin and resolve its remote default branch again (for example, git fetch --prune origin, then git remote set-head origin --auto). Inspect the outgoing commits, including per-parent patches for merges (git log --stat --patch -m origin/HEAD..HEAD), and the change against that refreshed base (git diff origin/HEAD...HEAD). Keep both history and diff limited to the issue's work. A clean final diff can conceal reverted workflow edits or unrelated rewritten commits. When an update is needed, safely rebase or replay only the issue's own changes onto the current base. Never merge the default branch into the issue branch. Intentional workflow edits must remain visible; never discard them to bypass permissions. Revalidate a reconstructed change before publication.",
     "Preserve committed, staged, unstaged and untracked work and existing PR, review and handoff context before changing history. Continuing a branch does not require retaining unrelated history or override an owner's explicit request to reconstruct the issue's changes on the current base. If ownership is uncertain or reconstruction has conflicts, preserve the work and hand off under the repository's owner-question rules. After any permission refusal, stop with an explicit owner handoff: no second push, credential discovery or identity switch. Do not assume broader App permissions are necessary; ask the owner how to proceed.",
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
-    `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes still determine delivery.`,
+    `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded, in your run result for a stop. The signal is loop control; GitHub outcomes and your run result still determine delivery.`,
+    result,
     ...(releaseHoldLabel === undefined
       ? []
       : [
@@ -1637,6 +1693,7 @@ function recoveredPause(recorded: {
 // A retained claim without a host run has no model or log to name.
 function awaitingMergeComment(
   configuration: FactoryConfiguration,
+  reason?: string,
   run?: HostRun,
 ): string {
   return renderComment("awaitingMerge", configuration.comments?.awaitingMerge, {
@@ -1645,6 +1702,7 @@ function awaitingMergeComment(
     effort: run?.effort,
     attempt: run?.attempt,
     log: run?.log,
+    reason,
     label: configuration.labels.running,
   });
 }

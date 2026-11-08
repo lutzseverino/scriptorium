@@ -201,11 +201,15 @@ export type Retry = { run: SettlingRun; failure: string };
 export const handBackLimit = 2;
 
 // Ended runs and orphaned claims settle through one table, in order. A closed
-// issue is done. A merged PR completes the issue only with a closing
-// reference. A stop releases the claim, keeping its work and PR. An open PR
-// awaits merge, unless review is on: then an implement run's open PR, and a
-// review's PR left a draft for a hand-back, pass to the next run kind. Triage
-// changes no code, so it ends once its issue leaves the triage label. A
+// issue is done. The run's result comes first: a normally exited run without
+// a valid one fails with the reason, a failed result fails with its own, and
+// a stop releases the claim, keeping its work and PR, once the host applied
+// its state. Triage changes no code, so a triage run without a result ends
+// once its issue leaves the triage label. The platform and branch decide the
+// rest, and every ending without a result: a merged PR completes the issue
+// only with a closing reference, and a stop label releases the claim. An open
+// PR awaits merge, unless review is on: then an implement run's open PR, and
+// a review's PR left a draft for a hand-back, pass to the next run kind. A
 // failed first implement run may retry once; any other failure fails the
 // issue.
 export function settleEnding(
@@ -227,6 +231,9 @@ export function settleEnding(
         };
   const facts: EndingFacts & { timedOut?: boolean; orphaned?: true } =
     "run" in ended ? ended.ending : { ...ended.claim, orphaned: true };
+  const result = "run" in ended ? ended.run.result : undefined;
+  const valid = result && !("invalid" in result) ? result : undefined;
+  const limit = `the run exceeded the time limit of ${snapshot.settings.timeLimitMinutes} minutes`;
   const at = { repository: repository.name, issue: run.issue };
   const issue = repository.issues.find((issue) => issue.number === run.issue);
   const fail = (
@@ -250,13 +257,18 @@ export function settleEnding(
       ? [decision]
       : { run, failure };
   };
+  if (!issue) return [{ kind: "release", ...at }];
+  // A record from before run results has none; its facts decide.
+  if (result && "invalid" in result && !facts.orphaned && !facts.timedOut)
+    return fail(result.invalid);
+  if (valid?.outcome === "failed") return fail(valid.reason!);
+  if (valid?.outcome === "stop") return [{ kind: "release", ...at }];
   if (run.runKind === "triage")
-    return issue && labels.triage && issue.labels.includes(labels.triage)
+    return !valid && labels.triage && issue.labels.includes(labels.triage)
       ? fail(
           `the triage run ended with the issue still labelled ${labels.triage}`,
         )
       : [{ kind: "release", ...at }];
-  if (!issue) return [{ kind: "release", ...at }];
   if (facts.pullRequest === "merged")
     return facts.closesIssue
       ? [{ kind: "complete", ...at }]
@@ -278,7 +290,15 @@ export function settleEnding(
               `its review rounds did not converge after ${handBackLimit} hand-backs`,
             );
     }
-    return [{ kind: "keep", ...at }];
+    // Without a result, the reason is what the host observed.
+    const reason = valid
+      ? valid.reason
+      : facts.orphaned
+        ? "no factory run holds its claim"
+        : facts.timedOut
+          ? limit
+          : undefined;
+    return [{ kind: "keep", ...at, ...(reason && { reason }) }];
   }
   if (facts.unpushedChanges?.length)
     return fail(
@@ -292,7 +312,7 @@ export function settleEnding(
         ? "its pull request closed without merging"
         : "no factory run or open pull request holds its claim"
       : facts.timedOut
-        ? `the run exceeded the time limit of ${snapshot.settings.timeLimitMinutes} minutes`
+        ? limit
         : "the run ended without an open pull request",
   );
 }

@@ -1233,9 +1233,16 @@ test("an ended run's open pull request keeps its claim unless it needs input", (
             run(4, { attempt, ended: { ...ending, pullRequest: "open" } }),
           ],
         });
+        // Without a run result, the observed reason says why it ended.
+        const reason = ending.orphaned
+          ? "no factory run holds its claim"
+          : ending.timedOut
+            ? "the run exceeded the time limit of 240 minutes"
+            : undefined;
         assert.deepEqual(decisions[0], {
           kind: needsInput ? "release" : "keep",
           ...at(4),
+          ...(!needsInput && reason && { reason }),
         });
         assert.deepEqual(launches(decisions), []);
       }
@@ -1368,7 +1375,7 @@ test("a claim no run holds stays while its pull request is open and is released 
       ],
     }),
     [
-      { kind: "keep", ...at(4) },
+      { kind: "keep", ...at(4), reason: "no factory run holds its claim" },
       { kind: "release", ...at(5) },
       { kind: "skip", ...at(4), reason: "claimed by a running factory run" },
     ],
@@ -2008,7 +2015,7 @@ test("a paused-labelled claim no run holds settles as an orphaned claim under th
   ]);
   assert.deepEqual(settle("open"), [
     { kind: "unpause", ...at(4) },
-    { kind: "keep", ...at(4) },
+    { kind: "keep", ...at(4), reason: "no factory run holds its claim" },
   ]);
   assert.deepEqual(settle("merged"), [
     {

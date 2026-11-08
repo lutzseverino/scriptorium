@@ -25,6 +25,7 @@ import {
 } from "./repository-holds.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
+import type { ReadResult } from "./run-result.ts";
 import type { MergeRelaunch, InputResume } from "./platform.ts";
 import { triageTrigger, draftTrigger, type Trigger } from "./triggers.ts";
 import {
@@ -137,6 +138,8 @@ export type Run = {
   implementedBy?: string;
   startedAt: string;
   log: string;
+  // The result the run left when its agent exited, as the host read it.
+  result?: ReadResult;
   ended:
     | null
     | { interrupted: true }
@@ -284,9 +287,9 @@ export type Decision = { repository: string; issue: number } & (
       log: string | null;
       unpushedChanges?: string[];
     }
-  // Retains the claim, telling the issue it awaits merge unless a run kind
-  // takes the PR next.
-  | { kind: "keep"; quiet?: true }
+  // Retains the claim, telling the issue it awaits merge, and why the run
+  // ended, unless a run kind takes the PR next.
+  | { kind: "keep"; quiet?: true; reason?: string }
   | { kind: "complete" }
   | { kind: "release" }
   // Swaps the running label for the paused one and tells the issue why.

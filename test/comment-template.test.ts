@@ -172,4 +172,16 @@ test("awaiting-merge defaults and overrides render run facts and omit absent orp
     ),
     "Held. working",
   );
+  // The reason the run ended, its result's or what the host observed.
+  assert.match(
+    renderComment("awaitingMerge", undefined, {
+      reason: "its required checks were still running",
+      label: "working",
+    }),
+    /^The factory agent run has ended, but its pull request remains open\. It ended: its required checks were still running\.\n\n/,
+  );
+  assert.equal(
+    renderComment("awaitingMerge", "Held{#reason}: {reason}{/reason}.", {}),
+    "Held.",
+  );
 });

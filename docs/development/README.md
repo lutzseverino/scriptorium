@@ -133,7 +133,10 @@ through the same entry point over placeholder providers and models.
 provenance; platform tests verify current author roles, reporter comment
 identity and creation times, complete PR inventories and installation filing
 identity. Host tests cover trigger consumption and finding verification across
-restarts, plus independent draft PR review and explicit-target recovery. `test/label-roles.test.ts`
+restarts, plus independent draft PR review and explicit-target recovery. `test/run-ending.test.ts` drives the run-ending
+module's observation and outcome table for ended runs and orphaned claims, and
+`test/run-result.test.ts` the run-result interface, its containment and its
+frame. `test/label-roles.test.ts`
 checks that every label consumer derives its roles from `src/label-roles.ts`,
 and `test/model-policy.test.ts` reads repository model policies. The host
 configuration's tests read the fixture files in

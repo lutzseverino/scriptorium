@@ -12,6 +12,7 @@ import {
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { reconcileHolds, type HoldKey } from "./hold-comments.ts";
 import { renderComment } from "./comment-template.ts";
+import { postResultComment, type ResultPost } from "./run-result.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
@@ -732,6 +733,14 @@ export function repositoryPlatform(
       issue: number,
       holds: { key: HoldKey; reason: string }[],
     ) => reconcileHolds(issueTracker, issue, holds),
+
+    // A run result's comment, then its labels, so readiness a triage result
+    // applies finds its brief.
+    async postResult(issue: number, post: ResultPost) {
+      await postResultComment(issueTracker, issue, post);
+      if (post.add.length) await issueTracker.addLabels(issue, post.add);
+      for (const label of post.remove) await remove(issue, label);
+    },
 
     async awaitingMerge(issue: number, comment: string) {
       await issueTracker.createComment(issue, comment);
