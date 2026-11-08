@@ -344,14 +344,17 @@ export function createHost(
       } catch (error) {
         pause(`${error instanceof Error ? error.message : error}`);
       }
-      // A present policy the factory cannot read holds every launch, as
-      // configuration does, rather than reading as absence.
-      try {
-        pass.modelPolicy = readModelPolicy(join(clone, modelPolicyPath));
-      } catch (error) {
-        if (pass.paused === null)
-          pause(`${error instanceof Error ? error.message : error}`);
-      }
+      // Model policy belongs to version 3. Version 2 keeps its configured
+      // issue-label selection and host defaults, regardless of this file.
+      if (pass.configuration?.version === 3)
+        try {
+          // A present unreadable policy holds launches rather than reading
+          // as absence, just as invalid configuration does.
+          pass.modelPolicy = readModelPolicy(join(clone, modelPolicyPath));
+        } catch (error) {
+          if (pass.paused === null)
+            pause(`${error instanceof Error ? error.message : error}`);
+        }
       const dockerfile = join(clone, dockerfilePath);
       if (pass.paused === null && !existsSync(dockerfile))
         pause(`it has no ${dockerfilePath}`);

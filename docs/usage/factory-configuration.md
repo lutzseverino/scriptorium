@@ -10,6 +10,21 @@ Version 3 maps up to three [run kinds](#run-kinds) to skills; version 2 runs
 one implement skill. Each version is validated against its own contract,
 described below, and every other version is refused.
 
+## Compatibility window
+
+Scriptorium reads the current factory configuration version N and the previous
+version N−1. Initially N is 3 and N−1 is 2. One host can serve repositories on
+both versions, so upgrading the host and adopting a new Repo Canon configuration
+need no synchronized switch. Upgrade the host before adopting a configuration
+it does not yet support; older hosts need not accept newer configurations.
+
+Version 2 keeps its single implement invocation, configured labels (including
+`needsInput`), model-label prefix, contract-result identity and optional settings.
+It acquires no triage or review run, state label requirement or repository model
+policy from the host upgrade. Version 3 uses the run kinds and optional model
+policy described below. Neither version accepts unknown or malformed fields;
+versions outside the two-version window are refused rather than converted.
+
 ## Version 3
 
 The fields in this example are required; `runKinds.triage`,
@@ -220,13 +235,19 @@ still apply.
 
 ### Migrating from version 2
 
+Upgrade the host to Scriptorium v4.0.0 or later while keeping valid version 2
+configurations unchanged. Then migrate each repository independently, while
+version 2 remains in the host's compatibility window.
+
 Set `version` to `3`, and move `skill` and `arguments` into
 `runKinds.implement`. Replace `labels.needsInput` with the state labels the
 repository uses for its stops, and add `labels.triage` and `runKinds.triage`
 or `runKinds.review` to turn those kinds on. An open question labelled with
 the old needs-input label is no longer a stop for the factory: move it to the
-matching state first. Move model choices out of configuration into the host's
-defaults or the repository's model policy.
+matching state first. Keep model choices in the host's defaults or opt into the
+repository's version 3 model policy. Preserve the repository's label mappings,
+model-label prefix, validator identity and comment templates as appropriate;
+the host supplies none of those conventions during migration.
 
 ## Version 2
 
@@ -276,8 +297,8 @@ Version 1 configurations, the old `prompt` field, and version 2
 configurations without `contractResult` are refused, each with the fields at
 fault. Migrate by setting `version` to `2`, replacing `prompt` with `skill`
 and `arguments`, removing `{skillPrefix}`, since the provider owns the
-invocation syntax, and adding `contractResult`. There is no compatibility
-layer. For example, `"prompt": "{skillPrefix}ship #{issue}"` becomes
+invocation syntax, and adding `contractResult`. Version 1 is outside the
+compatibility window. For example, `"prompt": "{skillPrefix}ship #{issue}"` becomes
 `"skill": "ship", "arguments": "#{issue}"`.
 
 Label names and the model label prefix must be non-empty strings without
