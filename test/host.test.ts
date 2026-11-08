@@ -7788,3 +7788,65 @@ test("an unowned trusted draft starts review against its PR body and resumes the
   assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
   assert.equal(recordOf(run.state, 42, 1).target.number, 42);
 });
+
+test("a running worker's PR on another branch is owned before independent draft admission", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": bare },
+  });
+  run.github.viewers["acme/widgets"] = { login: "owner", bot: false };
+  await run.tick();
+  const pr = {
+    ...publishedPR(bare, "work/domain"),
+    number: 42,
+    author: { login: "owner", bot: false },
+  };
+  run.github.find("acme/widgets", 4).pullRequests.push(pr);
+  run.github.drafts.add(42);
+  await run.tick();
+  assert.equal(run.launched.length, 1, run.reports.join("\n"));
+});
+
+test("historical PR ownership survives another run replacing the issue's current record", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": bare },
+  });
+  run.github.viewers["acme/widgets"] = { login: "owner", bot: false };
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.pullRequests.push({
+    ...publishedPR(bare, "work/domain"),
+    number: 42,
+    author: { login: "owner", bot: false },
+  });
+  run.github.drafts.add(42);
+  // Ending at an owner stop archives this run's ownership and releases it.
+  issue.labels = ["state:owner", "factory:running"];
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  // A later trusted triage label starts another kind and replaces attempt 1.
+  issue.labels = ["state:triage"];
+  issue.timeline.push({
+    event: "labeled",
+    label: "state:triage",
+    actor: "owner",
+    at: "2026-10-09T12:01:00Z",
+  });
+  run.clock.now = new Date("2026-10-09T12:02:00Z");
+  await run.tick();
+  assert.equal(recordOf(run.state, 4, 1).runKind, "triage");
+  assert.equal(recordOf(run.state, 4, 1).target, undefined);
+  await run.tick();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.ok(
+    !run.launched.some(
+      ({ options }) => invocation(options.prompt) === "/review #42",
+    ),
+    run.reports.join("\n"),
+  );
+});

@@ -429,6 +429,26 @@ export function createHost(
       const issues = await platform.readIssues();
       if (runKind(pass.configuration, "review"))
         issues.push(...(await platform.readPullRequests()));
+      // A running worker can publish on another branch. Establish ownership
+      // before admitting independent drafts, rather than waiting for its exit.
+      if (issues.some((issue) => issue.pullRequest?.draft))
+        for (const run of runs.filter(
+          (run) => run.repository === name && !run.exited,
+        )) {
+          const observation = await platform.pullRequestObservation(
+            run.issue,
+            run.pullRequestSince,
+            false,
+            run.target?.number,
+          );
+          run.ownedPullRequests = [
+            ...new Set([
+              ...(run.ownedPullRequests ?? []),
+              ...observation.ownedPullRequests,
+            ]),
+          ];
+          record(run);
+        }
       const provenance = readProvenance(name);
       for (const issue of issues) {
         const history = provenance.filter(
@@ -826,17 +846,25 @@ export function createHost(
 
   function recordedPullRequests(name: string): number[] {
     const path = directory(name).runs;
+    const archived = readProvenance(name).flatMap(
+      (record) => record.ownedPullRequests ?? [],
+    );
     return existsSync(path)
-      ? readdirSync(path)
-          .filter((file) => /^issue-\d+-attempt-\d+\.json$/.test(file))
-          .flatMap((file) => {
-            const run: Run = JSON.parse(readFileSync(join(path, file), "utf8"));
-            return [
-              ...(run.ownedPullRequests ?? []),
-              ...(run.target ? [run.target.number] : []),
-            ];
-          })
-      : [];
+      ? [
+          ...archived,
+          ...readdirSync(path)
+            .filter((file) => /^issue-\d+-attempt-\d+\.json$/.test(file))
+            .flatMap((file) => {
+              const run: Run = JSON.parse(
+                readFileSync(join(path, file), "utf8"),
+              );
+              return [
+                ...(run.ownedPullRequests ?? []),
+                ...(run.target ? [run.target.number] : []),
+              ];
+            }),
+        ]
+      : archived;
   }
 
   // Replaces the run's record whole and at once, so a signal handler can
@@ -851,6 +879,23 @@ export function createHost(
     );
     writeFileSync(`${path}.partial`, `${JSON.stringify(recorded, null, 2)}\n`);
     renameSync(`${path}.partial`, path);
+    if (run.provenance) {
+      const archive = join(runsDirectory, "provenance");
+      mkdirSync(archive, { recursive: true });
+      const provenancePath = join(archive, `${run.provenance.id}.json`);
+      run.provenance.ownedPullRequests = [
+        ...new Set([
+          ...(run.provenance.ownedPullRequests ?? []),
+          ...(run.ownedPullRequests ?? []),
+          ...(run.target ? [run.target.number] : []),
+        ]),
+      ];
+      writeFileSync(
+        `${provenancePath}.partial`,
+        `${JSON.stringify(run.provenance)}\n`,
+      );
+      renameSync(`${provenancePath}.partial`, provenancePath);
+    }
   }
 
   // Before anything else, the first pass removes the sandboxes an earlier
@@ -1047,12 +1092,6 @@ export function createHost(
             trusted: true,
             ...(decision.trigger && { trigger: decision.trigger }),
           };
-    const provenancePath = join(paths.runs, "provenance");
-    mkdirSync(provenancePath, { recursive: true });
-    writeFileSync(
-      join(provenancePath, `${provenance.id}.json`),
-      `${JSON.stringify(provenance)}\n`,
-    );
     const run: HostRun = {
       provenance,
       ...(decision.trigger && { trigger: decision.trigger }),

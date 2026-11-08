@@ -3,7 +3,7 @@
 // and the host verifies it against its own durable launch records.
 import type { Issue as PlatformIssue } from "@lutzseverino/postern";
 import type { Issue } from "./factory.ts";
-import type { Labels } from "./label-roles.ts";
+import { configured, type Labels } from "./label-roles.ts";
 import { actorRefusal, type Policy } from "./readiness.ts";
 
 export type Trigger = { id: string; at: string };
@@ -13,6 +13,7 @@ export type Provenance = {
   at: string;
   account: string | null;
   trusted: boolean;
+  ownedPullRequests?: number[];
   trigger?: Trigger;
 };
 
@@ -77,9 +78,10 @@ export function triageTrigger(
       : null;
   }
   if (
-    [labels.ready, labels.grill, labels.owner].some(
-      (label) => label && issue.labels.includes(label),
-    )
+    configured(
+      labels,
+      (role) => role.readiness || (role.stop && !role.applied),
+    ).some((label) => issue.labels.includes(label))
   )
     return null;
   if (
