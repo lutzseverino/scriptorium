@@ -501,3 +501,29 @@ test("allowed models resolve uniquely without efforts and include default and re
     assert.throws(() => read(path), problem);
   }
 });
+
+test("optional triage and review defaults resolve within the host's capabilities", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const models = {
+    ...base.models,
+    triage: "codex/gpt-5.5@high",
+    review: "claude-opus-5-5@high",
+  };
+  writeFileSync(path, JSON.stringify({ ...base, models }));
+  assert.deepEqual(read(path).configuration.models, models);
+  for (const [entries, problem] of [
+    [{ triage: "" }, /models.triage: is not a non-empty string/],
+    [{ review: "unknown/model" }, /models.review: provider unknown/],
+    [
+      { review: "gpt-5.5", allowed: ["claude-sonnet-5-5", "claude-opus-5-5"] },
+      /models.review:.*not in models.allowed/,
+    ],
+  ] as const) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, models: { ...base.models, ...entries } }),
+    );
+    assert.throws(() => read(path), problem);
+  }
+});

@@ -39,6 +39,29 @@ it; the factory owns the kinds and their handoffs, and the skills own what each
 run does.
 _Avoid_: Stage, phase, mode
 
+**Stop**:
+An issue's wait on an answer from whoever its state names (triage, its
+reporter, a grill or the owner), which releases the factory's claim and keeps
+the work and pull request until the issue is ready again.
+_Avoid_: Needs input, question label
+
+**Gate**:
+An owner's label that stops a review at ready-to-merge until the owner removes
+it, after which review resumes to merge.
+_Avoid_: Approval hold, owner hold
+
+**Hand-back**:
+A review's return of its pull request, still a draft, to implement on the same
+pull request with the review as its input, which an issue's reviews may make
+at most twice.
+_Avoid_: Rejection, retry
+
+**Model policy**:
+A repository's own preferences for each run kind's model, and what a launch
+does while its choice is unavailable, chosen within the host's capabilities
+and defaults.
+_Avoid_: Model configuration, model catalog
+
 **Interrupted run**:
 A run whose sandbox a factory restart stopped, which launches again as the same
 attempt on its branch instead of ending with a run outcome.
@@ -121,5 +144,5 @@ _Avoid_: Build cache, default builder
 
 **Run outcome**:
 How a factory run ended, read from the hosting platform and the run's branch:
-done, awaiting merge, needs input, or failed.
+done, awaiting merge, stopped, or failed.
 _Avoid_: Result, status

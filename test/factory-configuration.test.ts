@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   factoryConfigurationPath,
+  launchArguments,
   readFactoryConfiguration,
   runKind,
 } from "../src/factory-configuration.ts";
@@ -337,4 +338,125 @@ test("a factory hold label is optional, trimmed and distinct from every other la
     writeFileSync(path, JSON.stringify(configuration));
     assert.throws(() => readFactoryConfiguration(path), /labels\.hold:/);
   }
+});
+
+test("version 3 maps run kinds to skills and names flat label roles, as Repo Canon ships it", () => {
+  const configuration = readFactoryConfiguration(fixture("version-3"));
+  assert.equal(configuration.version, 3);
+  assert.deepEqual(runKind(configuration, "review"), {
+    skill: "review",
+    arguments: "#{pullRequest}",
+    differentProvider: true,
+  });
+  assert.deepEqual(configuration.version === 3 && configuration.triageResult, {
+    marker: "scriptorium:run",
+    author: "lz-scriptorium[bot]",
+  });
+  assert.equal(configuration.labels.needsInput, undefined);
+});
+
+// A version 3 configuration with only the roles and the kind it requires.
+const implementOnly = {
+  version: 3,
+  labels: {
+    ready: "state:ready",
+    running: "factory:running",
+    paused: "factory:paused",
+    failed: "factory:failed",
+  },
+  contractResult: { marker: "contract:result", author: "validator[bot]" },
+  modelLabelPrefix: "model:",
+  runKinds: { implement: { skill: "implement", arguments: "#{issue}" } },
+};
+
+function invalid(t: TestContext, value: unknown, problems: string[]) {
+  const path = join(directory(t), "config.json");
+  writeFileSync(path, JSON.stringify(value));
+  assert.throws(() => readFactoryConfiguration(path), {
+    message: `The factory configuration ${path} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+  });
+}
+
+test("implement alone is a complete version 3 configuration", (t) => {
+  const path = join(directory(t), "config.json");
+  writeFileSync(path, JSON.stringify(implementOnly));
+  const configuration = readFactoryConfiguration(path);
+  assert.deepEqual(configuration, implementOnly);
+  assert.equal(runKind(configuration, "triage"), undefined);
+  assert.equal(runKind(configuration, "review"), undefined);
+});
+
+test("version 3 is validated against its own contract", (t) => {
+  invalid(
+    t,
+    {
+      ...implementOnly,
+      skill: "implement",
+      labels: { ...implementOnly.labels, needsInput: "factory:needs-input" },
+      runKinds: { review: { skill: "review", arguments: "#{pullRequest}" } },
+    },
+    [
+      "skill: is not a factory configuration field",
+      "labels.needsInput: is not a factory configuration field",
+      "runKinds.implement: is missing",
+    ],
+  );
+  invalid(
+    t,
+    {
+      ...implementOnly,
+      runKinds: {
+        ...implementOnly.runKinds,
+        triage: { skill: " triage", arguments: "#{issue} {pullRequest}" },
+        review: { skill: "review", arguments: 7, differentProvider: "yes" },
+        merge: {},
+      },
+      triageResult: { marker: "", author: "factory[bot]", extra: true },
+    },
+    [
+      "triageResult.extra: is not a factory configuration field",
+      "triageResult.marker: is not a non-empty trimmed string",
+      "runKinds.merge: is not a factory configuration field",
+      "runKinds.triage.skill: is not a non-empty trimmed string",
+      "runKinds.triage.arguments: names {pullRequest}, and a triage run has no pull request",
+      "runKinds.review.arguments: is not a string",
+      "runKinds.review.differentProvider: is not a boolean",
+      "labels.triage: is required with runKinds.triage",
+    ],
+  );
+  invalid(
+    t,
+    {
+      ...implementOnly,
+      labels: {
+        ...implementOnly.labels,
+        grill: "State:Ready",
+        priorityHigh: " priority:high",
+      },
+    },
+    [
+      "labels.priorityHigh: is not a non-empty trimmed string",
+      "labels.ready: must differ from labels.grill, ignoring case",
+    ],
+  );
+  invalid(t, { ...implementOnly, version: 4 }, [
+    "runKinds: is not a factory configuration field",
+    "skill: is missing",
+    "arguments: is missing",
+    "version: must be 2 or 3",
+    "labels.needsInput: is missing",
+  ]);
+});
+
+test("arguments expand {issue}, and in version 3 {pullRequest}, which a launch without one cannot use", () => {
+  const configuration = readFactoryConfiguration(fixture("version-3"));
+  assert.equal(launchArguments(configuration, "review", 4, 42), "#42");
+  assert.deepEqual(launchArguments(configuration, "review", 4), {
+    error:
+      "runKinds.review.arguments names {pullRequest}, and this launch has no pull request",
+  });
+  assert.equal(launchArguments(configuration, "implement", 4), "#4");
+  const v2 = readFactoryConfiguration(fixture("valid"));
+  if (v2.version === 2) v2.arguments = "#{issue} {pullRequest}";
+  assert.equal(launchArguments(v2, "implement", 4, 42), "#4 {pullRequest}");
 });

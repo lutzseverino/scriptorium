@@ -30,17 +30,23 @@ export function readModelPolicy(path: string): ModelPolicy | null {
     source = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new Error(`The model policy ${modelPolicyPath} is unreadable: ${error}`, {
-      cause: error,
-    });
+    throw new Error(
+      `The model policy ${modelPolicyPath} is unreadable: ${error}`,
+      {
+        cause: error,
+      },
+    );
   }
   let value;
   try {
     value = JSON.parse(source);
   } catch (error) {
-    throw new Error(`The model policy ${modelPolicyPath} is not JSON: ${error}`, {
-      cause: error,
-    });
+    throw new Error(
+      `The model policy ${modelPolicyPath} is not JSON: ${error}`,
+      {
+        cause: error,
+      },
+    );
   }
   const problems: string[] = [];
   const object = (
@@ -95,17 +101,24 @@ export function readModelPolicy(path: string): ModelPolicy | null {
     )
       problems.push('fallback: must be "wait" or "host-default"');
     const kinds = Object.hasOwn(root, "runKinds")
-      ? object(root.runKinds, "runKinds.", [], ["triage", "implement", "review"])
+      ? object(
+          root.runKinds,
+          "runKinds.",
+          [],
+          ["triage", "implement", "review"],
+        )
       : null;
     if (kinds) {
       for (const name of ["triage", "review"])
         if (Object.hasOwn(kinds, name))
           selection(kinds[name], `runKinds.${name}`);
       if (Object.hasOwn(kinds, "implement")) {
-        const implement = object(kinds.implement, "runKinds.implement.", [], [
-          "initial",
-          "retry",
-        ]);
+        const implement = object(
+          kinds.implement,
+          "runKinds.implement.",
+          [],
+          ["initial", "retry"],
+        );
         if (implement)
           for (const name of ["initial", "retry"])
             if (Object.hasOwn(implement, name))

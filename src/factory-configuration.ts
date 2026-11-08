@@ -209,7 +209,10 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
         if (Object.hasOwn(kind, "arguments"))
           if (typeof kind.arguments !== "string")
             problems.push(`${path}.arguments: is not a string`);
-          else if (name === "triage" && kind.arguments.includes("{pullRequest}"))
+          else if (
+            name === "triage" &&
+            kind.arguments.includes("{pullRequest}")
+          )
             problems.push(
               `${path}.arguments: names {pullRequest}, and a triage run has no pull request`,
             );

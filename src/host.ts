@@ -32,7 +32,12 @@ import {
   runKind,
   type FactoryConfiguration,
 } from "./factory-configuration.ts";
-import { claimLabels, gateLabels, isStopped } from "./label-roles.ts";
+import {
+  claimLabels,
+  gateLabels,
+  isStopped,
+  transition,
+} from "./label-roles.ts";
 import {
   modelPolicyPath,
   readModelPolicy,
@@ -598,14 +603,16 @@ export function createHost(
         marker.inputResume &&
         issue &&
         !isStopped(issue.labels, labels) &&
-        (issue.labels.includes(labels.running) ||
-          issue.labels.includes(labels.paused))
+        transition(labels, "release").remove.some((label) =>
+          issue.labels.includes(label),
+        )
       ) {
         // A prior release may have failed after persisting its resume marker.
         // No host run owns this claim; finish releasing it before pickup gates.
         await platform.release(number);
+        const released = transition(labels, "release").remove;
         issue.labels = issue.labels.filter(
-          (label) => label !== labels.running && label !== labels.paused,
+          (label) => !released.includes(label),
         );
       }
       const observation = await platform.pullRequestObservation(

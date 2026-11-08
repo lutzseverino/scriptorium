@@ -22,6 +22,7 @@ import {
 } from "./contract-result.ts";
 import {
   claimLabels,
+  configured,
   gateLabels,
   provisioned,
   transition as labelTransition,
@@ -394,10 +395,9 @@ export function repositoryPlatform(
       const issues: Issue[] = [];
       for (const issue of await issueTracker.issues()) {
         // Changes arrive in platform order, so the last match is the latest.
-        const carried = [labels.ready, labels.triage].filter(
-          (label) => label !== undefined && issue.labels.includes(label),
-        );
-        const changes = carried.length
+        const changes = configured(labels, (role) => role.applied).some(
+          (label) => issue.labels.includes(label),
+        )
           ? await issueTracker.labelChanges(issue.number)
           : [];
         const latest = (label: string | undefined) =>

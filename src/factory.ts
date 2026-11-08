@@ -8,6 +8,7 @@ import {
 } from "./factory-configuration.ts";
 import { holdKeys, type HoldKey } from "./hold-comments.ts";
 import {
+  configured,
   exclusionReason,
   gateLabels,
   isStopped,
@@ -412,14 +413,16 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     const { labels } = repository.configuration;
     const at = { repository: repository.name, issue: issue.number };
     const holds: { hold: HoldKey; reason: string }[] = [];
+    // Labels that exclude fresh pickup already explain the issue, except a
+    // claim's own while its continuation is pending.
     if (!(
       (reconcile.readiness && !issue.labels.includes(labels.ready)) ||
-      [
-        ...(!reconcile.pending ? [labels.running, labels.paused] : []),
-        labels.failed,
-        ...stopLabels(labels),
-        labels.skip,
-      ].some((label) => label !== undefined && issue.labels.includes(label)) ||
+      configured(
+        labels,
+        (role) =>
+          role.excludes?.from.includes("fresh") &&
+          !(reconcile.pending && role.removes?.includes("release")),
+      ).some((label) => issue.labels.includes(label)) ||
       !decisions.some(
         (decision) =>
           decision.repository === at.repository &&
@@ -498,7 +501,13 @@ function runningCounts(snapshot: Snapshot): Map<string, number> {
 // A failed first implement run that may retry on the retry stage's model.
 type SettlingRun = Pick<
   Run,
-  "repository" | "issue" | "attempt" | "inputResume" | "runKind" | "handBacks"
+  | "repository"
+  | "issue"
+  | "attempt"
+  | "inputResume"
+  | "runKind"
+  | "target"
+  | "handBacks"
 > & {
   log: string | null;
 };
@@ -610,7 +619,8 @@ function settleOutcome(
   if (outcome.kind === "awaiting merge") {
     const open = observation.openPullRequest;
     if (open && runKind(configuration, "review")) {
-      if (run.runKind !== "review") return [{ kind: "keep", ...at, quiet: true }];
+      if (run.runKind !== "review")
+        return [{ kind: "keep", ...at, quiet: true }];
       if (open.draft)
         return (run.handBacks ?? 0) < handBackLimit
           ? [{ kind: "keep", ...at, quiet: true }]
@@ -879,7 +889,7 @@ function continuation(
     ...classified,
     modelSource: recorded
       ? { kind: "recorded", run: recorded, retain: state.kind === "resume" }
-      : {
+      : ({
           kind: "stage",
           stage:
             state.kind === "merge"
@@ -887,7 +897,7 @@ function continuation(
                 ? "review"
                 : "initial"
               : continuationRules[state.kind].stage,
-        } as Continuation["modelSource"],
+        } as Continuation["modelSource"]),
     diversity:
       kind === "review" &&
       reviews?.differentProvider === true &&
@@ -932,6 +942,11 @@ function continuation(
               },
               ...(state.retry.run.inputResume && {
                 inputResume: state.retry.run.inputResume,
+              }),
+              // A hand-back's retry continues the same PR.
+              ...(state.retry.run.target && {
+                target: state.retry.run.target,
+                handBacks: state.retry.run.handBacks,
               }),
             }
           : handedOn
@@ -1029,7 +1044,11 @@ function continuationExclusions(
       "merge",
     );
     if (reason) return skipped(next, reason);
-    if (next.kind !== "merge" && !answered && !issue.labels.includes(labels.ready))
+    if (
+      next.kind !== "merge" &&
+      !answered &&
+      !issue.labels.includes(labels.ready)
+    )
       return skipped(next, `it no longer carries ${labels.ready}`);
   } else if (next.kind === "triage") {
     const reason =
@@ -1138,7 +1157,14 @@ function admit(
   const available = (model: Model) =>
     gate(model.provider, running, snapshot, rules.threshold);
   if (next.diversity !== null)
-    choice = diverse(choice, next.diversity, policy, snapshot.settings, models, available);
+    choice = diverse(
+      choice,
+      next.diversity,
+      policy,
+      snapshot.settings,
+      models,
+      available,
+    );
   let reason =
     repositoryHeld?.reason ??
     (next.pause && limited(choice.model.provider, next.pause, snapshot)) ??
@@ -1201,7 +1227,9 @@ function stageModel(
     `${preference.provider}/${preference.model}${preference.effort === undefined ? "" : `@${preference.effort}`}`,
   );
   return "error" in model
-    ? { error: `the model policy's ${path} is outside this host's capabilities: ${model.error}` }
+    ? {
+        error: `the model policy's ${path} is outside this host's capabilities: ${model.error}`,
+      }
     : { model, selection: "policy" };
 }
 

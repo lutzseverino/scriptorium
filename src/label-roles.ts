@@ -13,16 +13,12 @@ export type Continuing = "triage" | "fresh" | "retry" | "merge" | "resume";
 // The factory's label writes on an issue. `complete` runs before an issue
 // closes and `closed` after, or for an issue found closed.
 export type Transition =
-  | "claim"
-  | "release"
-  | "fail"
-  | "pause"
-  | "unpause"
-  | "complete"
-  | "closed";
+  "claim" | "release" | "fail" | "pause" | "unpause" | "complete" | "closed";
 
 type Role = {
   versions: { 2?: Need; 3?: Need };
+  // Who applied it decides whether it counts: readiness, or a trigger.
+  applied?: true;
   // The readiness label, whose changes the issue-contract validator decides.
   readiness?: true;
   // Only the factory writes it, and provisions it with this colour.
@@ -39,7 +35,9 @@ type Role = {
     from: Continuing[];
     reason(label: string, ready: string): string;
   };
-  transitions?: Partial<Record<Transition, "add" | "remove">>;
+  // The transitions that add it and that remove it.
+  adds?: Transition[];
+  removes?: Transition[];
 };
 
 const stopped: Role["excludes"] = {
@@ -50,11 +48,20 @@ const stopped: Role["excludes"] = {
 };
 
 export const labelRoles = {
-  triage: { versions: { 3: "optional" }, stop: true, excludes: stopped },
+  triage: {
+    versions: { 3: "optional" },
+    applied: true,
+    stop: true,
+    excludes: stopped,
+  },
   reporter: { versions: { 3: "optional" }, stop: true, excludes: stopped },
   grill: { versions: { 3: "optional" }, stop: true, excludes: stopped },
   owner: { versions: { 3: "optional" }, stop: true, excludes: stopped },
-  ready: { versions: { 2: "required", 3: "required" }, readiness: true },
+  ready: {
+    versions: { 2: "required", 3: "required" },
+    applied: true,
+    readiness: true,
+  },
   ownerReview: { versions: { 3: "optional" }, gate: true },
   majorRelease: { versions: { 3: "optional" }, gate: true },
   running: {
@@ -65,14 +72,8 @@ export const labelRoles = {
       from: ["triage", "fresh"],
       reason: () => "claimed by a running factory run",
     },
-    transitions: {
-      claim: "add",
-      unpause: "add",
-      release: "remove",
-      fail: "remove",
-      pause: "remove",
-      closed: "remove",
-    },
+    adds: ["claim", "unpause"],
+    removes: ["release", "fail", "pause", "closed"],
   },
   failed: {
     versions: { 2: "required", 3: "required" },
@@ -82,7 +83,8 @@ export const labelRoles = {
       from: ["triage", "fresh", "retry", "merge"],
       reason: (label) => `labelled ${label}; remove the label to run it again`,
     },
-    transitions: { fail: "add", complete: "remove" },
+    adds: ["fail"],
+    removes: ["complete"],
   },
   paused: {
     versions: { 2: "required", 3: "required" },
@@ -93,13 +95,8 @@ export const labelRoles = {
       reason: (label) =>
         `labelled ${label}; the factory resumes its run by itself`,
     },
-    transitions: {
-      pause: "add",
-      release: "remove",
-      fail: "remove",
-      unpause: "remove",
-      closed: "remove",
-    },
+    adds: ["pause"],
+    removes: ["release", "fail", "unpause", "closed"],
   },
   needsInput: {
     versions: { 2: "required" },
@@ -110,7 +107,7 @@ export const labelRoles = {
       reason: (label) =>
         `labelled ${label}; answer the question and remove the label to run it again`,
     },
-    transitions: { closed: "remove" },
+    removes: ["closed"],
   },
   skip: {
     versions: { 2: "optional", 3: "optional" },
@@ -170,11 +167,8 @@ export function transition(
   step: Transition,
 ): { add: string | null; remove: string[] } {
   return {
-    add: configured(labels, (role) => role.transitions?.[step] === "add")[0] ?? null,
-    remove: configured(
-      labels,
-      (role) => role.transitions?.[step] === "remove",
-    ),
+    add: configured(labels, (role) => role.adds?.includes(step))[0] ?? null,
+    remove: configured(labels, (role) => role.removes?.includes(step)),
   };
 }
 

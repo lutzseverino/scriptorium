@@ -109,9 +109,11 @@ and nothing comes from environment variables.
 | `providers.<name>.cap`                  | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                                                 |
 | `providers.<name>.credential`           | The absolute path of the launch credential: the Claude Code setup-token file, or the Codex login (`auth.json`). Claude also uses it for usage reads when `usageCredential` is omitted.                                                               |
 | `providers.claude-code.usageCredential` | Optional absolute path of a host-renewed Claude interactive-login copy, used only for usage reads. A configured but unusable copy never falls back to the launch token. See [Claude usage login](#claude-usage-login).                               |
-| `models.default`                        | The model an issue without a model label runs on.                                                                                                                                                                                                    |
+| `models.default`                        | The model an issue's implement attempt runs on without a model label or a [model policy](#model-selection) preference, and a triage or review run's without `models.triage` or `models.review`.                                                      |
+| `models.triage`                         | Optional default model for [triage runs](factory-configuration.md#run-kinds). Without it, triage takes `models.default`.                                                                                                                             |
+| `models.review`                         | Optional default model for review runs. Without it, review takes `models.default`. Only an explicit value is a review's [provider diversity](#provider-diversity) alternative.                                                                       |
 | `models.allowed`                        | Optional non-empty list of unique model names, without efforts. Every entry must resolve through a configured provider. Default and retry must be listed; provider and model are compared, ignoring effort. Without it, no membership check applies. |
-| `models.retry`                          | The model a failed first attempt retries on.                                                                                                                                                                                                         |
+| `models.retry`                          | The model a failed first implement attempt retries on, unless the repository's model policy prefers another.                                                                                                                                         |
 | `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                                                          |
 | `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                                                    |
 | `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                                                     |
@@ -141,8 +143,9 @@ A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 The host operator maintains `models.allowed` in the host configuration, for
 example `["claude-sonnet-5-5", "codex/gpt-5.5"]`. Names use the same provider
 routing as `models.default`, without `@<effort>`; aliases resolving to the
-same provider and model count as duplicates. Add every default, retry and
-label-selected model the host should run, and restart the host after editing.
+same provider and model count as duplicates. Add every default, retry, triage,
+review, label-selected and policy-selected model the host should run, and
+restart the host after editing.
 An unlisted `model:` label holds the issue with a comment instead of falling
 back to another model. Pickup and retry launch nothing until the label is
 fixed or the operator lists that model. Interrupted, paused and merge
@@ -329,6 +332,85 @@ A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 prefix. A model on a provider the host does not configure, an effort the
 provider does not list, or a bare slug no configured provider routes is refused
 with the reason.
+
+## Model selection
+
+The host owns capabilities: the providers and models it can reach, their
+efforts, `models.allowed` and the credentials. It also owns each run kind's
+default: `models.default` for an implement attempt, `models.retry` for its
+retry, and `models.triage` and `models.review`. A repository's preferences and
+an issue's model label choose within those capabilities and never grant one.
+Nothing model-specific is built into the factory; model identities are
+configuration.
+
+Each launch resolves its model in this order, and records the model and where
+it came from (`selection` in its run record: `issue-label`, `policy`,
+`host-default`, `fallback`, `diversity` or `recorded`):
+
+- An initial implement attempt: the issue's model label, then the repository
+  policy's `runKinds.implement.initial`, then `models.default`.
+- An implement retry: the policy's `runKinds.implement.retry`, then
+  `models.retry`.
+- A triage or review run: the policy's `runKinds.triage` or `runKinds.review`,
+  then `models.triage` or `models.review`, then `models.default`.
+- A hand-back from review resolves as an initial implement attempt; an
+  interrupted, paused or merge relaunch keeps the model it recorded.
+
+A stage preference of `{ "source": "issue-label" }` reuses the issue's model
+label, for example to keep retries on it; without a label that stage holds
+with a model-label hold comment rather than inventing a model. Several,
+unresolvable or unlisted model labels hold every continuation of the issue, as
+before, whatever the stage would select. A policy preference outside the
+host's capabilities holds the same way.
+
+### Repository model policy
+
+The optional repository-owned `.github/factory-model-policy.json` holds the
+repository's preferences. The factory reads it from the same default-branch
+revision as `.factory/config.json`, never from a run's pull request. Without
+the file, every launch takes the host's defaults, including `models.retry`.
+A present file that is unreadable, not JSON or invalid pauses the repository
+with its correction, as invalid configuration does; it never reads as absence.
+Repo Canon checks the file's schema and ships no values.
+
+```json
+{
+  "version": 1,
+  "fallback": "host-default",
+  "runKinds": {
+    "triage": { "provider": "claude-code", "model": "claude-sonnet-5-5" },
+    "implement": { "retry": { "source": "issue-label" } },
+    "review": { "provider": "codex", "model": "gpt-5.5", "effort": "high" }
+  }
+}
+```
+
+`version`, `fallback` and `runKinds` are required; every kind and attempt is
+optional and falls back to the host default. A selection is exactly
+`{ "provider", "model", "effort"? }` or exactly `{ "source": "issue-label" }`;
+an omitted effort is the provider's default. Unknown fields, mixed
+selections and empty or untrimmed strings are invalid.
+
+`fallback` says what a launch does when its chosen model is valid but
+unavailable this pass, because its provider is at its cap, drained or under
+an owner hold. `wait` keeps the same issue, work and PR waiting, with the
+reason in the log and status file, and launches once the choice is available
+or the policy changes. `host-default` launches on that kind's host default
+instead when it is available, and otherwise waits. Neither starts a retry,
+substitutes another model or changes the issue's label. Without a policy
+file, an unavailable choice waits.
+
+### Provider diversity
+
+When the repository's configuration sets
+`runKinds.review.differentProvider`, a review compares its chosen provider
+with the provider of the implement attempt that produced the PR, including a
+retry or a hand-back. A different provider satisfies it. When they match, the
+only alternative is an explicit `models.review`: the review switches to it
+when the repository has no model policy or its fallback is `host-default`, and
+that model is available on another provider. Otherwise it runs on its choice,
+and the log says provider diversity was unavailable. It never searches the
+host's models for another provider and never waits for diversity alone.
 
 ## Repository conventions
 
@@ -538,18 +620,30 @@ Sandbox images live in the host's Docker daemon, tagged as the
 Ended runs and orphaned claims use the same table, in order. Pull requests
 come from the issue's closing references and its `factory/issue-<n>` branch.
 A closed issue settles as done first. For an open issue, a merged PR's actual
-closing-reference evidence determines completion. A needs-input question takes
-precedence over an unmerged PR, even after timeout or orphaning.
+closing-reference evidence determines completion. A stop, a question waiting
+on an answer, takes precedence over an unmerged PR, even after timeout or
+orphaning: version 2's configured needs-input label, or in version 3 any of
+the configured triage, reporter, grill and owner states.
 
 | First matching observation                                 | Run outcome    | Action                                                                                |
 | ---------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------- |
 | Issue closed                                               | Done           | Release the claim.                                                                    |
 | Pull request merged with a closing reference to this issue | Done           | Close the issue and clear the claim's running, paused, needs-input and failed labels. |
 | Pull request merged without a closing reference            | Failed, final  | Fail without retrying; the owner must decide whether the work finished the issue.     |
-| Configured needs-input label present                       | Needs input    | Release the claim and retain the existing work and PR context for resumption.         |
+| A stop label present                                       | Stopped        | Release the claim and retain the existing work and PR context for resumption.         |
 | Pull request open                                          | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.                |
 | Unpushed commits under `unpushablePaths`                   | Failed, final  | Fail without retrying and name the paths.                                             |
-| Anything else                                              | Failed         | Retry attempt 1 once on `models.retry`; fail attempt 2.                               |
+| Anything else                                              | Failed         | Retry an implement attempt 1 once; fail attempt 2, a triage and a review run.         |
+
+A triage run changes no code, so it ends once its issue leaves the triage
+state, releasing its claim, and fails when it ended with the issue still in
+triage. With review on, a pull request left open hands off instead of awaiting
+merge, as [run kinds](factory-configuration.md#handoffs) describe: an
+implement run's PR starts review, and a review's PR left a draft starts a
+hand-back to implement on the same PR, at most twice. A review that would
+hand back a third time fails the issue because its rounds did not converge. A handed-off PR gets no
+awaiting-merge notice. A review that marked its PR ready and left it open
+awaits merge like any other run.
 
 An ended run awaiting merge posts one deterministic issue notice, without an
 agent or provider usage. It says the run ended, its pull request remains open,

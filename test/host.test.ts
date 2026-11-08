@@ -81,7 +81,12 @@ type IssueSpec = {
 
 // The readiness labels the fixtures' repositories configure, which the fake
 // validator approves.
-const fixtureReadyLabels = new Set(["ready-for-agent", "queued", "work:ready"]);
+const fixtureReadyLabels = new Set([
+  "ready-for-agent",
+  "queued",
+  "work:ready",
+  "state:ready",
+]);
 
 // Legacy capability fixtures retain latest-link fallback coverage. Tests can
 // opt into the complete link history that GitHub now offers.
@@ -202,6 +207,9 @@ function fakePlatform(
     string,
     { issues: number[]; pullRequests: number[] } | Error
   > = {};
+  // Open PRs that are drafts, and open PRs carrying each gate label.
+  const drafts = new Set<number>();
+  const gates: Record<string, number[]> = {};
 
   // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
@@ -595,6 +603,40 @@ function fakePlatform(
               },
             };
           }
+          if (body.query.includes("FactoryPullRequestDraft")) {
+            await request("draft", body.variables.number);
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  repository: {
+                    pullRequest: { isDraft: drafts.has(body.variables.number) },
+                  },
+                },
+              },
+            };
+          }
+          if (body.query.includes("FactoryGatedPullRequests")) {
+            const { label } = body.variables as unknown as { label: string };
+            await request("gated", label);
+            const numbers = gates[label] ?? [];
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  repository: {
+                    pullRequests: {
+                      totalCount: numbers.length,
+                      nodes: numbers.map((number) => ({ number })),
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            };
+          }
           if (body.query.includes("FactoryCommentEdits")) {
             const id = (body.variables as unknown as { id: string }).id;
             const comment = state[repository]
@@ -663,6 +705,8 @@ function fakePlatform(
     viewers,
     releaseHolds,
     factoryHolds,
+    drafts,
+    gates,
   };
 }
 
@@ -7294,4 +7338,212 @@ test("an interrupted merge refreshes ownership before excluding its own labelled
     3,
     "historical self-labels grant no extra merge attempt",
   );
+});
+
+// A version 3 repository with all three run kinds, as Repo Canon ships it.
+const kindsConventions = {
+  version: 3,
+  labels: {
+    triage: "state:triage",
+    reporter: "state:reporter",
+    grill: "state:grill",
+    owner: "state:owner",
+    ready: "state:ready",
+    ownerReview: "gate:owner-review",
+    majorRelease: "gate:major-release",
+    running: "factory:running",
+    paused: "factory:paused",
+    failed: "factory:failed",
+  },
+  contractResult,
+  modelLabelPrefix: "model:",
+  runKinds: {
+    triage: { skill: "triage", arguments: "#{issue}" },
+    implement: { skill: "implement", arguments: "#{issue}" },
+    review: {
+      skill: "review",
+      arguments: "#{pullRequest}",
+      differentProvider: true,
+    },
+  },
+};
+const kindsFiles = {
+  ...factoryFiles,
+  ".factory/config.json": JSON.stringify(kindsConventions),
+};
+
+test("a version 3 issue goes from implement to review to a hand-back on the same PR, without an awaiting-merge notice", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  assert.equal(invocation(run.launched[0].options.prompt), "/implement #4");
+  assert.deepEqual(
+    run.github.labels.get("acme/widgets"),
+    new Set(["factory:running", "factory:failed", "factory:paused"]),
+  );
+  const pr = { ...publishedPR(bare), number: 42 };
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests.push(pr);
+  run.github.drafts.add(42);
+  run.launched[0].finish();
+  await run.drain();
+
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
+  assert.equal(run.launched[1].options.name, "acme/widgets#4");
+  const review = recordOf(run.state, 4, 1);
+  assert.equal(review.runKind, "review");
+  assert.deepEqual(review.target.number, 42);
+  assert.equal(review.implementedBy, "claude-code");
+  assert.equal(review.handBacks, 0);
+  assert.equal(review.selection, "host-default");
+  // The host has no review default on another provider.
+  assert.equal(review.diversity, "unavailable");
+  assert.ok(
+    run.reports.some(
+      (line) =>
+        line.includes("acme/widgets#4 review runs on claude-code") &&
+        line.includes("provider diversity was unavailable"),
+    ),
+  );
+  assert.match(review.log, /issue-4-review-attempt-1\.log$/);
+
+  // The review left its PR a draft: it hands back to implement.
+  run.launched[1].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(run.launched.length, 3);
+  const handBack = run.launched[2].options.prompt!;
+  assert.equal(invocation(handBack), "/implement #4");
+  assert.match(
+    handBack,
+    /Review hand-back: the latest review of PR #42 handed the work back \(hand-back 1 of at most 2\)/,
+  );
+  assert.equal(recordOf(run.state, 4, 1).handBacks, 1);
+  assert.deepEqual(issue.comments, []);
+  assert.deepEqual(issue.labels, ["state:ready", "factory:running"]);
+});
+
+test("a version 3 triage label a person applied starts triage on the model policy's choice", async (t) => {
+  const policy = {
+    version: 1,
+    fallback: "wait",
+    runKinds: {
+      triage: { provider: "codex", model: "gpt-5.5", effort: "low" },
+    },
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["state:triage"] },
+        {
+          number: 5,
+          labels: ["state:triage"],
+          timeline: [
+            {
+              event: "labeled",
+              label: "state:triage",
+              actor: "github-actions[bot]",
+              at: "2026-10-06T00:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".github/factory-model-policy.json": JSON.stringify(policy),
+      }),
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const [triage] = run.launched;
+  assert.equal(invocation(triage.options.prompt), "$triage #4");
+  assert.equal(triage.options.agent.name, "codex");
+  assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+    "state:triage",
+    "factory:running",
+  ]);
+  assert.equal(recordOf(run.state, 4, 1).runKind, "triage");
+  assert.equal(recordOf(run.state, 4, 1).selection, "policy");
+  assert.ok(
+    run.reports.some((line) =>
+      line.startsWith(
+        "acme/widgets#5 skipped: triage waits: is refused: state:triage was applied by github-actions[bot], a bot or app",
+      ),
+    ),
+    run.reports.join("\n"),
+  );
+});
+
+test("a present model policy that is invalid pauses the repository with its correction", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".github/factory-model-policy.json": JSON.stringify({
+          version: 1,
+          runKinds: {},
+        }),
+      }),
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  const [repository] = run.status().repositories;
+  assert.equal(repository.state, "paused");
+  assert.match(
+    repository.reason,
+    /The model policy \.github\/factory-model-policy\.json is invalid:\n- fallback: is missing/,
+  );
+  assert.match(
+    run.github.find("acme/widgets", 4).comments.join("\n"),
+    /<!-- scriptorium:hold:repository-configuration -->/,
+  );
+});
+
+test("a review stopped at a gate is released with its PR, and resumes review once the gate is cleared", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const pr = { ...publishedPR(bare), number: 42 };
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests.push(pr);
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
+
+  // The review marked its PR ready and stopped at the owner's gate.
+  issue.labels = ["state:owner", "gate:owner-review", "factory:running"];
+  run.launched[1].finish();
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(issue.labels, ["state:owner", "gate:owner-review"]);
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+
+  // A gate on the PR alone still holds it, across a restart.
+  issue.labels = ["state:owner"];
+  run.github.gates["gate:owner-review"] = [42];
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+
+  run.github.gates["gate:owner-review"] = [];
+  await restarted.tick();
+  assert.equal(run.launched.length, 3);
+  assert.equal(invocation(run.launched[2].options.prompt), "/review #42");
+  assert.deepEqual(issue.labels, ["state:owner", "factory:running"]);
+  assert.equal(recordOf(run.state, 4, 1).implementedBy, "claude-code");
 });
