@@ -57,7 +57,7 @@ test("each run kind's sandbox token requests its fixed permissions", () => {
   };
   // Implement and review also read the checks they wait on; on GitHub, the
   // contents write a push needs also merges.
-  const delivery = {
+  const pullRequestWork = {
     ...reads,
     actions: "read",
     checks: "read",
@@ -67,8 +67,8 @@ test("each run kind's sandbox token requests its fixed permissions", () => {
   };
   assert.deepEqual(runKindPermissions, {
     triage: reads,
-    implement: delivery,
-    review: delivery,
+    implement: pullRequestWork,
+    review: pullRequestWork,
   });
   assert.ok(Object.isFrozen(runKindPermissions.triage));
 });

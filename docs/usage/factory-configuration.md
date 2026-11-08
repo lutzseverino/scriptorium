@@ -136,8 +136,8 @@ records the split. Each kind is optional except implement:
 
 Each kind runs its configured skill under the factory's unattended execution
 guidance, with a sandbox token narrowed to the kind's fixed
-[permissions](host.md#run-kind-token-permissions), which no configuration changes;
-a triage run and a review run log beside implement's, as
+[permissions](host.md#run-kind-token-permissions), which no configuration
+changes; a triage run and a review run log beside implement's, as
 `issue-<n>-triage-attempt-1.log` and `issue-<n>-review-attempt-1.log`. Only
 an implement attempt retries.
 

@@ -316,8 +316,10 @@ never logs the command's output.
 
 Each [run kind](factory-configuration.md#run-kinds) gets a sandbox token
 narrowed to its own GitHub App permissions. The factory fixes these sets;
-neither the host nor the factory configuration can change or broaden them.
-The App must hold every permission a kind it runs requests.
+neither the host nor the factory configuration names them. The App must hold
+every permission a kind it runs requests, and the
+[token command](#token-command) must narrow each token to its set: one that
+ignores the set hands every sandbox the App's whole permissions.
 
 | Run kind  | Permissions                                                                                           |
 | --------- | ----------------------------------------------------------------------------------------------------- |
