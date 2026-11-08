@@ -43,9 +43,8 @@ const reasonLimit = 300;
 // the factory's or the validator's.
 const contain = (text: string) => text.replaceAll("<!--", "&lt;!--");
 
-// The labels the kind's results may request: those starting with a family
-// the configuration lists for it, other than a label a role gives mechanics
-// to.
+// The label families the configuration lists for the kind's results: a
+// requested label must start with one of them.
 export function resultFamilies(
   configuration: FactoryConfiguration,
   kind: RunKindName,

@@ -868,7 +868,13 @@ export function createHost(
               ? recoveredPause(recorded)
               : recorded.pausing
                 ? { paused: recorded.pausing, commented: false }
-                : { timedOut: false, pullRequest: "none", orphaned: true },
+                : // A run whose agent exited left its result, so it ended
+                  // by itself rather than with the earlier process.
+                  {
+                    timedOut: false,
+                    pullRequest: "none",
+                    ...(!recorded.result && { orphaned: true as const }),
+                  },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),

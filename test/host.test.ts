@@ -4195,7 +4195,12 @@ test("a second attempt awaiting merge cannot retry after its pull request closes
   assert.equal(run.launched.length, 2);
   assert.equal(notices(issue).length, 2);
   assert.match(notices(issue)[0], /attempt 2/);
-  assert.match(notices(issue)[1], /run failed:.*pull request closed/);
+  // The attempt exited with its result, so the restart settles it as the
+  // first process would have.
+  assert.match(
+    notices(issue)[1],
+    /run failed: the run ended without an open pull request/,
+  );
 });
 
 for (const ended of ["timed out", "orphaned"] as const)
@@ -8607,5 +8612,22 @@ test("a run that ends with its pull request open says why it ended, in the host'
   assert.match(
     issue.comments[1],
     /^The factory agent run has ended, but its pull request remains open\. It ended: its required checks were still running when the run ended\.\n/,
+  );
+});
+
+test("a run that exited with an invalid result still fails after a restart before it settled", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  run.launched[0].finish(undefined, undefined, "not JSON");
+  await run.drain();
+  await run.restart().tick();
+  assert.equal(run.launched.length, 2);
+  assert.match(
+    run.launched[1].options.prompt!,
+    /First attempt failure: its run result is not JSON\n/,
   );
 });
