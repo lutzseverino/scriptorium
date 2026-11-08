@@ -122,6 +122,13 @@ which also drops its cache; the next build creates it again from the new pin.
 
 ### Host and adapter tests
 
+`test/prompt.test.ts` checks the pure `prompt(continuation, facts)` renderer.
+The host supplies retry-tail text, credential limits and the shared repository
+hold results; the prompt contains no hold or merge policy. Launch decisions,
+host runs and snapshots carry one `Continuation`, and host restart tests cover
+both that record and older records with flat launch fields. The optional result
+path is supplied when the run-result mount is available.
+
 The host runner's tests in `test/host.test.ts` drive whole passes, stop
 signals and restarts with a stateful fake of each repository's Postern
 connection, a fake Sandcastle behind the real provider registry, a fake

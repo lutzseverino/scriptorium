@@ -8,6 +8,7 @@ import {
   type Models,
   type Repository,
   type Run,
+  type Continuation,
   type Settings,
   type Snapshot,
 } from "../src/factory.ts";
@@ -131,23 +132,48 @@ const pr: MergeRelaunch = {
   createdAt: "2026-10-09T11:30:00Z",
 };
 
-function run(details: Partial<Run> = {}): Run {
+function run(details: Partial<Run> & Partial<Continuation> = {}): Run {
+  const {
+    attempt = 1,
+    retry,
+    inputResume,
+    mergeRelaunch,
+    runKind,
+    target,
+    handBacks,
+    implementedBy,
+    relaunch,
+    ...rest
+  } = details;
   return {
     repository: widgets,
     issue: 4,
     provider: "provider-a",
     model: "model-impl",
     effort: "medium",
-    attempt: 1,
+    continuation: {
+      attempt,
+      ...(retry && { retry }),
+      ...(inputResume && { inputResume }),
+      ...(mergeRelaunch && { mergeRelaunch }),
+      ...(runKind && { runKind }),
+      ...(target && { target }),
+      ...(handBacks !== undefined && { handBacks }),
+      ...(implementedBy !== undefined && { implementedBy }),
+      ...(relaunch && { relaunch }),
+    },
     startedAt: "2026-10-09T11:00:00Z",
     log: "/srv/factory/logs/issue-4-attempt-1.log",
     ended: null,
-    ...details,
+    ...rest,
   };
 }
 
 // An ended run whose one open PR is `pr`, still a draft when `draft`.
-function ended(details: Partial<Run> = {}, draft = false): Run {
+function ended(
+  details: Partial<Run> & Partial<Continuation> = {},
+  draft = false,
+): Run {
   return run({
     ended: {
       timedOut: false,
@@ -368,7 +394,7 @@ test("a person's triage label starts a claimed triage run on the host's triage d
       {
         kind: "launch",
         ...at,
-        runKind: "triage",
+        continuation: { runKind: "triage", attempt: 1 },
         provider: "provider-a",
         model: "model-triage",
         trigger: {
@@ -377,7 +403,6 @@ test("a person's triage label starts a claimed triage run on the host's triage d
         },
         effort: "medium",
         selection: "host-default",
-        attempt: 1,
       },
     ],
   );
@@ -447,8 +472,8 @@ test("a triage run releases its claim once its issue leaves triage, and fails if
 
 test("accepted readiness starts implement", () => {
   const launch = launchOf(decide());
-  assert.equal(launch?.runKind, undefined);
-  assert.equal(launch?.attempt, 1);
+  assert.equal(launch?.continuation.runKind, undefined);
+  assert.equal(launch?.continuation.attempt, 1);
   assert.equal(launch?.selection, "host-default");
 });
 
@@ -464,15 +489,17 @@ test("an implement run ending with a draft PR starts review on that PR, quietly 
       {
         kind: "launch",
         ...at,
-        runKind: "review",
+        continuation: {
+          runKind: "review",
+          attempt: 1,
+          target: pr,
+          handBacks: 0,
+          implementedBy: "provider-a",
+        },
         provider: "provider-b",
         model: "model-host",
         effort: "medium",
         selection: "host-default",
-        attempt: 1,
-        target: pr,
-        handBacks: 0,
-        implementedBy: "provider-a",
       },
     ],
   );
@@ -488,10 +515,10 @@ test("a review left a draft hands back to implement on the same PR, at most twic
     });
     assert.deepEqual(decisions[0], { kind: "keep", ...at, quiet: true });
     const launch = launchOf(decisions)!;
-    assert.equal(launch.runKind, undefined);
-    assert.deepEqual(launch.target, pr);
-    assert.equal(launch.handBacks, handBacks + 1);
-    assert.equal(launch.attempt, 1);
+    assert.equal(launch.continuation.runKind, undefined);
+    assert.deepEqual(launch.continuation.target, pr);
+    assert.equal(launch.continuation.handBacks, handBacks + 1);
+    assert.equal(launch.continuation.attempt, 1);
   }
   const exhausted = review(2);
   assert.deepEqual(decide({ issues: [issue(4, claimed)], runs: [exhausted] }), [
@@ -509,8 +536,8 @@ test("a review left a draft hands back to implement on the same PR, at most twic
       runs: [ended({ handBacks: 1, target: pr })],
     }),
   )!;
-  assert.equal(next.runKind, "review");
-  assert.equal(next.handBacks, 1);
+  assert.equal(next.continuation.runKind, "review");
+  assert.equal(next.continuation.handBacks, 1);
 });
 
 test("a review whose PR is ready awaits merge like a run without review", () => {
@@ -552,8 +579,8 @@ test("returning to the ready state resumes the same work and PR", () => {
   );
   const decisions = decide({ issues: [issue(4)], claims: [claim] });
   assert.deepEqual(decisions[0], { kind: "claim", ...at });
-  assert.deepEqual(launchOf(decisions)?.inputResume, inputResume);
-  assert.equal(launchOf(decisions)?.runKind, undefined);
+  assert.deepEqual(launchOf(decisions)?.continuation.inputResume, inputResume);
+  assert.equal(launchOf(decisions)?.continuation.runKind, undefined);
 });
 
 test("each optional-kind combination runs only its kinds", () => {
@@ -563,12 +590,15 @@ test("each optional-kind combination runs only its kinds", () => {
       const name = JSON.stringify(kinds);
       assert.equal(
         launchOf(decide({ issues: [issue(4, [labels.triage])], kinds }))
-          ?.runKind,
+          ?.continuation.runKind,
         triage ? "triage" : undefined,
         name,
       );
       const implement = launchOf(decide({ kinds }));
-      assert.ok(implement && implement.runKind === undefined, name);
+      assert.ok(
+        implement && implement.continuation.runKind === undefined,
+        name,
+      );
       const delivered = decide({
         issues: [issue(4, claimed)],
         runs: [ended({}, true)],
@@ -623,8 +653,8 @@ test("a review stopped at a gate resumes, claiming again, once the gate is clear
   });
   assert.deepEqual(resumed[0], { kind: "claim", ...at });
   const launch = launchOf(resumed)!;
-  assert.equal(launch.runKind, "review");
-  assert.deepEqual(launch.target, pr);
+  assert.equal(launch.continuation.runKind, "review");
+  assert.deepEqual(launch.continuation.target, pr);
   // Another stop the owner chose keeps it waiting.
   assert.equal(
     launchOf(
@@ -651,8 +681,8 @@ test("a review stopped with its PR ready resumes as review once its issue is rea
     [{ kind: "release", ...at }],
   );
   const launch = launchOf(decide({ issues: [issue(4)], claims: [claim] }))!;
-  assert.equal(launch.runKind, "review");
-  assert.equal(launch.handBacks, 1);
+  assert.equal(launch.continuation.runKind, "review");
+  assert.equal(launch.continuation.handBacks, 1);
 });
 
 test("run kinds pass the shared gate: invalid model labels and holds wait on every kind", () => {
@@ -714,7 +744,7 @@ test("a review merges its own held PR: the factory hold exempts the review's tar
     runs: [ended({}, true)],
     details: { factoryHold: [42] },
   });
-  assert.equal(launchOf(decisions)?.runKind, "review");
+  assert.equal(launchOf(decisions)?.continuation.runKind, "review");
 });
 
 test("with review on, a stale PR's merge relaunch runs review, keeping the release-hold asymmetry", () => {
@@ -729,8 +759,8 @@ test("with review on, a stale PR's merge relaunch runs review, keeping the relea
   });
   const decisions = decide({ issues: [issue(4, claimed)], runs: [stale] });
   const launch = launchOf(decisions)!;
-  assert.equal(launch.runKind, "review");
-  assert.deepEqual(launch.mergeRelaunch, pr);
+  assert.equal(launch.continuation.runKind, "review");
+  assert.deepEqual(launch.continuation.mergeRelaunch, pr);
   assert.equal(launch.selection, "recorded");
   // A fresh merge relaunch waits for a release hold...
   assert.match(
@@ -756,7 +786,7 @@ test("with review on, a stale PR's merge relaunch runs review, keeping the relea
         runs: [interrupted],
         details: { releaseHold: [9] },
       }),
-    )?.runKind,
+    )?.continuation.runKind,
     "review",
   );
 });
@@ -1048,7 +1078,7 @@ test("a retry on a provider other than its first attempt's records its stage's c
       },
     }),
   )!;
-  assert.equal(launch.attempt, 2);
+  assert.equal(launch.continuation.attempt, 2);
   assert.equal(
     `${launch.provider}/${launch.model} ${launch.selection}`,
     "provider-b/model-host policy",
@@ -1180,9 +1210,9 @@ test("a hand-back's failed implement attempt retries on the same PR", () => {
       ],
     }),
   )!;
-  assert.equal(launch.attempt, 2);
-  assert.deepEqual(launch.target, pr);
-  assert.equal(launch.handBacks, 1);
+  assert.equal(launch.continuation.attempt, 2);
+  assert.deepEqual(launch.continuation.target, pr);
+  assert.equal(launch.continuation.handBacks, 1);
 });
 
 test("an authorized issue author triggers triage without a label, including under a validator fallback", () => {
@@ -1191,7 +1221,10 @@ test("an authorized issue author triggers triage without a label, including unde
       author: owner,
       triage: { at: now, actor: { kind: "bot", login: "validator[bot]" } },
     });
-    assert.equal(launchOf(decide({ issues: [candidate] }))?.runKind, "triage");
+    assert.equal(
+      launchOf(decide({ issues: [candidate] }))?.continuation.runKind,
+      "triage",
+    );
     for (const stopped of [
       labels.ready,
       labels.reporter,
@@ -1200,7 +1233,7 @@ test("an authorized issue author triggers triage without a label, including unde
     ])
       assert.notEqual(
         launchOf(decide({ issues: [{ ...candidate, labels: [stopped] }] }))
-          ?.runKind,
+          ?.continuation.runKind,
         "triage",
       );
   }
@@ -1237,7 +1270,7 @@ test("outside issue text waits for a person's trusted label, never a bot fallbac
   assert.equal(
     launchOf(
       decide({ issues: [issue(4, [labels.triage], { author: outsider })] }),
-    )?.runKind,
+    )?.continuation.runKind,
     "triage",
   );
   assert.equal(
@@ -1262,7 +1295,10 @@ test("only a new reporter-state author reply retriggers triage, once, under a tr
     reporter: { at: "2026-10-08T00:00:00Z", actor: owner },
     authorReply: "2026-10-09T00:00:00Z",
   });
-  assert.equal(launchOf(decide({ issues: [candidate] }))?.runKind, "triage");
+  assert.equal(
+    launchOf(decide({ issues: [candidate] }))?.continuation.runKind,
+    "triage",
+  );
   for (const details of [
     { authorReply: null },
     { authorReply: candidate.reporter!.at },
@@ -1293,7 +1329,7 @@ test("only a new reporter-state author reply retriggers triage, once, under a tr
           },
         ],
       }),
-    )?.runKind,
+    )?.continuation.runKind,
     "triage",
   );
 });
@@ -1312,7 +1348,7 @@ test("a consumed opening or label cannot repeat triage; a later trusted label ca
           },
         ],
       }),
-    )?.runKind,
+    )?.continuation.runKind,
     "triage",
   );
 });
@@ -1325,7 +1361,7 @@ test("a host-verified factory finding triggers triage; an unverified bot citatio
   assert.equal(launchOf(decide({ issues: [candidate] })), undefined);
   assert.equal(
     launchOf(decide({ issues: [{ ...candidate, filedByTrustedRun: true }] }))
-      ?.runKind,
+      ?.continuation.runKind,
     "triage",
   );
 });
@@ -1339,9 +1375,9 @@ test("trusted unowned draft PRs start review with and without linked issues, thr
       pullRequest: { target: pr, draft: true },
     });
     const review = launchOf(decide({ issues: [candidate] }));
-    assert.equal(review?.runKind, "review");
+    assert.equal(review?.continuation.runKind, "review");
     assert.equal(review?.issue, 42);
-    assert.equal(review?.target?.number, 42);
+    assert.equal(review?.continuation.target?.number, 42);
     for (const details of [
       { author: { kind: "user", login: "outsider", role: null } as Actor },
       { author: { kind: "bot", login: "app[bot]" } as Actor },

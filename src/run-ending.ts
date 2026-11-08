@@ -7,6 +7,7 @@ import { unpushedChanges, type Git } from "./clone.ts";
 import { runKind, type FactoryConfiguration } from "./factory-configuration.ts";
 import type {
   Claim,
+  Continuation,
   Decision,
   Issue,
   Models,
@@ -58,13 +59,11 @@ export type EndingReads = {
 // An ended run or an orphaned claim as the host holds it: PRs opened since
 // `since` count, a review reads its PR's draft state, and its target is the
 // PR a review works on, which its run owns whatever its branch.
-type Ended = Partial<
-  Pick<Run, "mergeRelaunch" | "holdObserved" | "ownedPullRequests">
-> & {
+type Ended = Partial<Pick<Run, "holdObserved" | "ownedPullRequests">> & {
   issue: number;
   since?: string;
   review?: boolean;
-  target?: Pick<MergeRelaunch, "number">;
+  continuation?: Pick<Continuation, "mergeRelaunch" | "target">;
   mergeRelaunchHeads?: string[];
 };
 
@@ -79,7 +78,7 @@ export async function observeOwnership(
     ended.issue,
     ended.since,
     ended.review,
-    ended.target?.number,
+    ended.continuation?.target?.number,
   );
   return {
     observation,
@@ -107,7 +106,7 @@ export async function observeEnding(
   mergeRelaunchHeads?: string[];
 }> {
   const { observation, owned } = await observeOwnership(reads.platform, ended);
-  const { mergeRelaunch } = ended;
+  const mergeRelaunch = ended.continuation?.mergeRelaunch;
   const held = heldPullRequests(ended.holdObserved, owned);
   const mergeRelaunchHeads =
     mergeRelaunch && held.includes(mergeRelaunch.number)
@@ -199,16 +198,7 @@ async function readMergeCandidate(
 
 // The run an ending settles, or the attempt 1 an orphaned claim stands for,
 // and a failed first implement run that may retry on the retry stage's model.
-export type SettlingRun = Pick<
-  Run,
-  | "repository"
-  | "issue"
-  | "attempt"
-  | "inputResume"
-  | "runKind"
-  | "target"
-  | "handBacks"
-> & {
+export type SettlingRun = Pick<Run, "repository" | "issue" | "continuation"> & {
   log: string | null;
 };
 export type Retry = { run: SettlingRun; failure: string };
@@ -242,7 +232,7 @@ export function settleEnding(
       : {
           repository: repository.name,
           issue: ended.claim.issue,
-          attempt: 1,
+          continuation: { attempt: 1 },
           log: null,
         };
   const facts: EndingFacts & { timedOut?: boolean; orphaned?: true } =
@@ -266,8 +256,8 @@ export function settleEnding(
     };
     // Without a policy preference, a retry needs the host's retry model.
     return final ||
-      run.attempt === 2 ||
-      run.runKind !== undefined ||
+      run.continuation.attempt === 2 ||
+      run.continuation.runKind !== undefined ||
       (!repository.modelPolicy?.runKinds.implement?.retry &&
         "error" in models.resolveModel(snapshot.settings.retryModel))
       ? [decision]
@@ -279,7 +269,7 @@ export function settleEnding(
     return fail(result.invalid);
   if (valid?.outcome === "failed") return fail(valid.reason!);
   if (valid?.outcome === "stop") return [{ kind: "release", ...at }];
-  if (run.runKind === "triage")
+  if (run.continuation.runKind === "triage")
     return !valid && labels.triage && issue.labels.includes(labels.triage)
       ? fail(
           `the triage run ended with the issue still labelled ${labels.triage}`,
@@ -297,10 +287,10 @@ export function settleEnding(
     // A claim records no run kind, so it hands nothing off.
     const open = "run" in ended ? facts.openPullRequest : undefined;
     if (open && runKind(configuration, "review")) {
-      if (run.runKind !== "review")
+      if (run.continuation.runKind !== "review")
         return [{ kind: "keep", ...at, quiet: true }];
       if (open.draft)
-        return (run.handBacks ?? 0) < handBackLimit
+        return (run.continuation.handBacks ?? 0) < handBackLimit
           ? [{ kind: "keep", ...at, quiet: true }]
           : fail(
               `its review rounds did not converge after ${handBackLimit} hand-backs`,

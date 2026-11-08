@@ -2,7 +2,7 @@
 import type { Repository, Run } from "./factory.ts";
 import { holdKeys, type HoldKey } from "./hold-comments.ts";
 
-type Hold = { reason: string; hold: HoldKey };
+type Hold = { reason: string; hold: HoldKey; numbers: number[] | null };
 type Holds = Pick<Repository, "releaseHold" | "factoryHold"> & {
   configuration?: Repository["configuration"] | null;
 };
@@ -22,6 +22,7 @@ export function repositoryHold(
   if (numbers !== null && !others.length) return null;
   const numbered = others.map((number) => `#${number}`).join(", ");
   return {
+    numbers: numbers === null ? null : others,
     hold: factory ? holdKeys.factory : holdKeys.release,
     reason: factory
       ? numbers === null
@@ -39,6 +40,7 @@ export function repositoryGate(
 ): Hold | null {
   return repository.paused !== null
     ? {
+        numbers: null,
         reason: `${repository.name} is paused: ${repository.paused}`,
         hold: holdKeys.configuration,
       }
@@ -49,7 +51,7 @@ export function repositoryGate(
 // supplies ownership for orphaned, interrupted and paused merge launches.
 export function ownedPullRequests(
   run?: Run,
-  target = run?.mergeRelaunch,
+  target = run?.continuation.mergeRelaunch,
 ): number[] {
   return run?.ownedPullRequests ?? (target ? [target.number] : []);
 }

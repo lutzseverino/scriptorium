@@ -1,5 +1,6 @@
 // The factory's decision core: a pure function from a snapshot of the host's
 // repositories and runs to the decisions the host carries out.
+import type { Recovery } from "./clone.ts";
 import {
   launchArguments,
   runKind,
@@ -106,14 +107,35 @@ export type Pause = {
   until: string;
 };
 
+// Launch facts retained whole through the host, snapshots and restarts.
+export type Continuation = {
+  trigger?: Trigger;
+  recovery?: Recovery;
+  // Absent for implement, the kind every version-2 run is.
+  runKind?: Exclude<RunKindName, "implement">;
+  attempt: 1 | 2;
+  // The first attempt's failure and log a retry launched with.
+  retry?: { failure: string; log: string };
+  // The delivery task, retained through interruptions and provider pauses.
+  mergeRelaunch?: MergeRelaunch;
+  inputResume?: InputResume;
+  // The PR a review or a review's hand-back works on, the hand-backs its
+  // issue's reviews have made, and, for a review, the provider of the
+  // implement attempt that produced the PR.
+  target?: MergeRelaunch;
+  handBacks?: number;
+  implementedBy?: string;
+  // An interrupted or paused run launching again as the same attempt.
+  relaunch?: true;
+};
+
 // A run the host started, in the repository named `<owner>/<name>`. `ended`
 // is null while its sandbox runs, interrupted once a factory restart stopped
 // its sandbox, and paused once its agent exited on a pause's cause.
 export type Run = {
   repository: string;
   issue: number;
-  // Absent for implement, the kind every version-2 run is.
-  runKind?: Exclude<RunKindName, "implement">;
+  continuation: Continuation;
   provider: string;
   model: string;
   effort: string;
@@ -121,23 +143,10 @@ export type Run = {
   // provider than its implement attempt's could not have one.
   selection?: Selection;
   diversity?: "unavailable";
-  trigger?: Trigger;
-  attempt: 1 | 2;
-  // The first attempt's failure and log a retry launched with.
-  retry?: { failure: string; log: string };
-  // The delivery task, retained through interruptions and provider pauses.
-  mergeRelaunch?: MergeRelaunch;
-  inputResume?: InputResume;
   // Observed hold numbers; null means a read failed during the run.
   holdObserved?: number[] | null;
   // PRs the run owns, retaining ownership of PRs that have since closed.
   ownedPullRequests?: number[];
-  // The PR a review or a review's hand-back works on, the hand-backs its
-  // issue's reviews have made, and, for a review, the provider of the
-  // implement attempt that produced the PR.
-  target?: MergeRelaunch;
-  handBacks?: number;
-  implementedBy?: string;
   startedAt: string;
   log: string;
   // The result the run left when its agent exited, as the host read it.
@@ -253,22 +262,12 @@ export type Launch = {
   kind: "launch";
   repository: string;
   issue: number;
-  runKind?: Run["runKind"];
+  continuation: Continuation;
   provider: string;
   model: string;
   effort: string;
   selection: Selection;
   diversity?: "unavailable";
-  trigger?: Trigger;
-  attempt: 1 | 2;
-  retry?: { failure: string; log: string };
-  // An interrupted or paused run launching again as the same attempt.
-  relaunch?: true;
-  mergeRelaunch?: MergeRelaunch;
-  inputResume?: InputResume;
-  target?: MergeRelaunch;
-  handBacks?: number;
-  implementedBy?: string;
 };
 
 export type Decision = { repository: string; issue: number } & (
@@ -616,7 +615,7 @@ type ContinuationState =
     }
   | { kind: "handBack"; target: MergeRelaunch; handBacks: number };
 
-type Continuation = {
+type Admission = {
   kind: ContinuationState["kind"];
   repository: Repository;
   issue: Issue;
@@ -634,19 +633,7 @@ type Continuation = {
   afterModel: Decision[] | null;
   pause: Pause | null;
   reconcile: { readiness: boolean; pending: boolean };
-  launch: Pick<
-    Launch,
-    | "runKind"
-    | "attempt"
-    | "retry"
-    | "inputResume"
-    | "mergeRelaunch"
-    | "relaunch"
-    | "target"
-    | "handBacks"
-    | "implementedBy"
-    | "trigger"
-  >;
+  launch: Continuation;
   claim: boolean;
   unpause: boolean;
 };
@@ -658,7 +645,7 @@ function continuation(
   retry: Retry | undefined,
   snapshot: Snapshot,
   models: Models,
-): Continuation {
+): Admission {
   const { configuration } = repository;
   const { labels } = configuration;
   const previous = snapshot.runs.find(
@@ -681,17 +668,17 @@ function continuation(
   const open =
     ended?.pullRequest === "open" ? ended.openPullRequest : undefined;
   const pullRequest = open && pullRequestIdentity(open);
-  const handBacks = previous?.handBacks ?? 0;
+  const handBacks = previous?.continuation.handBacks ?? 0;
   const handoff: ContinuationState | undefined =
     reviews && previous && pullRequest && !isStopped(issue.labels, labels)
-      ? previous.runKind === undefined
+      ? previous.continuation.runKind === undefined
         ? {
             kind: "review",
             target: pullRequest,
             implementedBy: previous.provider,
             handBacks,
           }
-        : previous.runKind === "review" &&
+        : previous.continuation.runKind === "review" &&
             open.draft &&
             handBacks < handBackLimit
           ? { kind: "handBack", target: pullRequest, handBacks: handBacks + 1 }
@@ -721,7 +708,9 @@ function continuation(
     !snapshot.runs.some(
       (run) =>
         run.repository === repository.name &&
-        (ownedPullRequests(run, run.target).includes(issue.number) ||
+        (ownedPullRequests(run, run.continuation.target).includes(
+          issue.number,
+        ) ||
           issue.pullRequest?.headBranch === `factory/issue-${run.issue}`),
     ) &&
     draftTrigger(issue, policy(repository));
@@ -760,7 +749,7 @@ function continuation(
   const run = resumed ?? previous;
   const classified = { ...state, repository, issue, previous };
   const recorded = resumed ?? (state.kind === "merge" ? previous : undefined);
-  const mergeExcluded = resumed?.mergeRelaunch
+  const mergeExcluded = resumed?.continuation.mergeRelaunch
     ? exclusionReason(issue.labels, labels, "merge")
     : null;
   const pause =
@@ -771,14 +760,16 @@ function continuation(
   // review's once review is on, since only review then merges.
   const launchTarget =
     handedOn?.target ??
-    (state.kind === "merge" ? target : (run?.target ?? run?.mergeRelaunch));
+    (state.kind === "merge"
+      ? target
+      : (run?.continuation.target ?? run?.continuation.mergeRelaunch));
   const kind: RunKindName =
     state.kind === "triage"
       ? "triage"
       : state.kind === "review" || (state.kind === "merge" && reviews)
         ? "review"
         : state.kind === "resume"
-          ? (resumed!.runKind ?? "implement")
+          ? (resumed!.continuation.runKind ?? "implement")
           : "implement";
   const expanded = launchArguments(
     configuration,
@@ -798,7 +789,7 @@ function continuation(
                 ? "review"
                 : "initial"
               : continuationRules[state.kind].stage,
-        } as Continuation["modelSource"]),
+        } as Admission["modelSource"]),
     diversity:
       kind === "review" &&
       reviews?.differentProvider === true &&
@@ -844,13 +835,13 @@ function continuation(
                 failure: state.retry.failure,
                 log: state.retry.run.log ?? "",
               },
-              ...(state.retry.run.inputResume && {
-                inputResume: state.retry.run.inputResume,
+              ...(state.retry.run.continuation.inputResume && {
+                inputResume: state.retry.run.continuation.inputResume,
               }),
               // A hand-back's retry continues the same PR.
-              ...(state.retry.run.target && {
-                target: state.retry.run.target,
-                handBacks: state.retry.run.handBacks,
+              ...(state.retry.run.continuation.target && {
+                target: state.retry.run.continuation.target,
+                handBacks: state.retry.run.continuation.handBacks,
               }),
             }
           : handedOn
@@ -862,25 +853,22 @@ function continuation(
                   handedOn.implementedBy !== undefined && {
                     implementedBy: handedOn.implementedBy,
                   }),
-                ...((claim?.inputResume ?? previous?.inputResume) && {
-                  inputResume: claim?.inputResume ?? previous?.inputResume,
+                ...((claim?.inputResume ??
+                  previous?.continuation.inputResume) && {
+                  inputResume:
+                    claim?.inputResume ?? previous?.continuation.inputResume,
                 }),
               }
             : {
-                attempt: run?.attempt ?? 1,
-                ...(run?.retry && { retry: run.retry }),
-                ...(run?.inputResume && { inputResume: run.inputResume }),
+                ...(run?.continuation ?? { attempt: 1 }),
                 relaunch: true,
-                ...((state.kind === "merge" ? target : run?.mergeRelaunch) && {
+                ...((state.kind === "merge"
+                  ? target
+                  : run?.continuation.mergeRelaunch) && {
                   mergeRelaunch:
-                    state.kind === "merge" ? target : run?.mergeRelaunch,
-                }),
-                ...(run?.target && { target: run.target }),
-                ...(run?.handBacks !== undefined && {
-                  handBacks: run.handBacks,
-                }),
-                ...(run?.implementedBy !== undefined && {
-                  implementedBy: run.implementedBy,
+                    state.kind === "merge"
+                      ? target
+                      : run?.continuation.mergeRelaunch,
                 }),
               }),
     },
@@ -919,7 +907,7 @@ function resumes(repository: Repository, claim: Claim): boolean {
 // Exclusions are selected once with the continuation, before admission.
 function continuationExclusions(
   next: ContinuationState &
-    Pick<Continuation, "repository" | "issue" | "previous">,
+    Pick<Admission, "repository" | "issue" | "previous">,
 ): Decision[] | null {
   const { repository, issue } = next;
   const { labels } = repository.configuration;
@@ -991,7 +979,7 @@ function continuationExclusions(
 }
 
 function skipped(
-  next: Pick<Continuation, "repository" | "issue" | "kind">,
+  next: Pick<Admission, "repository" | "issue" | "kind">,
   reason: string,
   hold?: HoldKey,
   prefix: string = continuationRules[next.kind].prefix,
@@ -1016,7 +1004,7 @@ type Choice = { model: Model; selection: Selection; diversity?: "unavailable" };
 // default for that stage only when the repository's model policy says so,
 // and only when that default is available; otherwise the launch waits.
 function admit(
-  next: Continuation,
+  next: Admission,
   running: Map<string, number>,
   snapshot: Snapshot,
   models: Models,
@@ -1103,7 +1091,7 @@ function admit(
       ...model,
       selection,
       ...(diversity && { diversity }),
-      ...next.launch,
+      continuation: next.launch,
     },
   ];
 }
@@ -1333,7 +1321,7 @@ function mergeTarget(
     previous?.ended &&
     ("interrupted" in previous.ended || "paused" in previous.ended)
   )
-    return previous.mergeRelaunch;
+    return previous.continuation.mergeRelaunch;
   return claim?.inputResume ? undefined : claim?.mergeCandidate;
 }
 

@@ -1294,7 +1294,7 @@ test("one process launches each repository's ready issues from that repository's
       "utf8",
     ),
   );
-  assert.equal(record.attempt, 1);
+  assert.equal(record.continuation.attempt, 1);
   assert.equal(record.exited, false);
 });
 
@@ -1337,10 +1337,12 @@ test("a failed launch record leaves no sandbox or cap slot and its orphaned clai
       provider: "claude-code",
       model: "claude-sonnet-5-5",
       effort: "high",
-      attempt: 2,
-      retry: {
-        failure: "no factory run or open pull request holds its claim",
-        log: "",
+      continuation: {
+        attempt: 2,
+        retry: {
+          failure: "no factory run or open pull request holds its claim",
+          log: "",
+        },
       },
     },
   ]);
@@ -2282,7 +2284,7 @@ test("an incomplete run records recovery identities and a retry revalidates pres
   );
   assert.equal(record.launchResult.sessionId, "session-4");
   assert.equal(record.launchResult.preservedWorktreePath, work);
-  assert.deepEqual(record.recovery, {
+  assert.deepEqual(record.continuation.recovery, {
     branch: "factory/issue-4",
     head,
     worktree: work,
@@ -2329,10 +2331,7 @@ test("custom skill invocations and retries retain the unattended execution and c
     assert.match(options.prompt!, /ship #4/);
     assert.match(options.prompt!, /This is a factory run/);
     assert.doesNotMatch(options.prompt!, /app-author review policy/);
-    assert.match(
-      options.prompt!,
-      /Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced/,
-    );
+    assert.match(options.prompt!, /Use only the supplied credentials/);
     assert.match(options.prompt!, /supplied credentials/);
     assert.match(options.prompt!, /Before every delivery push.*fetch.*origin/);
     assert.match(options.prompt!, /resolve.*remote default branch/);
@@ -2362,7 +2361,7 @@ test("custom skill invocations and retries retain the unattended execution and c
   }
 });
 
-test("review policy guidance stays repository-specific through retries and recovery", async (t) => {
+test("review policy files do not add policy to prompts through retries and recovery", async (t) => {
   const run = host(t, {
     repositories: {
       "acme/widgets": [{ number: 4 }],
@@ -2391,8 +2390,6 @@ test("review policy guidance stays repository-specific through retries and recov
   await run.restart().tick();
 
   assert.equal(run.launched.length, 6);
-  const policy =
-    " Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs.";
   for (let offset = 0; offset < 6; offset += 2) {
     const pair = run.launched.slice(offset, offset + 2);
     const withPolicy = pair.find(
@@ -2401,18 +2398,17 @@ test("review policy guidance stays repository-specific through retries and recov
     const withoutPolicy = pair.find(
       ({ options }) => options.name === "acme/gadgets#4",
     )!.options.prompt!;
-    assert.ok(withPolicy.includes(policy));
+    assert.doesNotMatch(
+      withPolicy,
+      /app-author review policy|internal reviews|babysit|repo-canon/,
+    );
     assert.doesNotMatch(withoutPolicy, /app-author review policy/);
     // All other unattended-delivery instructions are identical.
     const guidance = (text: string) =>
       text
         .split("\n\nUnattended execution:\n")[1]
-        .split("\nRecovery state:")[0]
-        .split("\nFactory filing run:")[0];
-    assert.equal(
-      guidance(withPolicy).replace(policy, ""),
-      guidance(withoutPolicy),
-    );
+        .split("\nRecovery state:")[0];
+    assert.equal(guidance(withPolicy), guidance(withoutPolicy));
     if (offset > 0) {
       assert.match(withPolicy, /First attempt failure:/);
       assert.match(withoutPolicy, /First attempt failure:/);
@@ -2423,7 +2419,7 @@ test("review policy guidance stays repository-specific through retries and recov
 });
 
 for (const present of [false, true])
-  test(`recovery refreshes review policy presence from ${present} on the default branch`, async (t) => {
+  test(`review policy presence changes from ${present} do not inject prompt policy on recovery`, async (t) => {
     const policyPath = ".github/factory-review-policy.json";
     const policy = JSON.stringify({ version: 1, author: "factory[bot]" });
     const bare = remote(t, {
@@ -2437,7 +2433,7 @@ for (const present of [false, true])
     await run.tick();
     assert.equal(
       run.launched[0].options.prompt!.includes("app-author review policy"),
-      present,
+      false,
     );
     run.interrupt();
     run.launched[0].finish();
@@ -2459,7 +2455,7 @@ for (const present of [false, true])
     assert.equal(run.launched.length, 2);
     assert.equal(
       run.launched[1].options.prompt!.includes("app-author review policy"),
-      !present,
+      false,
     );
   });
 
@@ -2577,7 +2573,7 @@ for (const timedOut of [false, true])
           provider: "claude-code",
           model: "claude-sonnet-5-5",
           effort: "high",
-          attempt: 1,
+          continuation: { attempt: 1 },
         },
       ],
     );
@@ -2751,7 +2747,7 @@ for (const comments of [
     assert.deepEqual(notices(issue), []);
     assert.equal(run.launched.length, 1);
     const recovered = recordOf(run.state, 4, 1);
-    assert.equal(recovered.attempt, 1);
+    assert.equal(recovered.continuation.attempt, 1);
     assert.equal(recovered.pullRequestSince, previous.pullRequestSince);
     assert.equal(recovered.log, previous.log);
     assert.equal("awaitingMergeNotified" in recovered, false);
@@ -2940,7 +2936,10 @@ for (const scenario of [
       assert.equal(run.launched.length, 1);
     } else {
       assert.equal(decisions[0].kind, "launch");
-      assert.equal(decisions[0].kind === "launch" && decisions[0].attempt, 2);
+      assert.equal(
+        decisions[0].kind === "launch" && decisions[0].continuation.attempt,
+        2,
+      );
       run.launched[1].finish();
     }
     if (preserved) assert.deepEqual(recovery(), preserved);
@@ -3339,7 +3338,7 @@ test("a stop signal records the running runs as interrupted and removes their sa
   // The raw log goes with the run's private directory.
   assert.equal(existsSync(dirname(rawLog(launch.options))), false);
   const interrupted = {
-    attempt: 1,
+    continuation: { attempt: 1 },
     ended: { interrupted: true },
     exited: true,
     exitedAt: "2026-10-09T12:30:00.000Z",
@@ -3392,13 +3391,15 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
       provider: "codex",
       model: "gpt-5.5",
       effort: "high",
-      attempt: 2,
-      retry: {
-        failure:
-          "the run left no run result at /run/factory/result/result.json",
-        log: firstLog,
+      continuation: {
+        attempt: 2,
+        retry: {
+          failure:
+            "the run left no run result at /run/factory/result/result.json",
+          log: firstLog,
+        },
+        relaunch: true,
       },
-      relaunch: true,
     },
   ]);
   assert.deepEqual(run.events, [
@@ -3420,7 +3421,7 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
   ]);
   assert.equal(recordOf(run.state, 4, 1).settled, true);
   const record = recordOf(run.state, 4, 2);
-  assert.equal(record.attempt, 2);
+  assert.equal(record.continuation.attempt, 2);
   assert.equal(record.interrupted, false);
   // The relaunch publishes to its attempt's log.
   assert.equal(
@@ -4298,7 +4299,7 @@ for (const ended of ["timed out", "orphaned"] as const)
     issue.labels = ["ready-for-agent"];
     const decisions = await active.tick();
     const launch = decisions.find((decision) => decision.kind === "launch");
-    assert.equal(launch?.attempt, 1);
+    assert.equal(launch?.continuation.attempt, 1);
     assert.equal(run.launched.length, 3);
     assert.equal(invocation(run.launched[2].options.prompt), "/implement #4");
     assert.deepEqual(run.launched[2].options.branchStrategy, {
@@ -4306,7 +4307,7 @@ for (const ended of ["timed out", "orphaned"] as const)
       branch: "factory/issue-4",
     });
     assert.equal(git(work, ["rev-parse", "HEAD"]).trim(), head);
-    assert.equal(recordOf(run.state, 4, 1).attempt, 1);
+    assert.equal(recordOf(run.state, 4, 1).continuation.attempt, 1);
   });
 
 test("an orphaned second attempt with no interrupted record fails after startup stops its sandbox", async (t) => {
@@ -4525,7 +4526,7 @@ test("an orphaned claim waits for a failed role lookup without a failure comment
   const launch = (await run.tick()).find(
     (decision) => decision.kind === "launch",
   );
-  assert.equal(launch?.attempt, 2);
+  assert.equal(launch?.continuation.attempt, 2);
   assert.equal(run.launched.length, 1);
 });
 
@@ -4676,8 +4677,7 @@ for (const ended of [
           provider: "claude-code",
           model: "claude-sonnet-5-5",
           effort: "high",
-          attempt: 1,
-          relaunch: true,
+          continuation: { attempt: 1, relaunch: true },
         },
       ],
     );
@@ -4756,8 +4756,8 @@ test("a paused run stays paused across a restart, untold again, and resumes unde
   const launch = (await restarted.tick()).find(
     (decision) => decision.kind === "launch",
   );
-  assert.equal(launch?.attempt, 1);
-  assert.equal(launch?.relaunch, true);
+  assert.equal(launch?.continuation.attempt, 1);
+  assert.equal(launch?.continuation.relaunch, true);
   assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
   assert.equal(run.launched.length, 2);
 });
@@ -4872,7 +4872,7 @@ test("a run that ends without a recognized limit error settles through the outco
   await settled();
   const [decision] = await run.tick();
   assert.equal(decision.kind, "launch");
-  assert.equal(decision.kind === "launch" && decision.attempt, 2);
+  assert.equal(decision.kind === "launch" && decision.continuation.attempt, 2);
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "ready-for-agent",
     "factory:running",
@@ -5051,16 +5051,18 @@ test("an overdue legacy paused record relaunches after a restart with usage stil
         provider: "codex",
         model: "gpt-5.5",
         effort: "high",
-        attempt: 2,
-        retry: {
-          failure:
-            "the run left no run result at /run/factory/result/result.json",
-          log: join(
-            run.state,
-            "repositories/acme/widgets/logs/issue-4-attempt-1.log",
-          ),
+        continuation: {
+          attempt: 2,
+          retry: {
+            failure:
+              "the run left no run result at /run/factory/result/result.json",
+            log: join(
+              run.state,
+              "repositories/acme/widgets/logs/issue-4-attempt-1.log",
+            ),
+          },
+          relaunch: true,
         },
-        relaunch: true,
       },
     ],
   );
@@ -5228,12 +5230,14 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
   const launchedBefore = run.launched.length;
   const relaunched = launchesOf(await restarted.tick());
   assert.deepEqual(
-    relaunched.map(({ repository, issue, attempt, relaunch }) => ({
-      repository,
-      issue,
-      attempt,
-      relaunch,
-    })),
+    relaunched.map(
+      ({ repository, issue, continuation: { attempt, relaunch } }) => ({
+        repository,
+        issue,
+        attempt,
+        relaunch,
+      }),
+    ),
     [
       { repository: "acme/widgets", issue: 4, attempt: 1, relaunch: true },
       { repository: "acme/gadgets", issue: 6, attempt: 1, relaunch: true },
@@ -5469,7 +5473,10 @@ test("a paused run relaunches below the drain threshold despite its provider's o
   run.clock.now = new Date("2026-10-09T12:20:00Z");
   const decisions = await run.tick();
   assert.deepEqual(
-    launchesOf(decisions).map(({ issue, relaunch }) => ({ issue, relaunch })),
+    launchesOf(decisions).map(({ issue, continuation: { relaunch } }) => ({
+      issue,
+      relaunch,
+    })),
     [{ issue: 4, relaunch: true }],
   );
   assert.match(held(run, 5)!, /^claude-code has an owner hold from 96% at /);
@@ -5855,8 +5862,8 @@ test("an orphan claim relaunches its behind PR once per head across passes and r
   const decisions = await run.tick();
   const launch = decisions.find((d) => d.kind === "launch");
   assert.ok(launch && launch.kind === "launch");
-  assert.equal(launch.mergeRelaunch?.headCommit, pr.headCommit);
-  assert.equal(launch.attempt, 1);
+  assert.equal(launch.continuation.mergeRelaunch?.headCommit, pr.headCommit);
+  assert.equal(launch.continuation.attempt, 1);
   assert.equal(run.launched.length, 1);
   assert.deepEqual(run.status().repositories[0].mergeRelaunches, [
     { issue: 4, pullRequest: 40, headCommit: pr.headCommit },
@@ -5865,7 +5872,7 @@ test("an orphan claim relaunches its behind PR once per head across passes and r
   const prompt = run.launched[0].options.prompt!;
   assert.match(prompt, /bring PR #40/i);
   assert.ok(prompt.includes(pr.headCommit));
-  assert.match(prompt, /installed babysit/);
+  assert.doesNotMatch(prompt, /babysit|repo-canon|internal reviews/);
   await run.tick();
   assert.equal(
     run.launched.length,
@@ -6073,29 +6080,28 @@ test("a merge relaunch preserves the recorded retry, dirty work, PR history and 
   await run.tick();
   assert.equal(run.launched.length, 3);
   const record = recordOf(run.state, 4, 2);
-  assert.equal(record.attempt, 2);
+  assert.equal(record.continuation.attempt, 2);
   assert.equal(record.provider, previous.provider);
   assert.equal(record.model, previous.model);
   assert.equal(record.effort, previous.effort);
   assert.equal(record.pullRequestSince, previous.pullRequestSince);
-  assert.deepEqual(record.retry, previous.retry);
+  assert.deepEqual(record.continuation.retry, previous.continuation.retry);
   const prompt = run.launched[2].options.prompt!;
-  assert.match(prompt, /app-author review policy/);
-  assert.match(
+  assert.doesNotMatch(
     prompt,
-    /restriction below applies only to restoring local state/,
+    /app-author review policy|internal reviews|babysit|repo-canon/,
   );
   assert.match(prompt, /Recovery itself must not push/);
-  assert.match(prompt, /current-head checks and reviews/);
+  assert.match(prompt, /Preserve this same PR/);
   assert.match(
     prompt,
-    /Conflicts, failed validation or checks, uncertain ownership and permission refusals.*reasoned owner handoff without merging/,
+    /ownership is uncertain or reconstruction has conflicts.*preserve the work and hand off/,
   );
   assert.match(
     prompt,
     /no second push, credential discovery or identity switch/,
   );
-  assert.match(prompt, /Never use GitHub update-branch/);
+  assert.match(prompt, /Never merge the default branch into the issue branch/);
   assert.ok(prompt.includes(worktree));
   assert.equal(git(worktree, ["status", "--porcelain"]), dirty);
   run.interrupt();
@@ -6267,7 +6273,7 @@ for (const reason of ["conflict", "failed checks", "permission refusal"])
     });
     await run.tick();
     const prompt = run.launched[0].options.prompt!;
-    assert.match(prompt, /reasoned owner handoff without merging/);
+    assert.match(prompt, /owner handoff/);
     const clone = run.clone("acme/widgets");
     git(clone, ["branch", pr.headBranch, pr.headCommit]);
     const worktree = join(clone, ".sandcastle", "handoff");
@@ -6428,7 +6434,7 @@ for (const state of ["open", "closed"] as const)
       const retryRestart = run.restart();
       await retryRestart.tick();
       assert.equal(run.launched.length, 3);
-      assert.equal(recordOf(run.state, 4, 2).attempt, 2);
+      assert.equal(recordOf(run.state, 4, 2).continuation.attempt, 2);
       assert.match(
         run.launched[2].options.prompt!,
         /Needs-input resume: continue PR #40/,
@@ -6887,8 +6893,8 @@ test("a release-held current PR resumes once after the last hold clears across r
   run.github.releaseHolds["acme/widgets"] = [80, 81];
   await run.tick();
   const prompt = run.launched[0].options.prompt!;
-  assert.match(prompt, /factory:release-hold/);
-  assert.match(prompt, /before any merge/);
+  assert.match(prompt, /release-hold: active: #80, #81/);
+  assert.doesNotMatch(prompt, /before any merge/);
   const issue = run.github.find("acme/widgets", 4);
   issue.branchPullRequests.push(publishedPR(bare));
   run.launched[0].finish();
@@ -7283,8 +7289,7 @@ test("a factory hold set mid-run lets the run finish, stops pickup and its merge
   await run.tick();
   assert.equal(run.launched.length, 1);
   const prompt = run.launched[0].options.prompt!;
-  assert.match(prompt, /Factory hold: before any merge/);
-  assert.match(prompt, /"factory:hold", other than your own PR/);
+  assert.doesNotMatch(prompt, /factory-hold:|before any merge/);
   run.github.factoryHolds[name] = { issues: [9], pullRequests: [] };
   const ready = run.github.find(name, 5);
   ready.labels = ["ready-for-agent"];
@@ -7906,10 +7911,10 @@ test("a version 3 issue goes from implement to review to a hand-back on the same
   assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
   assert.equal(run.launched[1].options.name, "acme/widgets#4");
   const review = recordOf(run.state, 4, 1);
-  assert.equal(review.runKind, "review");
-  assert.deepEqual(review.target.number, 42);
-  assert.equal(review.implementedBy, "claude-code");
-  assert.equal(review.handBacks, 0);
+  assert.equal(review.continuation.runKind, "review");
+  assert.deepEqual(review.continuation.target.number, 42);
+  assert.equal(review.continuation.implementedBy, "claude-code");
+  assert.equal(review.continuation.handBacks, 0);
   assert.equal(review.selection, "host-default");
   // The host has no review default on another provider.
   assert.equal(review.diversity, "unavailable");
@@ -7933,7 +7938,7 @@ test("a version 3 issue goes from implement to review to a hand-back on the same
     handBack,
     /Review hand-back: the latest review of PR #42 handed the work back \(hand-back 1 of at most 2\)/,
   );
-  assert.equal(recordOf(run.state, 4, 1).handBacks, 1);
+  assert.equal(recordOf(run.state, 4, 1).continuation.handBacks, 1);
   assert.deepEqual(notices(issue), []);
   assert.deepEqual(issue.labels, ["state:ready", "factory:running"]);
 });
@@ -7981,7 +7986,7 @@ test("a version 3 triage label a person applied starts triage on the model polic
     "state:triage",
     "factory:running",
   ]);
-  assert.equal(recordOf(run.state, 4, 1).runKind, "triage");
+  assert.equal(recordOf(run.state, 4, 1).continuation.runKind, "triage");
   assert.equal(recordOf(run.state, 4, 1).selection, "policy");
   assert.ok(
     run.reports.some((line) =>
@@ -8067,7 +8072,10 @@ test("a review stopped at a gate is released with its PR, and resumes review onc
   assert.equal(run.launched.length, 3);
   assert.equal(invocation(run.launched[2].options.prompt), "/review #42");
   assert.deepEqual(issue.labels, ["state:owner", "factory:running"]);
-  assert.equal(recordOf(run.state, 4, 1).implementedBy, "claude-code");
+  assert.equal(
+    recordOf(run.state, 4, 1).continuation.implementedBy,
+    "claude-code",
+  );
   assert.equal(actions(issue).length, 1);
   assert.match(runComment(issue), /- \[ \] Review: running · /);
 });
@@ -8331,7 +8339,7 @@ test("an unowned trusted draft starts review against its PR body and resumes the
   await restarted.tick();
   assert.equal(run.launched.length, 2, run.reports.join("\n"));
   assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
-  assert.equal(recordOf(run.state, 42, 1).target.number, 42);
+  assert.equal(recordOf(run.state, 42, 1).continuation.target.number, 42);
 });
 
 test("an independent review's answered stop resumes review on its PR after its label goes, across a restart", async (t) => {
@@ -8461,8 +8469,8 @@ test("historical PR ownership survives another run replacing the issue's current
   });
   run.clock.now = new Date("2026-10-09T12:02:00Z");
   await run.tick();
-  assert.equal(recordOf(run.state, 4, 1).runKind, "triage");
-  assert.equal(recordOf(run.state, 4, 1).target, undefined);
+  assert.equal(recordOf(run.state, 4, 1).continuation.runKind, "triage");
+  assert.equal(recordOf(run.state, 4, 1).continuation.target, undefined);
   await run.tick();
   const restarted = run.restart();
   await restarted.tick();
@@ -8513,7 +8521,7 @@ test("concurrent triage, implement and review runs in one repository each keep t
   await until(() => recordOf(run.state, 6, 1).exited === true);
   await run.tick();
   assert.equal(run.launched.length, 4);
-  assert.equal(recordOf(run.state, 6, 1).runKind, "review");
+  assert.equal(recordOf(run.state, 6, 1).continuation.runKind, "review");
   const [, review] = launchOf(6);
 
   assert.deepEqual(
@@ -8936,3 +8944,59 @@ test("a run that exited with an invalid result still fails after a restart befor
     /First attempt failure: its run result is not JSON\n/,
   );
 });
+
+for (const legacy of [false, true])
+  test(`fresh and retry continuations survive interruption and snapshot restoration, legacy: ${legacy}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    const fresh = launchesOf(await run.tick())[0];
+    assert.deepEqual(fresh.continuation, { attempt: 1 });
+    assert.deepEqual(
+      recordOf(run.state, 4, 1).continuation,
+      fresh.continuation,
+    );
+    git(run.clone("acme/widgets"), ["branch", "factory/issue-4"]);
+    writeFileSync(
+      rawLog(run.launched[0].options),
+      "host-read retry evidence\n",
+    );
+    run.launched[0].finish();
+    await run.drain();
+    const retry = launchesOf(await run.tick())[0];
+    const recorded = recordOf(run.state, 4, 2);
+    assert.equal(recorded.continuation.attempt, 2);
+    assert.deepEqual(recorded.continuation.retry, retry.continuation.retry);
+    assert.equal(recorded.continuation.recovery.branch, "factory/issue-4");
+    assert.match(run.launched[1].options.prompt!, /host-read retry evidence/);
+    run.interrupt();
+    run.launched[1].finish();
+    await run.drain();
+    if (legacy) {
+      const flat = recordOf(run.state, 4, 2);
+      Object.assign(flat, flat.continuation);
+      delete flat.continuation;
+      writeFileSync(
+        join(
+          run.state,
+          "repositories/acme/widgets/runs/issue-4-attempt-2.json",
+        ),
+        JSON.stringify(flat),
+      );
+    }
+    const resumed = launchesOf(await run.restart().tick())[0];
+    // The core's restored snapshot retains recovery alongside the retry facts.
+    assert.deepEqual(resumed.continuation, {
+      ...recorded.continuation,
+      relaunch: true,
+    });
+    assert.deepEqual(recordOf(run.state, 4, 2).continuation, {
+      ...recorded.continuation,
+      relaunch: true,
+    });
+    assert.equal(
+      run.launched[2].options.prompt,
+      run.launched[1].options.prompt,
+    );
+  });
