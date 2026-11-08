@@ -27,9 +27,17 @@ import {
 } from "./clone.ts";
 import {
   factoryConfigurationPath,
+  launchArguments,
   readFactoryConfiguration,
+  runKind,
   type FactoryConfiguration,
 } from "./factory-configuration.ts";
+import { claimLabels, gateLabels, isStopped } from "./label-roles.ts";
+import {
+  modelPolicyPath,
+  readModelPolicy,
+  type ModelPolicy,
+} from "./model-policy.ts";
 import {
   decideFactory,
   type Claim,
@@ -164,9 +172,13 @@ type Pass = {
   read: Repository | null;
   configuration: FactoryConfiguration | null;
   hasReviewPolicy: boolean;
+  // The repository's model policy from the same revision, null without one.
+  modelPolicy: ModelPolicy | null;
   releaseHold?: number[] | null;
   // Open issues and PRs carrying `labels.hold`; null when the read failed.
   factoryHold?: number[] | null;
+  // Open PRs carrying a gate label; null when the read failed.
+  gated?: number[] | null;
 };
 
 export function createHost(
@@ -195,6 +207,12 @@ export function createHost(
   const settings: Settings = {
     defaultModel: configuration.models.default,
     retryModel: configuration.models.retry,
+    ...(configuration.models.triage !== undefined && {
+      triageModel: configuration.models.triage,
+    }),
+    ...(configuration.models.review !== undefined && {
+      reviewModel: configuration.models.review,
+    }),
     caps: Object.fromEntries(
       Object.entries(configuration.providers).map(([name, { cap }]) => [
         name,
@@ -278,6 +296,7 @@ export function createHost(
       read: null,
       configuration: conventions.get(name) ?? null,
       hasReviewPolicy: false,
+      modelPolicy: null,
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
     try {
@@ -314,6 +333,14 @@ export function createHost(
         conventions.set(name, pass.configuration);
       } catch (error) {
         pause(`${error instanceof Error ? error.message : error}`);
+      }
+      // A present policy the factory cannot read holds every launch, as
+      // configuration does, rather than reading as absence.
+      try {
+        pass.modelPolicy = readModelPolicy(join(clone, modelPolicyPath));
+      } catch (error) {
+        if (pass.paused === null)
+          pause(`${error instanceof Error ? error.message : error}`);
       }
       const dockerfile = join(clone, dockerfilePath);
       if (pass.paused === null && !existsSync(dockerfile))
@@ -363,6 +390,18 @@ export function createHost(
         report(`${name} factory hold read failed: ${error}`);
       }
     }
+    // A review stopped at a gate resumes once no gate label remains.
+    if (
+      runKind(pass.configuration, "review") &&
+      gateLabels(pass.configuration.labels).length
+    ) {
+      try {
+        pass.gated = await platform.readGated();
+      } catch (error) {
+        pass.gated = null;
+        report(`${name} gate read failed: ${error}`);
+      }
+    }
     // Persist before settlement or launch decisions: a later clear read must
     // not erase a hold that affected a still-running attempt.
     for (const run of runs.filter(
@@ -385,6 +424,7 @@ export function createHost(
         const observation = await platform.pullRequestObservation(
           run.issue,
           run.pullRequestSince,
+          run.runKind === "review",
         );
         run.ownedPullRequests = [
           ...new Set([
@@ -423,13 +463,17 @@ export function createHost(
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
           pullRequest: observation.state,
           ...(observation.closesIssue && { closesIssue: true }),
+          ...(observation.state === "open" &&
+            observation.mergeCandidate && {
+              openPullRequest: observation.mergeCandidate,
+            }),
         };
         const paths = await readUnpushableChanges(
           git,
           clone,
           issues.find((issue) => issue.number === run.issue),
           run.ended.pullRequest,
-          pass.configuration.labels.needsInput,
+          pass.configuration,
         );
         if (paths.length) run.ended.unpushedChanges = paths;
         unobserved.delete(run);
@@ -447,11 +491,13 @@ export function createHost(
         ...(pass.factoryHold !== undefined && {
           factoryHold: pass.factoryHold,
         }),
+        modelPolicy: pass.modelPolicy,
+        ...(pass.gated !== undefined && { gated: pass.gated }),
         claims: await readClaims(
           name,
           platform,
           issues,
-          pass.configuration.labels,
+          pass.configuration,
           pass,
         ),
       };
@@ -514,9 +560,10 @@ export function createHost(
     name: string,
     platform: RepositoryPlatform,
     issues: Issue[],
-    labels: FactoryConfiguration["labels"],
+    conventions: FactoryConfiguration,
     pass: Pass,
   ): Promise<Claim[]> {
+    const { labels } = conventions;
     const held = (number: number) =>
       runs.some((run) => run.repository === name && run.issue === number);
     const claims: Claim[] = [];
@@ -534,11 +581,8 @@ export function createHost(
         ...waiting,
         ...closed,
         ...issues
-          .filter(
-            (issue) =>
-              issue.labels.includes(labels.running) ||
-              issue.labels.includes(labels.paused) ||
-              issue.labels.includes(labels.needsInput),
+          .filter((issue) =>
+            claimLabels(labels).some((label) => issue.labels.includes(label)),
           )
           .map((issue) => issue.number),
       ]),
@@ -553,7 +597,7 @@ export function createHost(
       if (
         marker.inputResume &&
         issue &&
-        !issue.labels.includes(labels.needsInput) &&
+        !isStopped(issue.labels, labels) &&
         (issue.labels.includes(labels.running) ||
           issue.labels.includes(labels.paused))
       ) {
@@ -600,7 +644,7 @@ export function createHost(
         clone,
         issues.find((issue) => issue.number === number),
         claim.pullRequest,
-        labels.needsInput,
+        conventions,
       );
       if (paths.length) claim.unpushedChanges = paths;
       claims.push(claim);
@@ -649,7 +693,7 @@ export function createHost(
       !candidate ||
       !issue ||
       pass.paused !== null ||
-      issue.labels.includes(pass.configuration!.labels.needsInput) ||
+      isStopped(issue.labels, pass.configuration!.labels) ||
       issue.labels.includes(pass.configuration!.labels.failed) ||
       consumed.includes(mergeHead(candidate))
     )
@@ -691,12 +735,12 @@ export function createHost(
     clone: string,
     issue: Issue | undefined,
     pullRequest: PullRequestState,
-    needsInputLabel: string,
+    conventions: FactoryConfiguration,
   ): Promise<string[]> {
     if (
       !issue ||
       !["none", "closed"].includes(pullRequest) ||
-      issue.labels.includes(needsInputLabel)
+      isStopped(issue.labels, conventions.labels)
     )
       return [];
     return unpushedChanges(
@@ -858,6 +902,14 @@ export function createHost(
 
   async function launch(decision: Decision & { kind: "launch" }, pass: Pass) {
     const { repository, issue } = decision;
+    const kind = decision.runKind ?? "implement";
+    // The decision core checked the arguments' placeholders for this launch.
+    const invocationArguments = launchArguments(
+      pass.configuration!,
+      kind,
+      issue,
+      (decision.target ?? decision.mergeRelaunch)?.number,
+    ) as string;
     const paths = directory(repository);
     const token = await tokens.get(repository);
     const base = (
@@ -878,10 +930,11 @@ export function createHost(
     );
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
-    // A relaunch appends to its attempt's log.
+    // A relaunch appends to its attempt's log. Triage and review runs keep
+    // their own logs beside implement's.
     const log = join(
       paths.logs,
-      `issue-${issue}-attempt-${decision.attempt}.log`,
+      `issue-${issue}-${decision.runKind ? `${decision.runKind}-` : ""}attempt-${decision.attempt}.log`,
     );
     await mkdir(paths.sandboxes, { recursive: true, mode: 0o700 });
     const sandbox = await mkdtemp(join(paths.sandboxes, `issue-${issue}-`));
@@ -912,9 +965,19 @@ export function createHost(
       base,
       image: pass.image!,
       issue,
+      ...(decision.runKind && { runKind: decision.runKind }),
       provider: decision.provider,
       model: decision.model,
       effort: decision.effort,
+      selection: decision.selection,
+      ...(decision.diversity && { diversity: decision.diversity }),
+      ...(decision.target && { target: decision.target }),
+      ...(decision.handBacks !== undefined && {
+        handBacks: decision.handBacks,
+      }),
+      ...(decision.implementedBy !== undefined && {
+        implementedBy: decision.implementedBy,
+      }),
       attempt: decision.attempt,
       ...(decision.retry && { retry: decision.retry }),
       ...(decision.inputResume && { inputResume: decision.inputResume }),
@@ -953,6 +1016,10 @@ export function createHost(
       throw error;
     }
     runs.push(run);
+    if (decision.diversity === "unavailable")
+      report(
+        `${repository}#${issue} review runs on ${run.provider}, the provider of the implement attempt it reviews: provider diversity was unavailable`,
+      );
     run.finished = ports
       .launch(run.provider, {
         model: run.model,
@@ -964,11 +1031,8 @@ export function createHost(
           registry.providers
             .get(run.provider)!
             .renderInvocation(
-              pass.configuration!.skill,
-              pass.configuration!.arguments.replaceAll(
-                "{issue}",
-                String(issue),
-              ),
+              runKind(pass.configuration!, kind)!.skill,
+              invocationArguments,
             ),
           pass.hasReviewPolicy,
           decision.retry,
@@ -977,6 +1041,9 @@ export function createHost(
           decision.inputResume,
           pass.configuration!.labels.releaseHold,
           pass.configuration!.labels.hold,
+          decision.runKind === undefined && decision.target
+            ? { target: decision.target, handBacks: decision.handBacks ?? 1 }
+            : undefined,
         ),
         branch: runBranch(issue),
         log: raw,
@@ -1127,7 +1194,8 @@ export function createHost(
         // history until the claim settles, including across a restart.
         const run = find(decision);
         if (run) {
-          if (!run.awaitingMergeNotified) {
+          // The next run kind takes the PR, so nothing awaits merge yet.
+          if (!run.awaitingMergeNotified && !decision.quiet) {
             await platform.awaitingMerge(
               decision.issue,
               awaitingMergeComment(pass.configuration!, run),
@@ -1158,9 +1226,8 @@ export function createHost(
         const issue = pass.read?.issues.find(
           (issue) => issue.number === decision.issue,
         );
-        const waiting = issue?.labels.includes(
-          pass.configuration!.labels.needsInput,
-        );
+        const { labels } = pass.configuration!;
+        const waiting = issue && isStopped(issue.labels, labels);
         const previous = find(decision);
         const marker = readClaimMarker(decision.repository, decision.issue);
         if (waiting) {
@@ -1169,6 +1236,40 @@ export function createHost(
             decision.issue,
             since,
           );
+          // A review stopped with its PR ready to merge resumes as review,
+          // and once its gate is cleared when it stopped at one.
+          const ended =
+            previous?.ended && "pullRequest" in previous.ended
+              ? previous.ended
+              : undefined;
+          const ready =
+            previous?.runKind === "review" &&
+            ended?.openPullRequest &&
+            !ended.openPullRequest.draft
+              ? ended.openPullRequest
+              : undefined;
+          const review = ready
+            ? {
+                target: {
+                  number: ready.number,
+                  headCommit: ready.headCommit,
+                  baseBranch: ready.baseBranch,
+                  createdAt: ready.createdAt,
+                },
+                ...(previous!.implementedBy !== undefined && {
+                  implementedBy: previous!.implementedBy,
+                }),
+                handBacks: previous!.handBacks ?? 0,
+                gated:
+                  gateLabels(labels).some((label) =>
+                    issue.labels.includes(label),
+                  ) ||
+                  pass.gated === null ||
+                  (pass.gated?.includes(ready.number) ?? false),
+              }
+            : previous
+              ? undefined
+              : marker.inputResume?.review;
           const path = claimNoticePath(decision.repository, decision.issue);
           mkdirSync(directory(decision.repository).claims, { recursive: true });
           writeFileSync(
@@ -1178,6 +1279,7 @@ export function createHost(
               inputResume: {
                 ...(since && { since }),
                 pullRequests: observation.pullRequests,
+                ...(review && { review }),
               },
             }),
           );
@@ -1258,6 +1360,13 @@ export function createHost(
           ...(run.retry && { retry: run.retry }),
           ...(run.inputResume && { inputResume: run.inputResume }),
           ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
+          ...(run.runKind && { runKind: run.runKind }),
+          ...(run.selection && { selection: run.selection }),
+          ...(run.target && { target: run.target }),
+          ...(run.handBacks !== undefined && { handBacks: run.handBacks }),
+          ...(run.implementedBy !== undefined && {
+            implementedBy: run.implementedBy,
+          }),
           holdObserved: run.holdObserved,
           ownedPullRequests: run.ownedPullRequests,
           startedAt: run.startedAt,
@@ -1400,6 +1509,7 @@ export function prompt(
   inputResume?: InputResume,
   releaseHoldLabel?: string,
   holdLabel?: string,
+  handBack?: { target: MergeRelaunch; handBacks: number },
 ): string {
   const guidance = [
     "Unattended execution:",
@@ -1422,6 +1532,11 @@ export function prompt(
       ? [
           `Merge relaunch: bring PR #${mergeRelaunch.number}, relaunched for head ${mergeRelaunch.headCommit}, onto the current default branch (${mergeRelaunch.baseBranch}); revalidate it; push; wait for current-head checks and reviews; then merge it through the repository's installed babysit under the existing merge authorization. Preserve this same PR, its reviews and handoff context and all dirty work. Where installed babysit supports branch-update recovery, follow it, including stale-base exit 4. Otherwise use the delivery-push instructions above to rebase or replay only this issue's changes and revalidate; babysit's other merge gates still apply. Conflicts, failed validation or checks, uncertain ownership and permission refusals require preserving work and a reasoned owner handoff without merging. Never use GitHub update-branch or merge the default branch into the issue branch.`,
           "The recovery-state restriction below applies only to restoring local state. After that restoration, this merge-relaunch delivery is authorized subject to the repository's existing merge rules.",
+        ]
+      : []),
+    ...(handBack
+      ? [
+          `Review hand-back: the latest review of PR #${handBack.target.number} handed the work back (hand-back ${handBack.handBacks} of at most 2). Continue this same PR from its branch and that review's findings; never open a replacement PR.`,
         ]
       : []),
     ...(inputResume

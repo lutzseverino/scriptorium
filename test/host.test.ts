@@ -1142,6 +1142,7 @@ test("a failed launch record leaves no sandbox or cap slot and its orphaned clai
   assert.deepEqual(decisions, [
     {
       kind: "launch",
+      selection: "host-default",
       repository: "acme/widgets",
       issue: 4,
       provider: "claude-code",
@@ -2352,6 +2353,7 @@ for (const timedOut of [false, true])
         { kind: "claim", repository: "acme/widgets", issue: 5 },
         {
           kind: "launch",
+          selection: "host-default",
           repository: "acme/widgets",
           issue: 5,
           provider: "claude-code",
@@ -3140,6 +3142,7 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
   assert.deepEqual(decisions, [
     {
       kind: "launch",
+      selection: "recorded",
       repository: "acme/widgets",
       issue: 4,
       provider: "codex",
@@ -4384,6 +4387,7 @@ for (const ended of [
         { kind: "unpause", repository: "acme/widgets", issue: 4 },
         {
           kind: "launch",
+          selection: "recorded",
           repository: "acme/widgets",
           issue: 4,
           provider: "claude-code",
@@ -4750,6 +4754,7 @@ test("an overdue legacy paused record relaunches after a restart with usage stil
       { kind: "unpause", repository: "acme/widgets", issue: 4 },
       {
         kind: "launch",
+        selection: "recorded",
         repository: "acme/widgets",
         issue: 4,
         provider: "codex",

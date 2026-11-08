@@ -9,13 +9,24 @@ import {
   type IssueReference,
   type PullRequest,
 } from "@lutzseverino/postern";
-import type { FactoryConfiguration } from "./factory-configuration.ts";
+import type { PlatformConventions } from "./factory-configuration.ts";
 import { reconcileHolds, type HoldKey } from "./hold-comments.ts";
 import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
 import type { PullRequestState } from "./run-outcome.ts";
-import { contractResultHold, type ContractFacts } from "./contract-result.ts";
+import {
+  contractResultHold,
+  triageBacked,
+  type ContractFacts,
+} from "./contract-result.ts";
+import {
+  claimLabels,
+  gateLabels,
+  provisioned,
+  transition as labelTransition,
+  type Transition,
+} from "./label-roles.ts";
 
 // The body sections a platform without native links reads an issue's parent
 // and blockers from. Only Postern's adapter reads them.
@@ -36,20 +47,26 @@ export type MergeRelaunch = Pick<
   "number" | "headCommit" | "baseBranch" | "createdAt"
 >;
 
+// Work a stop released, which resumes on the same PRs once it is answered. A
+// review stopped with its PR ready to merge resumes as review, and one
+// stopped at a gate resumes once the gate is cleared.
 export type InputResume = {
   since?: string;
   pullRequests: Pick<
     PullRequest,
     "number" | "headBranch" | "state" | "createdAt"
   >[];
+  review?: {
+    target: MergeRelaunch;
+    implementedBy?: string;
+    handBacks: number;
+    gated: boolean;
+  };
 };
 
 export function repositoryPlatform(
   connection: ConnectionWithLinkAdditions,
-  configuration: Pick<
-    FactoryConfiguration,
-    "labels" | "contractResult" | "comments"
-  >,
+  configuration: PlatformConventions,
 ) {
   const { labels } = configuration;
   const { issueTracker, pullRequests, access } = connection;
@@ -112,29 +129,63 @@ export function repositoryPlatform(
   }
 
   // The validator's decision on a ready issue, checked against the issue's
-  // comments and latest comment deletion, read here, and its other facts.
+  // comments and latest comment deletion, read here, and its other facts, and
+  // whether the factory's triage result backs the brief it approved.
   async function readContractResult(
     number: number,
     facts: Omit<ContractFacts, "comments" | "latestDeletion">,
-  ): Promise<ReadinessHold | null> {
+  ): Promise<{ hold: ReadinessHold | null; triage: boolean }> {
     try {
       const comments = await issueTracker.comments(number);
       const latestDeletion =
         connection.repository.platform === "github"
           ? await latestCommentDeletion(number)
           : undefined;
-      return contractResultHold(
-        { ...facts, comments, latestDeletion },
-        configuration,
-      );
+      const all = { ...facts, comments, latestDeletion };
+      return {
+        hold: contractResultHold(all, configuration),
+        triage: triageBacked(all, configuration),
+      };
     } catch (error) {
       if (!(error instanceof PlatformError)) throw error;
       return {
-        reason:
-          "waits: the issue-contract validator's result or the issue's comment history could not be read this pass; restore comment access and retry",
-        waiting: true,
+        hold: {
+          reason:
+            "waits: the issue-contract validator's result or the issue's comment history could not be read this pass; restore comment access and retry",
+          waiting: true,
+        },
+        triage: false,
       };
     }
+  }
+
+  // Whether an open PR is still a draft. Postern's neutral PR port does not
+  // report it, so this GitHub fact stays on its authenticated transport.
+  async function readDraft(number: number): Promise<boolean> {
+    const [owner, name] = path.split("/");
+    const response = await access.request({
+      method: "POST",
+      path: "/graphql",
+      body: {
+        query: `query FactoryPullRequestDraft($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) { isDraft }
+          }
+        }`,
+        variables: { owner, name, number },
+      },
+    });
+    const result = response.data as {
+      errors?: unknown;
+      data?: { repository?: { pullRequest?: { isDraft?: unknown } } };
+    } | null;
+    const draft = result?.data?.repository?.pullRequest?.isDraft;
+    if (result?.errors || typeof draft !== "boolean")
+      throw new PlatformError(
+        "invalidResponse",
+        "Pull request draft state could not be read",
+      );
+    return draft;
   }
 
   // An absent label counts as removed.
@@ -150,7 +201,8 @@ export function repositoryPlatform(
   // Adds the new state label before removing the old ones, so a write that
   // fails part way never leaves a claimed issue without a state label for a
   // pass to pick it up again.
-  async function transition(issue: number, add: string | null, old: string[]) {
+  async function transition(issue: number, step: Transition) {
+    const { add, remove: old } = labelTransition(labels, step);
     if (add !== null) await issueTracker.addLabels(issue, [add]);
     for (const label of old) await remove(issue, label);
   }
@@ -286,17 +338,26 @@ export function repositoryPlatform(
       return [...new Set([...issues, ...pullRequests])].sort((a, b) => a - b);
     },
 
-    // An existing label is left as it is.
+    // The open PRs carrying a configured gate label.
+    async readGated(): Promise<number[]> {
+      const numbers = new Set<number>();
+      for (const label of gateLabels(labels))
+        for (const number of await readLabelled(
+          "FactoryGatedPullRequests",
+          "pullRequests",
+          label,
+          "Gated pull requests",
+        ))
+          numbers.add(number);
+      return [...numbers].sort((a, b) => a - b);
+    },
+
+    // The labels only the factory writes. An existing label is left as it is.
     async createStateLabels(): Promise<void> {
-      for (const [role, color] of [
-        ["running", "0052cc"],
-        ["failed", "b60205"],
-        ["needsInput", "fbca04"],
-        ["paused", "c5def5"],
-      ] as const)
+      for (const { role, name, color } of provisioned(labels))
         try {
           await issueTracker.createLabel({
-            name: labels[role],
+            name,
             color,
             description: `Factory state: ${role}`,
           });
@@ -333,30 +394,46 @@ export function repositoryPlatform(
       const issues: Issue[] = [];
       for (const issue of await issueTracker.issues()) {
         // Changes arrive in platform order, so the last match is the latest.
-        const changes = issue.labels.includes(labels.ready)
+        const carried = [labels.ready, labels.triage].filter(
+          (label) => label !== undefined && issue.labels.includes(label),
+        );
+        const changes = carried.length
           ? await issueTracker.labelChanges(issue.number)
           : [];
-        const ready = changes.findLast(
-          (change) =>
-            change.action === "added" && change.label === labels.ready,
-        );
+        const latest = (label: string | undefined) =>
+          label !== undefined && issue.labels.includes(label)
+            ? changes.findLast(
+                (change) => change.action === "added" && change.label === label,
+              )
+            : undefined;
+        const ready = latest(labels.ready);
+        const triage = latest(labels.triage);
+        const readyActor = ready && (await actor(ready.actor));
+        const contract = ready
+          ? await readContractResult(issue.number, {
+              ready,
+              labelChanges: changes,
+              bodyEditTime: capabilities.bodyEditTime
+                ? issue.bodyEditTime
+                : undefined,
+            })
+          : null;
         issues.push({
           number: issue.number,
           createdAt: issue.createdAt,
           labels: issue.labels,
           ready: ready
-            ? { at: ready.time, actor: await actor(ready.actor) }
+            ? {
+                at: ready.time,
+                actor: readyActor!,
+                ...(contract?.triage && { triage: true as const }),
+              }
             : null,
+          ...(triage && {
+            triage: { at: triage.time, actor: await actor(triage.actor) },
+          }),
           editedAt: capabilities.bodyEditTime ? issue.bodyEditTime : null,
-          contractHold: ready
-            ? await readContractResult(issue.number, {
-                ready,
-                labelChanges: changes,
-                bodyEditTime: capabilities.bodyEditTime
-                  ? issue.bodyEditTime
-                  : undefined,
-              })
-            : null,
+          contractHold: contract?.hold ?? null,
           nativeParent: issue.parent && id(issue.parent),
           // The platform reports when the latest sub-issue was linked, not
           // which.
@@ -400,15 +477,17 @@ export function repositoryPlatform(
 
     // A closing reference is observation, not delivery authorization. Only
     // the run branch or the supplied connection's verified identity owns a PR.
+    // With `draft`, the owned open PR also says whether it is a draft.
     async pullRequestObservation(
       number: number,
       since?: string,
+      draft = false,
     ): Promise<{
       state: PullRequestState;
       closesIssue?: true;
       pullRequests: InputResume["pullRequests"];
       ownedPullRequests: number[];
-      mergeCandidate?: MergeRelaunch;
+      mergeCandidate?: MergeRelaunch & { draft?: true };
     }> {
       const { found, closing } = await candidates(number, since);
       const open = found.filter((pr) => pr.state === "open");
@@ -448,6 +527,7 @@ export function repositoryPlatform(
             headCommit: pr.headCommit,
             baseBranch: pr.baseBranch,
             createdAt: pr.createdAt,
+            ...(draft && (await readDraft(pr.number)) && { draft: true }),
           },
         }),
       };
@@ -457,45 +537,35 @@ export function repositoryPlatform(
     // whose claims were already released.
     async readClosedClaims(): Promise<number[]> {
       const numbers = new Set<number>();
-      for (const label of [labels.running, labels.paused, labels.needsInput])
+      for (const label of claimLabels(labels))
         for (const { number } of await issueTracker.issues({
           state: "closed",
           label,
         }))
           numbers.add(number);
-      return [...numbers];
+      return [...numbers].sort((a, b) => a - b);
     },
 
-    claim: (issue: number) => transition(issue, labels.running, []),
+    claim: (issue: number) => transition(issue, "claim"),
 
     // A claim ends without whichever of its running and paused labels it
     // carries.
-    release: (issue: number) =>
-      transition(issue, null, [labels.running, labels.paused]),
+    release: (issue: number) => transition(issue, "release"),
 
     // A closed issue no longer needs an owner's answer. Keep this separate
     // from release, which also settles open issues with pending questions.
-    releaseClosed: (issue: number) =>
-      transition(issue, null, [
-        labels.running,
-        labels.paused,
-        labels.needsInput,
-      ]),
+    releaseClosed: (issue: number) => transition(issue, "closed"),
 
     async complete(issue: number) {
       // Clear failure before closure: closed-claim reconciliation can finish
       // active-label cleanup after a partial write without a failed-label sweep.
-      await remove(issue, labels.failed);
+      await transition(issue, "complete");
       await issueTracker.closeIssue(issue);
-      await transition(issue, null, [
-        labels.running,
-        labels.paused,
-        labels.needsInput,
-      ]);
+      await transition(issue, "closed");
     },
 
     async fail(issue: number, comment: string) {
-      await transition(issue, labels.failed, [labels.running, labels.paused]);
+      await transition(issue, "fail");
       await issueTracker.createComment(issue, comment);
     },
 
@@ -509,12 +579,11 @@ export function repositoryPlatform(
     },
 
     async pause(issue: number, comment: string) {
-      await transition(issue, labels.paused, [labels.running]);
+      await transition(issue, "pause");
       await issueTracker.createComment(issue, comment);
     },
 
-    unpause: (issue: number) =>
-      transition(issue, labels.running, [labels.paused]),
+    unpause: (issue: number) => transition(issue, "unpause"),
 
     // The platform's default close reason, completed on GitHub.
     async close(issue: number, tickets: IssueId[]) {

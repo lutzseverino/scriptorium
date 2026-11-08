@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   factoryConfigurationPath,
   readFactoryConfiguration,
+  runKind,
 } from "../src/factory-configuration.ts";
 
 function fixture(name: string): string {
@@ -92,7 +93,7 @@ test("version 1 prompt configurations are refused without a compatibility layer"
     }),
   );
   assert.throws(() => readFactoryConfiguration(path), {
-    message: `The factory configuration ${path} is invalid:\n- prompt: is not a factory configuration field\n- skill: is missing\n- arguments: is missing\n- version: must be 2`,
+    message: `The factory configuration ${path} is invalid:\n- prompt: is not a factory configuration field\n- skill: is missing\n- arguments: is missing\n- version: must be 2 or 3`,
   });
 
   writeFileSync(
@@ -123,7 +124,10 @@ test("skill names must be trimmed and arguments preserve whitespace", (t) => {
   }
   for (const args of ["", "fixed arguments", " #{issue}\n{issue} "]) {
     writeFileSync(path, JSON.stringify({ ...configuration, arguments: args }));
-    assert.equal(readFactoryConfiguration(path).arguments, args);
+    assert.equal(
+      runKind(readFactoryConfiguration(path), "implement")?.arguments,
+      args,
+    );
   }
 });
 
@@ -152,7 +156,7 @@ test("a skip label is optional, trimmed and distinct from every other label", (t
 
 test("missing fields are refused instead of supplied from defaults", () => {
   assert.throws(() => readFactoryConfiguration(fixture("missing")), {
-    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- contractResult: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.needsInput: is missing\n- labels.paused: is missing`,
+    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- contractResult: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.paused: is missing\n- labels.needsInput: is missing`,
   });
 });
 
@@ -164,7 +168,7 @@ test("unknown fields at either level are invalid", () => {
 
 test("malformed fields and an unsupported version are invalid", () => {
   assert.throws(() => readFactoryConfiguration(fixture("malformed")), {
-    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 2\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- contractResult.marker: is not a non-empty trimmed string\n- contractResult.author: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
+    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 2 or 3\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- contractResult.marker: is not a non-empty trimmed string\n- contractResult.author: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
   });
 });
 
@@ -195,7 +199,7 @@ test("the paused label is required, trimmed and distinct from the other four", (
     ],
     [
       "QUESTION",
-      "labels.paused: must differ from labels.needsInput, ignoring case",
+      "labels.needsInput: must differ from labels.paused, ignoring case",
     ],
   ] as const) {
     const path = withPaused(t, paused);

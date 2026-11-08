@@ -4,8 +4,12 @@
 // it interprets no contract, parses no Markdown and performs no platform
 // access. All facts arrive through Postern.
 import type { Comment, LabelChange } from "@lutzseverino/postern";
-import type { FactoryConfiguration } from "./factory-configuration.ts";
+import type {
+  FactoryConfiguration,
+  PlatformConventions,
+} from "./factory-configuration.ts";
 import { isHoldComment } from "./hold-comments.ts";
+import { configured } from "./label-roles.ts";
 import type { ReadinessHold } from "./readiness.ts";
 
 // The one result format this factory reads. Any other format, including the
@@ -83,8 +87,8 @@ export function contractResultHold(
   const at = Date.parse(posted.comment.updatedAt);
   const newer = (time: string | null) => time !== null && Date.parse(time) > at;
   const factoryLabels = new Set(
-    Object.entries(labels).flatMap(([role, label]) =>
-      role === "ready" || label === undefined ? [] : [label.toLowerCase()],
+    configured(labels, (role) => !role.readiness).map((label) =>
+      label.toLowerCase(),
     ),
   );
   const stale =
@@ -142,6 +146,45 @@ export function contractResultHold(
     return comment && same(comment.updatedAt) ? null : waits;
   }
   return unreadableSource;
+}
+
+// Whether the factory's triage run applied the ready label for the brief the
+// validator approved: the label's latest event is by the configured triage
+// result's author, and the validator's latest result names as its contract
+// source a comment by that author with exactly one line naming its run.
+// Approval and freshness stay `contractResultHold`'s.
+export function triageBacked(
+  facts: ContractFacts,
+  configuration: PlatformConventions,
+): boolean {
+  if (!configuration.triageResult) return false;
+  const { marker, author } = configuration.triageResult;
+  const by = (login: string | undefined) =>
+    login?.toLowerCase() === author.toLowerCase();
+  if (!by(facts.ready.actor?.login)) return false;
+  const posted = latestResult(facts.comments, configuration.contractResult);
+  let source;
+  try {
+    source = posted && JSON.parse(posted.line)?.source;
+  } catch {
+    return false;
+  }
+  if (source?.type !== "comment" || typeof source.id !== "string") return false;
+  const brief = facts.comments.find(
+    (comment) => String(comment.id) === source.id,
+  );
+  if (!brief || !by(brief.author?.login)) return false;
+  const prefix = `<!-- ${marker} `;
+  const runs = brief.body
+    .split(/\r\n?|\n/)
+    .filter((line) => line.startsWith(prefix) && line.endsWith(" -->"));
+  if (runs.length !== 1) return false;
+  try {
+    const { run } = JSON.parse(runs[0].slice(prefix.length, -4)) ?? {};
+    return typeof run === "string" && run.trim() !== "";
+  } catch {
+    return false;
+  }
 }
 
 // The latest comment by the configured author carrying the configured marker's
