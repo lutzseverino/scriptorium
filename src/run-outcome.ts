@@ -7,7 +7,8 @@ export type Observation = {
   pullRequest: PullRequestState;
   issueClosed: boolean;
   closesIssue?: true;
-  needsInput: boolean;
+  // The issue waits in a stop for an answer.
+  stopped: boolean;
   unpushedChanges?: string[];
 };
 
@@ -15,7 +16,7 @@ export type RunOutcome =
   | { kind: "awaiting merge" }
   | { kind: "done" }
   | { kind: "complete" }
-  | { kind: "needs input" }
+  | { kind: "stopped" }
   | {
       kind: "failed";
       final: boolean;
@@ -37,7 +38,7 @@ export function runOutcome(
           failure:
             "its pull request merged without closing the issue; close the issue if that finished it",
         };
-  if (observation.needsInput) return { kind: "needs input" };
+  if (observation.stopped) return { kind: "stopped" };
   if (observation.pullRequest === "open") return { kind: "awaiting merge" };
   if (observation.unpushedChanges?.length)
     return {

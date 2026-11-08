@@ -15,8 +15,10 @@ export type Actor =
   | { kind: "bot"; login: string }
   | { kind: "unknown" };
 
-// The latest event that applied an issue's ready label.
-export type Readiness = { at: string; actor: Actor };
+// The latest event that applied an issue's ready label. `triage` marks one
+// the factory's triage run applied, backed by its result for the brief the
+// validator approved, which counts without a role.
+export type Readiness = { at: string; actor: Actor; triage?: true };
 
 // The repository's ready label, and its platform's role names and accounts
 // the host configuration authorizes and never authorizes.
@@ -105,13 +107,10 @@ function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
       reason: `is refused: no event applying ${ready} was found; ${reapply}`,
       waiting: false,
     };
-  const { at, actor } = issue.ready;
-  const refused = actorRefusal(
-    actor,
-    policy,
-    { subject: ready, action: "applied" },
-    on,
-  );
+  const { at, actor, triage } = issue.ready;
+  const refused =
+    !triage &&
+    actorRefusal(actor, policy, { subject: ready, action: "applied" }, on);
   if (refused) return refused;
   if (
     issue.subIssues.length > 0 &&
@@ -125,7 +124,27 @@ function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
   return issue.contractHold;
 }
 
-// Ready labels and link additions share the host's complete actor policy.
+// Why the triage label's latest application cannot start a triage run, or
+// null when a person the host authorizes applied it.
+export function triageRefusal(
+  issue: Issue,
+  policy: Policy,
+  label: string,
+): ReadinessHold | null {
+  if (!issue.triage)
+    return {
+      reason: `no event applying ${label} was found; remove and re-apply ${label}`,
+      waiting: false,
+    };
+  return actorRefusal(
+    issue.triage.actor,
+    { ...policy, ready: label },
+    { subject: label, action: "applied" },
+  );
+}
+
+// Ready labels, link additions and triage labels share the host's complete
+// actor policy.
 function actorRefusal(
   actor: Actor,
   policy: Policy,

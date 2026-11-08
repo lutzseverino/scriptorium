@@ -1,7 +1,21 @@
 // The factory's decision core: a pure function from a snapshot of the host's
 // repositories and runs to the decisions the host carries out.
-import type { FactoryConfiguration } from "./factory-configuration.ts";
+import {
+  launchArguments,
+  runKind,
+  type FactoryConfiguration,
+  type RunKindName,
+} from "./factory-configuration.ts";
 import { holdKeys, type HoldKey } from "./hold-comments.ts";
+import {
+  configured,
+  exclusionReason,
+  gateLabels,
+  isStopped,
+  stopLabels,
+  type Continuing,
+} from "./label-roles.ts";
+import type { ModelPolicy } from "./model-policy.ts";
 import {
   repositoryHold,
   repositoryGate,
@@ -16,6 +30,7 @@ import {
   readinessExclusion,
   readinessExclusions,
   references,
+  triageRefusal,
   type Actor,
   type Policy,
   type Readiness,
@@ -37,6 +52,9 @@ export type Issue = {
   // The latest application of the ready label while the issue carries it, or
   // null when it doesn't or no event applying it was found.
   ready: Readiness | null;
+  // The latest application of the triage label while the issue carries it,
+  // or null or absent when it doesn't or no event applying it was found.
+  triage?: Readiness | null;
   // When the body was last edited, or null when it never was. Title and
   // ordinary discussion changes don't count. Only a parent's readiness reads
   // it.
@@ -76,9 +94,15 @@ export type Pause = {
 export type Run = {
   repository: string;
   issue: number;
+  // Absent for implement, the kind every version-2 run is.
+  runKind?: Exclude<RunKindName, "implement">;
   provider: string;
   model: string;
   effort: string;
+  // Where the model came from, and whether a review that asked for another
+  // provider than its implement attempt's could not have one.
+  selection?: Selection;
+  diversity?: "unavailable";
   attempt: 1 | 2;
   // The first attempt's failure and log a retry launched with.
   retry?: { failure: string; log: string };
@@ -89,6 +113,12 @@ export type Run = {
   holdObserved?: number[] | null;
   // PRs the run owns, retaining ownership of PRs that have since closed.
   ownedPullRequests?: number[];
+  // The PR a review or a review's hand-back works on, the hand-backs its
+  // issue's reviews have made, and, for a review, the provider of the
+  // implement attempt that produced the PR.
+  target?: MergeRelaunch;
+  handBacks?: number;
+  implementedBy?: string;
   startedAt: string;
   log: string;
   ended:
@@ -101,6 +131,9 @@ export type Run = {
         pullRequest: PullRequestState;
         closesIssue?: true;
         mergeCandidate?: MergeRelaunch;
+        // The one open PR the run owns, and for a review run whether it is
+        // still a draft, whatever its base.
+        openPullRequest?: MergeRelaunch & { draft?: true };
         // Paths under the host's unpushable paths in commits the remote lacks.
         unpushedChanges?: string[];
       };
@@ -134,11 +167,19 @@ export type Repository = {
   // Open issue and PR numbers carrying `labels.hold`; null means the
   // configured hold read failed.
   factoryHold?: number[] | null;
+  // The repository's model policy, null when it has none.
+  modelPolicy?: ModelPolicy | null;
+  // Open PRs carrying a configured gate label; null means the read failed.
+  gated?: number[] | null;
 };
 
+// The host's default models: for an implement attempt, its retry, and when
+// set, a triage and a review run, which otherwise take the default.
 export type Settings = {
   defaultModel: string;
   retryModel: string;
+  triageModel?: string;
+  reviewModel?: string;
   caps: Record<string, number>;
   // The usage percentages at or above which a provider claims no new issue,
   // and at or above which its running runs stop too, or null when off.
@@ -195,19 +236,38 @@ export type Snapshot = {
 // How the decision core resolves models: the provider registry.
 export type Models = Pick<Registry, "resolveModel" | "resolveModelLabel">;
 
+// Where a launch's model came from: the issue's model label, the repository's
+// model policy, the host's default for its kind, the host default the policy's
+// fallback chose while the choice was unavailable, the host's review default
+// a review switched to for a provider other than its implement attempt's, or
+// the run it relaunches.
+export type Selection =
+  | "issue-label"
+  | "policy"
+  | "host-default"
+  | "fallback"
+  | "diversity"
+  | "recorded";
+
 export type Launch = {
   kind: "launch";
   repository: string;
   issue: number;
+  runKind?: Run["runKind"];
   provider: string;
   model: string;
   effort: string;
+  selection: Selection;
+  diversity?: "unavailable";
   attempt: 1 | 2;
   retry?: { failure: string; log: string };
   // An interrupted or paused run launching again as the same attempt.
   relaunch?: true;
   mergeRelaunch?: MergeRelaunch;
   inputResume?: InputResume;
+  target?: MergeRelaunch;
+  handBacks?: number;
+  implementedBy?: string;
 };
 
 export type Decision = { repository: string; issue: number } & (
@@ -224,7 +284,9 @@ export type Decision = { repository: string; issue: number } & (
       log: string | null;
       unpushedChanges?: string[];
     }
-  | { kind: "keep" }
+  // Retains the claim, telling the issue it awaits merge unless a run kind
+  // takes the PR next.
+  | { kind: "keep"; quiet?: true }
   | { kind: "complete" }
   | { kind: "release" }
   // Swaps the running label for the paused one and tells the issue why.
@@ -262,13 +324,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         !(
           claim.inputResume &&
           claim.pullRequest !== "merged" &&
-          repository.issues.some(
-            (issue) =>
-              issue.number === claim.issue &&
-              !issue.labels.includes(
-                repository.configuration.labels.needsInput,
-              ),
-          )
+          resumes(repository, claim)
         )
       ) {
         const settled = settleOutcome(
@@ -353,18 +409,20 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   // Reconcile every actionable reason independently of pickup's precedence.
   // A blocked issue may also have a model error; neither clears the other.
   for (const next of continuations) {
-    const { repository, issue, previous, own, reconcile, selected } = next;
+    const { repository, issue, previous, own, reconcile, label } = next;
     const { labels } = repository.configuration;
     const at = { repository: repository.name, issue: issue.number };
     const holds: { hold: HoldKey; reason: string }[] = [];
+    // Labels that exclude fresh pickup already explain the issue, except a
+    // claim's own while its continuation is pending.
     if (!(
       (reconcile.readiness && !issue.labels.includes(labels.ready)) ||
-      [
-        ...(!reconcile.pending ? [labels.running, labels.paused] : []),
-        labels.failed,
-        labels.needsInput,
-        labels.skip,
-      ].some((label) => label !== undefined && issue.labels.includes(label)) ||
+      configured(
+        labels,
+        (role) =>
+          role.excludes?.some(({ from }) => from.includes("fresh")) &&
+          !(reconcile.pending && role.removes?.includes("release")),
+      ).some((label) => issue.labels.includes(label)) ||
       !decisions.some(
         (decision) =>
           decision.repository === at.repository &&
@@ -381,8 +439,8 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         ),
       );
       if (issue.subIssues.length === 0) {
-        if ("error" in selected)
-          holds.push({ hold: holdKeys.model, reason: selected.error });
+        if (label && "error" in label)
+          holds.push({ hold: holdKeys.model, reason: label.error });
         const configuration = repositoryGate(repository);
         if (configuration?.hold === holdKeys.configuration)
           holds.push(configuration);
@@ -420,6 +478,17 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   return decisions;
 }
 
+// The identity of an open PR the factory continues, without the rest of its
+// observation.
+export function pullRequestIdentity({
+  number,
+  headCommit,
+  baseBranch,
+  createdAt,
+}: MergeRelaunch): MergeRelaunch {
+  return { number, headCommit, baseBranch, createdAt };
+}
+
 function key(repository: string, issue: number): string {
   return `${repository}#${issue}`;
 }
@@ -440,22 +509,30 @@ function runningCounts(snapshot: Snapshot): Map<string, number> {
   return running;
 }
 
-// A failed first run that may retry on the retry model.
+// A failed first implement run that may retry on the retry stage's model.
 type SettlingRun = Pick<
   Run,
-  "repository" | "issue" | "attempt" | "inputResume"
+  | "repository"
+  | "issue"
+  | "attempt"
+  | "inputResume"
+  | "runKind"
+  | "target"
+  | "handBacks"
 > & {
   log: string | null;
 };
-type Retry = { run: SettlingRun; failure: string; model: Model };
+type Retry = { run: SettlingRun; failure: string };
+
+// The hand-backs an issue's reviews may make before its rounds fail.
+export const handBackLimit = 2;
 
 // A running run over the time limit is stopped, and so is one whose provider's
 // usage reached the pause threshold, which pauses it. An ended run releases its
 // claim once its issue closes and keeps it while the pull request is open. A
-// run needing the owner's input releases its claim without retry or failure.
-// A failed first run may retry once on the retry model; any other failure
-// fails the issue. An interrupted or paused run is not settled: it launches
-// again.
+// run stopped for an answer releases its claim without retry or failure.
+// A failed first implement run may retry once; any other failure fails the
+// issue. An interrupted or paused run is not settled: it launches again.
 function settle(
   run: Run,
   snapshot: Snapshot,
@@ -502,6 +579,7 @@ function settle(
       pullRequest: run.ended.pullRequest,
       closesIssue: run.ended.closesIssue,
       unpushedChanges: run.ended.unpushedChanges,
+      openPullRequest: run.ended.openPullRequest,
     },
     repository,
     snapshot,
@@ -510,32 +588,65 @@ function settle(
 }
 
 // Runs and orphaned claims settle through the same outcome table. The core
-// owns retries and gates; the outcome module owns observation precedence.
+// owns retries, gates and run-kind handoffs; the outcome module owns
+// observation precedence. Triage changes no code, so it ends once its issue
+// leaves the triage label. With review on, an implement run's open PR, and a
+// review's PR left a draft for a hand-back, pass to the next run kind instead
+// of awaiting merge.
 function settleOutcome(
   run: SettlingRun,
   observation: Pick<
     Observation,
     "ended" | "pullRequest" | "unpushedChanges" | "closesIssue"
-  >,
+  > & { openPullRequest?: MergeRelaunch & { draft?: true } },
   repository: Repository,
   snapshot: Snapshot,
   models: Models,
 ): Decision[] | Retry {
   const at = { repository: run.repository, issue: run.issue };
+  const { configuration } = repository;
+  const { labels } = configuration;
   const issue = repository.issues.find((issue) => issue.number === run.issue);
+  if (run.runKind === "triage")
+    return issue && labels.triage && issue.labels.includes(labels.triage)
+      ? [
+          {
+            kind: "fail",
+            ...at,
+            failure: `the triage run ended with the issue still labelled ${labels.triage}`,
+            log: run.log,
+          },
+        ]
+      : [{ kind: "release", ...at }];
   const outcome = runOutcome(
     {
       ...observation,
       issueClosed: !issue,
-      needsInput:
-        issue?.labels.includes(repository.configuration.labels.needsInput) ??
-        false,
+      stopped: issue ? isStopped(issue.labels, labels) : false,
     },
     snapshot.settings.timeLimitMinutes,
   );
   if (outcome.kind === "complete") return [{ kind: "complete", ...at }];
-  if (outcome.kind === "awaiting merge") return [{ kind: "keep", ...at }];
-  if (outcome.kind === "done" || outcome.kind === "needs input")
+  if (outcome.kind === "awaiting merge") {
+    const open = observation.openPullRequest;
+    if (open && runKind(configuration, "review")) {
+      if (run.runKind !== "review")
+        return [{ kind: "keep", ...at, quiet: true }];
+      if (open.draft)
+        return (run.handBacks ?? 0) < handBackLimit
+          ? [{ kind: "keep", ...at, quiet: true }]
+          : [
+              {
+                kind: "fail",
+                ...at,
+                failure: `its review rounds did not converge after ${handBackLimit} hand-backs`,
+                log: run.log,
+              },
+            ];
+    }
+    return [{ kind: "keep", ...at }];
+  }
+  if (outcome.kind === "done" || outcome.kind === "stopped")
     return [{ kind: "release", ...at }];
   const fail: Decision = {
     kind: "fail",
@@ -546,21 +657,37 @@ function settleOutcome(
       unpushedChanges: outcome.unpushedChanges,
     }),
   };
-  if (outcome.final || run.attempt === 2) return [fail];
-  const model = models.resolveModel(snapshot.settings.retryModel);
-  if ("error" in model) return [fail];
-  return { run, failure: outcome.failure, model };
+  if (outcome.final || run.attempt === 2 || run.runKind !== undefined)
+    return [fail];
+  // Without a policy preference, a retry needs the host's retry model.
+  if (
+    !repository.modelPolicy?.runKinds.implement?.retry &&
+    "error" in models.resolveModel(snapshot.settings.retryModel)
+  )
+    return [fail];
+  return { run, failure: outcome.failure };
 }
 
 // Every issue has one continuation for both admission and hold reconciliation.
-// The table makes hold applicability explicit; owned PRs include a merge target.
+// The table makes hold applicability explicit; owned PRs include a merge or
+// review target. Each row's stage picks its model: an implement attempt's,
+// its retry's, a triage or review run's, or the run it relaunches.
 const continuationRules = {
+  triage: {
+    factoryHold: "all",
+    releaseHold: false,
+    threshold: "drain",
+    prefix: "triage waits: ",
+    modelBeforeRepository: false,
+    stage: "triage",
+  },
   fresh: {
     factoryHold: "all",
     releaseHold: false,
     threshold: "drain",
     prefix: "",
     modelBeforeRepository: false,
+    stage: "initial",
   },
   retry: {
     factoryHold: "all",
@@ -568,6 +695,23 @@ const continuationRules = {
     threshold: "drain",
     prefix: "retry waits: ",
     modelBeforeRepository: true,
+    stage: "retry",
+  },
+  review: {
+    factoryHold: "unowned",
+    releaseHold: false,
+    threshold: "drain",
+    prefix: "review waits: ",
+    modelBeforeRepository: true,
+    stage: "review",
+  },
+  handBack: {
+    factoryHold: "all",
+    releaseHold: false,
+    threshold: "drain",
+    prefix: "hand-back waits: ",
+    modelBeforeRepository: true,
+    stage: "initial",
   },
   resume: {
     factoryHold: "unowned",
@@ -575,6 +719,7 @@ const continuationRules = {
     threshold: "pause",
     prefix: "relaunch waits: ",
     modelBeforeRepository: true,
+    stage: "recorded",
   },
   merge: {
     factoryHold: "unowned",
@@ -582,14 +727,26 @@ const continuationRules = {
     threshold: "pause",
     prefix: "merge relaunch waits: ",
     modelBeforeRepository: true,
+    stage: "recorded",
   },
 } as const;
 
+type Stage = "triage" | "initial" | "retry" | "review";
+
 type ContinuationState =
-  | { kind: "fresh" }
+  | { kind: "triage" | "fresh" | "merge" }
   | { kind: "retry"; retry: Retry }
   | { kind: "resume"; run: Run }
-  | { kind: "merge" };
+  // A review of an implement attempt's PR, or of a stopped review's PR once
+  // its stop is answered, which claims the issue again.
+  | {
+      kind: "review";
+      target: MergeRelaunch;
+      implementedBy?: string;
+      handBacks: number;
+      claim?: true;
+    }
+  | { kind: "handBack"; target: MergeRelaunch; handBacks: number };
 
 type Continuation = {
   kind: ContinuationState["kind"];
@@ -597,19 +754,31 @@ type Continuation = {
   issue: Issue;
   previous: Run | undefined;
   own: number[];
-  selected: Model | { error: string };
+  // The issue's model label, null without one.
+  label: Model | { error: string } | null;
   modelSource:
-    | { kind: "issue" }
-    | { kind: "retry"; model: Model }
+    | { kind: "stage"; stage: Stage }
     | { kind: "recorded"; run: Run; retain: boolean };
+  // Whether the launch asks for a provider other than the implement
+  // attempt's that produced its PR, which it names.
+  diversity: string | null;
   exclusions: Decision[] | null;
   afterModel: Decision[] | null;
   pause: Pause | null;
   reconcile: { readiness: boolean; pending: boolean };
   launch: Pick<
     Launch,
-    "attempt" | "retry" | "inputResume" | "mergeRelaunch" | "relaunch"
+    | "runKind"
+    | "attempt"
+    | "retry"
+    | "inputResume"
+    | "mergeRelaunch"
+    | "relaunch"
+    | "target"
+    | "handBacks"
+    | "implementedBy"
   >;
+  claim: boolean;
   unpause: boolean;
 };
 
@@ -621,28 +790,68 @@ function continuation(
   snapshot: Snapshot,
   models: Models,
 ): Continuation {
+  const { configuration } = repository;
+  const { labels } = configuration;
   const previous = snapshot.runs.find(
     (run) => run.repository === repository.name && run.issue === issue.number,
   );
   const claim = repository.claims.find((claim) => claim.issue === issue.number);
   const target = mergeTarget(previous, claim);
-  const merge =
-    !claim?.inputResume &&
-    target &&
-    !snapshot.runs.some(
-      (run) =>
-        run.repository === repository.name &&
-        run.issue === issue.number &&
-        run.ended === null,
-    );
-  const state = resumed
-    ? { kind: "resume" as const, run: resumed }
-    : merge
-      ? { kind: "merge" as const }
-      : retry
-        ? { kind: "retry" as const, retry }
-        : { kind: "fresh" as const };
-  // A needs-input claim can defer a fresh merge launch while the previous
+  const running = snapshot.runs.some(
+    (run) =>
+      run.repository === repository.name &&
+      run.issue === issue.number &&
+      run.ended === null,
+  );
+  const merge = !claim?.inputResume && target && !running;
+  const reviews = runKind(configuration, "review");
+  const ended =
+    previous?.ended && "pullRequest" in previous.ended
+      ? previous.ended
+      : undefined;
+  const open =
+    ended?.pullRequest === "open" ? ended.openPullRequest : undefined;
+  const pullRequest = open && pullRequestIdentity(open);
+  const handBacks = previous?.handBacks ?? 0;
+  const handoff: ContinuationState | undefined =
+    reviews && previous && pullRequest && !isStopped(issue.labels, labels)
+      ? previous.runKind === undefined
+        ? {
+            kind: "review",
+            target: pullRequest,
+            implementedBy: previous.provider,
+            handBacks,
+          }
+        : previous.runKind === "review" &&
+            open.draft &&
+            handBacks < handBackLimit
+          ? { kind: "handBack", target: pullRequest, handBacks: handBacks + 1 }
+          : undefined
+      : reviews &&
+          claim?.inputResume?.review &&
+          claim.pullRequest === "open" &&
+          resumes(repository, claim)
+        ? {
+            kind: "review",
+            target: claim.inputResume.review.target,
+            implementedBy: claim.inputResume.review.implementedBy,
+            handBacks: claim.inputResume.review.handBacks,
+            claim: true,
+          }
+        : undefined;
+  const state: ContinuationState = resumed
+    ? { kind: "resume", run: resumed }
+    : (handoff ??
+      (merge
+        ? { kind: "merge" }
+        : retry
+          ? { kind: "retry", retry }
+          : runKind(configuration, "triage") &&
+              labels.triage !== undefined &&
+              issue.labels.includes(labels.triage)
+            ? { kind: "triage" }
+            : { kind: "fresh" }));
+  // A stopped claim can defer a fresh merge launch while the previous
   // candidate still keeps its continuation holds actionable.
   const continuing = Boolean(
     (previous?.ended &&
@@ -650,36 +859,67 @@ function continuation(
         "paused" in previous.ended ||
         ("mergeCandidate" in previous.ended &&
           previous.ended.mergeCandidate))) ||
-    (claim?.mergeCandidate && !claim.inputResume),
+    (claim?.mergeCandidate && !claim.inputResume) ||
+    handoff,
   );
   const run = resumed ?? previous;
   const classified = { ...state, repository, issue, previous };
   const recorded = resumed ?? (state.kind === "merge" ? previous : undefined);
   const mergeExcluded = resumed?.mergeRelaunch
-    ? mergeExclusion(issue, repository.configuration.labels)
+    ? exclusionReason(issue.labels, labels, "merge")
     : null;
   const pause =
     resumed?.ended && "paused" in resumed.ended ? resumed.ended : null;
+  const handedOn =
+    state.kind === "review" || state.kind === "handBack" ? state : undefined;
+  // The PR this launch works on and the kind it runs: a merge relaunch is
+  // review's once review is on, since only review then merges.
+  const launchTarget =
+    handedOn?.target ??
+    (state.kind === "merge" ? target : (run?.target ?? run?.mergeRelaunch));
+  const kind: RunKindName =
+    state.kind === "triage"
+      ? "triage"
+      : state.kind === "review" || (state.kind === "merge" && reviews)
+        ? "review"
+        : state.kind === "resume"
+          ? (resumed!.runKind ?? "implement")
+          : "implement";
+  const expanded = launchArguments(
+    configuration,
+    kind,
+    issue.number,
+    launchTarget?.number,
+  );
   return {
     ...classified,
-    modelSource:
-      state.kind === "retry"
-        ? { kind: "retry", model: state.retry.model }
-        : recorded
-          ? { kind: "recorded", run: recorded, retain: state.kind === "resume" }
-          : { kind: "issue" },
+    modelSource: recorded
+      ? { kind: "recorded", run: recorded, retain: state.kind === "resume" }
+      : ({
+          kind: "stage",
+          stage:
+            state.kind === "merge"
+              ? reviews
+                ? "review"
+                : "initial"
+              : continuationRules[state.kind].stage,
+        } as Continuation["modelSource"]),
+    diversity:
+      kind === "review" &&
+      reviews?.differentProvider === true &&
+      !recorded &&
+      handedOn?.kind === "review"
+        ? (handedOn.implementedBy ?? null)
+        : null,
     exclusions: continuationExclusions(classified),
     afterModel: mergeExcluded
       ? skipped(classified, mergeExcluded, undefined, "merge relaunch waits: ")
-      : null,
+      : typeof expanded === "object"
+        ? skipped(classified, expanded.error)
+        : null,
     pause: pause?.paused ?? null,
-    own: ownedPullRequests(run, target),
-    selected: issueModel(
-      issue,
-      repository.configuration.modelLabelPrefix,
-      snapshot.settings,
-      models,
-    ),
+    own: ownedPullRequests(run, target ?? handedOn?.target),
+    label: labelModel(issue, configuration.modelLabelPrefix, models),
     reconcile: {
       readiness: !continuing,
       pending:
@@ -691,11 +931,13 @@ function continuation(
           (claim && claim.pullRequest !== "open"),
         ),
     },
-    launch:
-      state.kind === "fresh"
+    launch: {
+      ...(kind !== "implement" && { runKind: kind }),
+      ...(state.kind === "fresh" || state.kind === "triage"
         ? {
             attempt: 1,
-            ...(claim?.inputResume && { inputResume: claim.inputResume }),
+            ...(state.kind === "fresh" &&
+              claim?.inputResume && { inputResume: claim.inputResume }),
           }
         : state.kind === "retry"
           ? {
@@ -707,23 +949,73 @@ function continuation(
               ...(state.retry.run.inputResume && {
                 inputResume: state.retry.run.inputResume,
               }),
-            }
-          : {
-              attempt: run?.attempt ?? 1,
-              ...(run?.retry && { retry: run.retry }),
-              ...(run?.inputResume && { inputResume: run.inputResume }),
-              relaunch: true,
-              ...((state.kind === "merge" ? target : run?.mergeRelaunch) && {
-                mergeRelaunch:
-                  state.kind === "merge" ? target : run?.mergeRelaunch,
+              // A hand-back's retry continues the same PR.
+              ...(state.retry.run.target && {
+                target: state.retry.run.target,
+                handBacks: state.retry.run.handBacks,
               }),
-            },
+            }
+          : handedOn
+            ? {
+                attempt: 1,
+                target: handedOn.target,
+                handBacks: handedOn.handBacks,
+                ...(handedOn.kind === "review" &&
+                  handedOn.implementedBy !== undefined && {
+                    implementedBy: handedOn.implementedBy,
+                  }),
+                ...((claim?.inputResume ?? previous?.inputResume) && {
+                  inputResume: claim?.inputResume ?? previous?.inputResume,
+                }),
+              }
+            : {
+                attempt: run?.attempt ?? 1,
+                ...(run?.retry && { retry: run.retry }),
+                ...(run?.inputResume && { inputResume: run.inputResume }),
+                relaunch: true,
+                ...((state.kind === "merge" ? target : run?.mergeRelaunch) && {
+                  mergeRelaunch:
+                    state.kind === "merge" ? target : run?.mergeRelaunch,
+                }),
+                ...(run?.target && { target: run.target }),
+                ...(run?.handBacks !== undefined && {
+                  handBacks: run.handBacks,
+                }),
+                ...(run?.implementedBy !== undefined && {
+                  implementedBy: run.implementedBy,
+                }),
+              }),
+    },
+    claim:
+      state.kind === "fresh" ||
+      state.kind === "triage" ||
+      (state.kind === "review" && state.claim === true),
     unpause:
       state.kind === "resume"
         ? Boolean(resumed?.ended && "paused" in resumed.ended)
         : state.kind !== "fresh" &&
-          issue.labels.includes(repository.configuration.labels.paused),
+          state.kind !== "triage" &&
+          issue.labels.includes(labels.paused),
   };
+}
+
+// Whether a released claim's stop is answered, so its work resumes: a review
+// stopped at a gate once no gate label remains on its issue or PR, outside
+// every other stop; any other work once its issue is out of every stop.
+function resumes(repository: Repository, claim: Claim): boolean {
+  const issue = repository.issues.find((issue) => issue.number === claim.issue);
+  if (!issue) return false;
+  const { labels } = repository.configuration;
+  const review = claim.inputResume?.review;
+  if (!review?.gated) return !isStopped(issue.labels, labels);
+  return (
+    repository.gated !== null &&
+    !repository.gated?.includes(review.target.number) &&
+    !gateLabels(labels).some((label) => issue.labels.includes(label)) &&
+    !stopLabels(labels).some(
+      (label) => label !== labels.owner && issue.labels.includes(label),
+    )
+  );
 }
 
 // Exclusions are selected once with the continuation, before admission.
@@ -739,18 +1031,43 @@ function continuationExclusions(
       ? next.run.ended
       : null;
   if (next.kind === "resume") {
-    if (needsInputExclusion(issue, labels)) return [{ kind: "release", ...at }];
+    if (exclusionReason(issue.labels, labels, "resume"))
+      return [{ kind: "release", ...at }];
     if (pause && !pause.commented)
       return [{ kind: "pause", ...at, pause: pause.paused }];
-  } else if (next.kind === "merge") {
-    const reason = mergeExclusion(issue, labels);
+  } else if (
+    next.kind === "merge" ||
+    next.kind === "review" ||
+    next.kind === "handBack"
+  ) {
+    // A review resumed from its stop is in that stop until it runs.
+    const answered = next.kind === "review" && next.claim;
+    const reason = exclusionReason(
+      answered
+        ? issue.labels.filter((label) => !stopLabels(labels).includes(label))
+        : issue.labels,
+      labels,
+      "merge",
+    );
+    if (reason) return skipped(next, reason);
+    if (
+      next.kind !== "merge" &&
+      !answered &&
+      !issue.labels.includes(labels.ready)
+    )
+      return skipped(next, `it no longer carries ${labels.ready}`);
+  } else if (next.kind === "triage") {
+    const reason =
+      exclusionReason(issue.labels, labels, "triage") ??
+      (next.previous ? "a factory run for it is still on the host" : null) ??
+      triageRefusal(issue, policy(repository), labels.triage!)?.reason;
     if (reason) return skipped(next, reason);
   } else {
     if (!issue.labels.includes(labels.ready))
       return next.kind === "retry"
         ? [unretried(next.retry, `it no longer carries ${labels.ready}`)]
         : [];
-    const excluded = exclusion(issue, repository);
+    const excluded = exclusion(issue, repository, next.kind);
     if (next.kind === "retry" && excluded) {
       const readiness = readinessExclusion(
         issue,
@@ -762,18 +1079,6 @@ function continuationExclusions(
         : [unretried(next.retry, excluded.reason)];
     }
     if (next.kind === "fresh") {
-      const stateReason =
-        (labels.skip !== undefined && issue.labels.includes(labels.skip)
-          ? `labelled \`${labels.skip}\`; delivered outside the factory`
-          : null) ??
-        needsInputExclusion(issue, labels) ??
-        (issue.labels.includes(labels.running)
-          ? "claimed by a running factory run"
-          : null) ??
-        (issue.labels.includes(labels.paused)
-          ? `labelled ${labels.paused}; the factory resumes its run by itself`
-          : null);
-      if (stateReason) return skipped(next, stateReason);
       if (excluded) return skipped(next, excluded.reason, excluded.key);
       if (next.previous)
         return skipped(next, "a factory run for it is still on the host");
@@ -799,16 +1104,22 @@ function skipped(
   ];
 }
 
+type Choice = { model: Model; selection: Selection; diversity?: "unavailable" };
+
 // Admission preserves reason precedence: fresh repository gates and a fresh
 // merge's release hold precede model validation; retry/resume models precede
 // repository gates. A paused run's first notice precedes all admission holds.
+// A model chosen for a stage that is unavailable falls back to the host's
+// default for that stage only when the repository's model policy says so,
+// and only when that default is available; otherwise the launch waits.
 function admit(
   next: Continuation,
   running: Map<string, number>,
   snapshot: Snapshot,
   models: Models,
 ): Decision[] {
-  const { repository, issue, selected, modelSource } = next;
+  const { repository, issue, label, modelSource } = next;
+  const policy = repository.modelPolicy ?? null;
   const rules = continuationRules[next.kind];
   const at = { repository: repository.name, issue: issue.number };
   if (next.exclusions !== null) return next.exclusions;
@@ -822,53 +1133,154 @@ function admit(
     const held = repositoryHold("release", repository, next.own);
     if (held) return skipped(next, held.reason, held.hold, "relaunch waits: ");
   }
-  if ("error" in selected) return skipped(next, selected.error, holdKeys.model);
-  const resolved =
-    modelSource.kind === "recorded"
-      ? models.resolveModel(
-          `${modelSource.run.provider}/${modelSource.run.model}@${modelSource.run.effort}`,
-        )
-      : modelSource.kind === "retry"
-        ? modelSource.model
-        : selected;
-  if ("error" in resolved) return skipped(next, resolved.error, holdKeys.model);
-  const model =
-    modelSource.kind === "recorded" && modelSource.retain
-      ? {
-          provider: modelSource.run.provider,
-          model: modelSource.run.model,
-          effort: modelSource.run.effort,
-        }
-      : resolved;
+  if (label && "error" in label)
+    return skipped(next, label.error, holdKeys.model);
+  let choice: Choice | { error: string };
+  if (modelSource.kind === "recorded") {
+    const { run } = modelSource;
+    const resolved = models.resolveModel(
+      `${run.provider}/${run.model}@${run.effort}`,
+    );
+    choice =
+      "error" in resolved
+        ? resolved
+        : {
+            model: modelSource.retain
+              ? { provider: run.provider, model: run.model, effort: run.effort }
+              : resolved,
+            selection: "recorded",
+          };
+  } else
+    choice = stageModel(
+      modelSource.stage,
+      label,
+      policy,
+      snapshot.settings,
+      models,
+    );
+  if ("error" in choice) return skipped(next, choice.error, holdKeys.model);
   if (next.afterModel !== null) return next.afterModel;
-  const reason =
-    repositoryHeld?.reason ??
-    (next.pause && limited(model.provider, next.pause, snapshot)) ??
+  const available = (model: Model) =>
     gate(model.provider, running, snapshot, rules.threshold);
+  if (next.diversity !== null)
+    choice = diverse(
+      choice,
+      next.diversity,
+      policy,
+      snapshot.settings,
+      models,
+      available,
+    );
+  let reason =
+    repositoryHeld?.reason ??
+    (next.pause && limited(choice.model.provider, next.pause, snapshot)) ??
+    available(choice.model);
+  if (
+    reason &&
+    !repositoryHeld &&
+    modelSource.kind === "stage" &&
+    policy?.fallback === "host-default" &&
+    choice.selection !== "host-default"
+  ) {
+    const fallback = hostDefault(modelSource.stage, snapshot.settings, models);
+    if (!("error" in fallback) && available(fallback.model) === null) {
+      choice = { ...fallback, selection: "fallback" };
+      reason = null;
+    }
+  }
   if (reason) return skipped(next, reason, repositoryHeld?.hold);
+  const { model, selection, diversity } = choice;
   running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
   return [
-    ...(next.kind === "fresh" ? [{ kind: "claim" as const, ...at }] : []),
+    ...(next.claim ? [{ kind: "claim" as const, ...at }] : []),
     ...(next.unpause ? [{ kind: "unpause" as const, ...at }] : []),
-    { kind: "launch", ...at, ...model, ...next.launch },
+    {
+      kind: "launch",
+      ...at,
+      ...model,
+      selection,
+      ...(diversity && { diversity }),
+      ...next.launch,
+    },
   ];
 }
 
-// A merge delivery never takes over an owner's question or a PR whose
-// continuation belongs outside the factory, including after interruption.
-function mergeExclusion(
-  issue: Issue,
-  labels: FactoryConfiguration["labels"],
-): string | null {
-  return (
-    needsInputExclusion(issue, labels) ??
-    (issue.labels.includes(labels.failed)
-      ? `labelled ${labels.failed}`
-      : null) ??
-    (labels.skip !== undefined && issue.labels.includes(labels.skip)
-      ? `labelled ${labels.skip}; delivered outside the factory`
-      : null)
+// A stage's model: an implement attempt's issue label first, then the
+// repository's policy preference for the stage, then the host's default for
+// it. A preference may reuse the issue's label, which it then needs. Every
+// choice stays inside the host's capabilities.
+function stageModel(
+  stage: Stage,
+  label: Model | null,
+  policy: ModelPolicy | null,
+  settings: Settings,
+  models: Models,
+): Choice | { error: string } {
+  if (stage === "initial" && label)
+    return { model: label, selection: "issue-label" };
+  const [path, preference] =
+    stage === "initial" || stage === "retry"
+      ? [`runKinds.implement.${stage}`, policy?.runKinds.implement?.[stage]]
+      : [`runKinds.${stage}`, policy?.runKinds[stage]];
+  if (!preference) return hostDefault(stage, settings, models);
+  if ("source" in preference)
+    return label
+      ? { model: label, selection: "issue-label" }
+      : {
+          error: `the model policy's ${path} selects the issue's model label, and the issue has none`,
+        };
+  const model = models.resolveModel(
+    `${preference.provider}/${preference.model}${preference.effort === undefined ? "" : `@${preference.effort}`}`,
   );
+  return "error" in model
+    ? {
+        error: `the model policy's ${path} is outside this host's capabilities: ${model.error}`,
+      }
+    : { model, selection: "policy" };
+}
+
+function hostDefault(
+  stage: Stage,
+  settings: Settings,
+  models: Models,
+): Choice | { error: string } {
+  const model = models.resolveModel(
+    {
+      initial: settings.defaultModel,
+      retry: settings.retryModel,
+      triage: settings.triageModel ?? settings.defaultModel,
+      review: settings.reviewModel ?? settings.defaultModel,
+    }[stage],
+  );
+  return "error" in model ? model : { model, selection: "host-default" };
+}
+
+// A review asking for a provider other than its implement attempt's may
+// switch only to the host's explicitly configured review default, when the
+// repository has no model policy or its fallback is host-default, and only
+// when that default is available on another provider. Otherwise it stays on
+// its choice and says diversity was unavailable: it never searches the host's
+// models and never waits for diversity alone.
+function diverse(
+  choice: Choice,
+  implementedBy: string,
+  policy: ModelPolicy | null,
+  settings: Settings,
+  models: Models,
+  available: (model: Model) => string | null,
+): Choice {
+  if (choice.model.provider !== implementedBy) return choice;
+  const alternative =
+    settings.reviewModel !== undefined &&
+    (policy === null || policy.fallback === "host-default")
+      ? models.resolveModel(settings.reviewModel)
+      : null;
+  return alternative &&
+    !("error" in alternative) &&
+    alternative.provider !== implementedBy &&
+    available(alternative) === null
+    ? { model: alternative, selection: "diversity" }
+    : { ...choice, diversity: "unavailable" };
 }
 
 function unretried({ run, failure }: Retry, reason: string): Decision {
@@ -1050,12 +1462,14 @@ function gate(
     : null;
 }
 
-function issueModel(
+// The issue's model label as the host resolves it, null without one. Several
+// labels, or one the host can't resolve or doesn't allow, are an error that
+// holds every continuation.
+function labelModel(
   issue: Pick<Issue, "labels">,
   modelLabelPrefix: string,
-  settings: Settings,
   models: Models,
-): Model | { error: string } {
+): Model | { error: string } | null {
   const named = issue.labels.filter((label) =>
     label.startsWith(modelLabelPrefix),
   );
@@ -1063,7 +1477,7 @@ function issueModel(
     return { error: `several model labels: ${named.join(", ")}` };
   if (named.length === 1)
     return models.resolveModelLabel(modelLabelPrefix, named[0]);
-  return models.resolveModel(settings.defaultModel);
+  return null;
 }
 
 // One queue across every repository: oldest issue first, then by repository
@@ -1083,19 +1497,20 @@ function oldestFirst<T extends { repository: Repository; issue: Issue }>(
   );
 }
 
-// A ready-labelled issue's exclusion from pickup, given its repository, whose
-// open issues may hold it.
+// A ready-labelled issue's exclusion from pickup or its retry, given its
+// repository, whose open issues may hold it: its labels, then its readiness,
+// then its blockers.
 function exclusion(
   issue: Issue,
   repository: Repository,
+  continuing: Continuing,
 ): { reason: string; key?: HoldKey } | null {
-  const { labels } = repository.configuration;
-  const needsInput = needsInputExclusion(issue, labels);
-  if (needsInput) return { reason: needsInput };
-  if (issue.labels.includes(labels.failed))
-    return {
-      reason: `labelled ${labels.failed}; remove the label to run it again`,
-    };
+  const labelled = exclusionReason(
+    issue.labels,
+    repository.configuration.labels,
+    continuing,
+  );
+  if (labelled) return { reason: labelled };
   const held = readinessExclusion(issue, repository.issues, policy(repository));
   if (held) return held;
   const blockers = issue.blockedBy.filter(
@@ -1104,13 +1519,4 @@ function exclusion(
   if (blockers.length > 0)
     return { reason: `blocked by ${references(blockers)}` };
   return null;
-}
-
-function needsInputExclusion(
-  issue: Issue,
-  labels: FactoryConfiguration["labels"],
-): string | null {
-  return issue.labels.includes(labels.needsInput)
-    ? `labelled ${labels.needsInput}; answer the question and remove the label to run it again`
-    : null;
 }

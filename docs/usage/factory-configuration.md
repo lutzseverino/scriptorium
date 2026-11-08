@@ -3,14 +3,204 @@
 Each repository names its conventions in `.factory/config.json`. The factory
 reads it from the repository's default branch on every pass, alongside
 `.factory/Dockerfile`. Labels, the contract result, the model-label prefix,
-the skill and its arguments have no defaults. Optional comment templates default to the factory's own wording; see
+the skills and their arguments have no defaults. Optional comment templates default to the factory's own wording; see
 [the ownership decision](../adr/0005-default-the-factorys-own-comment-wording.md).
 
-## Schema
+Version 3 maps up to three [run kinds](#run-kinds) to skills; version 2 runs
+one implement skill. Each version is validated against its own contract,
+described below, and every other version is refused.
+
+## Version 3
+
+The fields in this example are required; `runKinds.triage`,
+`runKinds.review`, `triageResult`, `comments` and every label but `ready`,
+`running`, `paused` and `failed` are optional. Unknown fields at any level and
+malformed values are invalid.
+
+```json
+{
+  "version": 3,
+  "labels": {
+    "ready": "state:ready",
+    "running": "factory:running",
+    "paused": "factory:paused",
+    "failed": "factory:failed"
+  },
+  "contractResult": {
+    "marker": "repo-canon:issue-contract-state",
+    "author": "github-actions[bot]"
+  },
+  "modelLabelPrefix": "model:",
+  "runKinds": {
+    "implement": { "skill": "implement", "arguments": "#{issue}" }
+  }
+}
+```
+
+Implement alone is the minimum, and behaves as a version 2 repository's one
+run does, with the state labels below in place of `needsInput`. Repo Canon's
+factory profile ships every run kind and label role:
+
+```json
+{
+  "version": 3,
+  "labels": {
+    "triage": "state:triage",
+    "reporter": "state:reporter",
+    "grill": "state:grill",
+    "owner": "state:owner",
+    "ready": "state:ready",
+    "ownerReview": "gate:owner-review",
+    "majorRelease": "gate:major-release",
+    "running": "factory:running",
+    "paused": "factory:paused",
+    "failed": "factory:failed",
+    "skip": "factory:skip",
+    "hold": "factory:hold",
+    "releaseHold": "factory:release-hold",
+    "priorityHigh": "priority:high",
+    "priorityNormal": "priority:normal",
+    "priorityLow": "priority:low"
+  },
+  "modelLabelPrefix": "model:",
+  "runKinds": {
+    "triage": { "skill": "triage", "arguments": "#{issue}" },
+    "implement": { "skill": "implement", "arguments": "#{issue}" },
+    "review": {
+      "skill": "review",
+      "arguments": "#{pullRequest}",
+      "differentProvider": true
+    }
+  },
+  "contractResult": {
+    "marker": "repo-canon:issue-contract-state",
+    "author": "github-actions[bot]"
+  },
+  "triageResult": {
+    "marker": "scriptorium:run",
+    "author": "lz-scriptorium[bot]"
+  }
+}
+```
+
+| Field                               | Value                                                                                                                                                                       |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                           | Numeric `3`.                                                                                                                                                                |
+| `labels.<role>`                     | The label name of each [label role](#label-roles), a non-empty trimmed string, distinct from every other ignoring case. `labels.triage` is required with `runKinds.triage`. |
+| `contractResult`                    | As in version 2; see [contract result](#contract-result).                                                                                                                   |
+| `triageResult.marker`               | The marker of the line naming the factory triage run in its result, `<!-- <marker> {"run":"…"} -->`. See [triage readiness](#triage-readiness).                             |
+| `triageResult.author`               | The account the factory's triage run posts its result and applies readiness as.                                                                                             |
+| `modelLabelPrefix`                  | As in version 2.                                                                                                                                                            |
+| `runKinds.<kind>.skill`             | The kind's skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                                              |
+| `runKinds.<kind>.arguments`         | A string of skill arguments. Every `{issue}` expands to the issue number and every `{pullRequest}` to the PR number the run works on; triage has no PR and refuses it.      |
+| `runKinds.review.differentProvider` | Optional boolean: whether review asks for a provider other than its implement attempt's; see [provider diversity](host.md#provider-diversity).                              |
+| `comments`                          | As in version 2; see [comment templates](#comment-templates).                                                                                                               |
+
+Model values are not configuration here: the host's defaults and the
+repository's optional [model policy](host.md#repository-model-policy) choose
+them.
+
+An implement launch with no PR, such as a fresh attempt, cannot use
+`{pullRequest}`: it waits with the diagnostic
+`runKinds.implement.arguments names {pullRequest}, and this launch has no pull request`
+in status and logs. A hand-back, a resumption with a PR and a merge relaunch
+supply it.
+
+### Run kinds
+
+[ADR 0008](../adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md)
+records the split. Each kind is optional except implement:
+
+- **Triage** researches one issue and ends with its Agent Brief and readiness,
+  or a stop. Without triage, readiness comes only from a person.
+- **Implement** takes a ready issue to a draft pull request. Without review,
+  its skill also delivers and merges it, as version 2's run does.
+- **Review** reviews that PR as an agent that wrote none of it, fixes small
+  findings or hands the work back, and merges it. With review on, only review
+  merges: a merge relaunch runs review.
+
+Each kind runs its configured skill under the factory's unattended execution
+guidance; a triage run and a review run log beside implement's, as
+`issue-<n>-triage-attempt-1.log` and `issue-<n>-review-attempt-1.log`. Only
+an implement attempt retries.
+
+### Handoffs
+
+The host hands work between the kinds through the issue's labels and its pull
+request, and every launch passes the same pickup gates, holds and model
+checks:
+
+- **Triage** starts, claiming the issue, when it carries `labels.triage` and
+  the label's latest application was by a person whose current role the host
+  authorizes. A bot's application, such as the issue-contract validator's
+  fallback, never starts it. Its run ends once the issue leaves the triage
+  state, and fails when it never did.
+- **Implement** starts on accepted readiness, `labels.ready`, as in version 2.
+- **Review** starts on the PR an implement run ends with, keeping the claim
+  without an awaiting-merge notice.
+- **A hand-back** starts implement on the same PR when a review ends with its
+  PR still a draft, at most twice; a review that would hand back a third time
+  fails the issue.
+- **A stop**: a run that ends with the issue in the triage, reporter, grill or
+  owner state releases its claim and leaves the issue there. Returning the
+  issue to `labels.ready` resumes the same work and PR on a current base, with
+  the same guidance version 2 gives a needs-input resume. A review that
+  stopped with its PR marked ready resumes as review.
+- **A gate**: with a gate label on the issue or its PR, review stops at
+  ready-to-merge and moves the issue to the owner state. Once no gate label
+  remains on either, the factory claims the issue again and restarts review to
+  merge, without waiting for the ready state. An unreadable gate read keeps it
+  waiting.
+
+Version 3 has no needs-input label: the state labels name who must act.
+
+### Label roles
+
+Every label the factory reads or writes is a role, declared once in
+`src/label-roles.ts` with the versions that name it, whether only the factory
+writes it, what it excludes and how the factory's transitions change it.
+
+| Role                                            | Versions | Writer                                       | Meaning                                                               |
+| ----------------------------------------------- | -------- | -------------------------------------------- | --------------------------------------------------------------------- |
+| `triage`, `reporter`, `grill`, `owner`          | 3        | People and runs                              | Stops: the issue waits on triage, its reporter, a grill or the owner. |
+| `ready`                                         | 2, 3     | People, or the factory's triage run          | Accepted readiness; the issue-contract validator decides its changes. |
+| `ownerReview`, `majorRelease`                   | 3        | The owner                                    | Gates that stop review at ready-to-merge.                             |
+| `running` (`0052cc`)                            | 2, 3     | The factory                                  | A run holds the issue.                                                |
+| `failed` (`b60205`)                             | 2, 3     | The factory                                  | The run failed for good; remove it to run again.                      |
+| `paused` (`c5def5`)                             | 2, 3     | The factory                                  | The factory paused the run and resumes it by itself.                  |
+| `needsInput` (`fbca04`)                         | 2        | Agents; the factory provisions and clears it | Version 2's stop.                                                     |
+| `skip`, `hold`, `releaseHold`                   | 2, 3     | The repository                               | Delivery outside the factory and the repository's holds, as below.    |
+| `priorityHigh`, `priorityNormal`, `priorityLow` | 3        | People and runs                              | Named for the repository's priority labels.                           |
+
+The factory creates or updates only the labels it writes, with the colours
+above, on every pass.
+
+### Triage readiness
+
+The factory accepts readiness only from a person, except, with
+`runKinds.triage` on, readiness the factory's own triage run applied. That readiness counts when its latest
+application is by `triageResult.author`, and the validator's current result
+approves it with, as its contract source, a comment by that account that names
+the triage run on exactly one `triageResult.marker` line. A result by another
+account, another marker, a line naming no run or two, or a result made stale
+by a later change grants no readiness. The contract result's other checks
+still apply.
+
+### Migrating from version 2
+
+Set `version` to `3`, and move `skill` and `arguments` into
+`runKinds.implement`. Replace `labels.needsInput` with the state labels the
+repository uses for its stops, and add `labels.triage` and `runKinds.triage`
+or `runKinds.review` to turn those kinds on. An open question labelled with
+the old needs-input label is no longer a stop for the factory: move it to the
+matching state first. Move model choices out of configuration into the host's
+defaults or the repository's model policy.
+
+## Version 2
 
 The fields in this example are required. `labels.skip`, `labels.releaseHold`, `labels.hold`, `comments` and its
-individual entries are optional. Unknown fields at any level, malformed
-values and versions other than numeric `2` are invalid.
+individual entries are optional. Unknown fields at any level and malformed
+values are invalid.
 
 ```json
 {
@@ -81,7 +271,7 @@ and merged PRs do not hold, and a labelled PR never holds itself. For example,
 `"releaseHold": "factory:release-hold"` holds merge relaunches while another
 open PR carries `factory:release-hold`; an unreadable hold also makes merge
 relaunches wait for a successful read. Other repositories continue normally.
-Omitting the key leaves behavior unchanged and keeps configuration version `2`.
+Omitting the key leaves behavior unchanged and keeps the configuration's version.
 
 This holds merges only. Pickup, retries, interrupted and paused relaunches,
 and needs-input resumes still proceed under their usual gates. Every run's
@@ -162,7 +352,7 @@ that needs the pause can carry the label and merge, which ends the hold. An
 unreadable hold holds the repository for that pass, and the hold ends only
 once a successful read finds no labelled issue or PR. Removing the label, or
 closing what carries it, resumes pickup and merging on the next pass. Omitting
-the key leaves behavior unchanged and keeps configuration version `2`.
+the key leaves behavior unchanged and keeps the configuration's version.
 
 Every run's prompt names the label and directs the agent to check for open
 issues and PRs carrying it, other than its own PR, before any merge. While the

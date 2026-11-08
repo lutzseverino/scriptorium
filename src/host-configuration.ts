@@ -15,7 +15,15 @@ export type HostConfiguration = {
   // Each repository the factory serves, as `<owner>/<name>`.
   repositories: string[];
   providers: Record<string, ProviderSettings & { cap: number }>;
-  models: { default: string; retry: string; allowed?: string[] };
+  // The default models for an implement attempt and its retry, and optional
+  // defaults for triage and review runs, which otherwise take `default`.
+  models: {
+    default: string;
+    retry: string;
+    triage?: string;
+    review?: string;
+    allowed?: string[];
+  };
   timeLimitMinutes: number;
   usage: UsagePolicy;
   pollSeconds: number;
@@ -247,9 +255,11 @@ function hostConfigurationProblems(value: unknown): string[] {
         {
           default: text(),
           retry: text(),
+          triage: text(),
+          review: text(),
           allowed: list(text(), { nonEmpty: true }),
         },
-        ["allowed"],
+        ["triage", "review", "allowed"],
       ),
       // Both durations become timers, which wait at most 2^31 - 1 milliseconds.
       timeLimitMinutes: number(
@@ -397,8 +407,9 @@ function hostConfigurationProblems(value: unknown): string[] {
       undefined,
       configuration.models.allowed,
     );
-    for (const field of ["default", "retry"] as const) {
+    for (const field of ["default", "retry", "triage", "review"] as const) {
       const model = configuration.models[field];
+      if (model === undefined) continue;
       const resolved = registry.resolveModel(model);
       if ("error" in resolved)
         problems.push(`models.${field}: ${resolved.error}`);

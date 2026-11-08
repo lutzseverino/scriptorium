@@ -199,6 +199,7 @@ test("a ready issue runs directly on the host's default model", () => {
     { kind: "claim", ...at(4) },
     {
       kind: "launch",
+      selection: "host-default",
       ...at(4),
       provider: "claude-code",
       model: "claude-sonnet-5-5",
@@ -1148,6 +1149,7 @@ test("a paused repository claims and launches nothing while its runs keep settli
     { kind: "claim", ...at(4) },
     {
       kind: "launch",
+      selection: "host-default",
       ...at(4),
       provider: "claude-code",
       model: "claude-sonnet-5-5",
@@ -1268,6 +1270,7 @@ test("a failed first run retries once on the host's retry model, keeping its cla
     [
       {
         kind: "launch",
+        selection: "host-default",
         ...at(4),
         provider: "claude-code",
         model: "claude-opus-5-5",
@@ -1404,6 +1407,7 @@ test("an orphaned claim without an interrupted record retries its failed first a
   assert.deepEqual(launches(decisions), [
     {
       kind: "launch",
+      selection: "host-default",
       ...at(6),
       provider: "claude-code",
       model: "claude-opus-5-5",
@@ -1413,6 +1417,7 @@ test("an orphaned claim without an interrupted record retries its failed first a
     },
     {
       kind: "launch",
+      selection: "host-default",
       ...at(7),
       provider: "claude-code",
       model: "claude-opus-5-5",
@@ -1574,6 +1579,7 @@ test("an interrupted run relaunches as the same attempt on its branch without a 
     [
       {
         kind: "launch",
+        selection: "recorded",
         ...at(4),
         provider: "codex",
         model: "gpt-5.5",
@@ -1584,6 +1590,7 @@ test("an interrupted run relaunches as the same attempt on its branch without a 
       },
       {
         kind: "launch",
+        selection: "recorded",
         ...at(5),
         provider: "claude-code",
         model: "claude-sonnet-5-5",
@@ -1750,6 +1757,7 @@ test("a run that ended on its provider's usage limit pauses its issue once, with
       { kind: "claim", ...at(2) },
       {
         kind: "launch",
+        selection: "host-default",
         ...at(2),
         provider: "claude-code",
         model: "claude-sonnet-5-5",
@@ -1801,6 +1809,7 @@ test("a paused run resumes as the same attempt only once its provider's usage re
     { kind: "unpause", ...at(4) },
     {
       kind: "launch",
+      selection: "recorded",
       ...at(4),
       provider: "codex",
       model: "gpt-5.5",
@@ -1985,6 +1994,7 @@ test("a paused-labelled claim no run holds settles as an orphaned claim under th
     { kind: "unpause", ...at(4) },
     {
       kind: "launch",
+      selection: "host-default",
       ...at(4),
       provider: "claude-code",
       model: "claude-opus-5-5",
@@ -2100,6 +2110,7 @@ test("each repository uses its own labels and model label prefix", () => {
   assert.deepEqual(launches(decisions), [
     {
       kind: "launch",
+      selection: "issue-label",
       ...at(1),
       provider: "codex",
       model: "gpt-5.5",
@@ -2231,6 +2242,7 @@ test("after needs input is removed pickup starts a fresh attempt 1", () => {
     { kind: "claim", ...at(4) },
     {
       kind: "launch",
+      selection: "host-default",
       ...at(4),
       provider: "claude-code",
       model: "claude-sonnet-5-5",
@@ -2765,6 +2777,7 @@ test("a merge relaunch retains its attempt and model and uses a cap slot at the 
   assert.deepEqual(launches(decide(input)), [
     {
       kind: "launch",
+      selection: "recorded",
       ...at(4),
       provider: "codex",
       model: "gpt-5.5",
