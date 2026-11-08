@@ -101,14 +101,14 @@ const host = createHost(configuration, registry, {
     return stdout;
   },
   // The token command of the repository's platform.
-  async token(repository) {
+  async token(repository, permissions) {
     const { platform } = detectPlatform(remoteUrl(repository));
     const settings = configuration.platforms[platform];
     if (!settings)
       throw new Error(
         `the host configuration has no settings for ${repository}'s platform, ${platform}`,
       );
-    return tokenCommand(settings.tokenCommand)(repository);
+    return tokenCommand(settings.tokenCommand)(repository, permissions);
   },
   remoteUrl,
   buildImage: (dockerfile) =>

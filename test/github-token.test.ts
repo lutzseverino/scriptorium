@@ -12,7 +12,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   githubTokens,
+  runKindPermissions,
   sandboxEnvironment,
+  version2Permissions,
   tokenCommand,
   writeSandboxToken,
 } from "../src/github-token.ts";
@@ -33,6 +35,48 @@ test("the token command runs with <owner>/<name> appended and prints the token",
     await tokenCommand([path, "app"])("acme/widgets"),
     "ghs_acme/widgets_app",
   );
+});
+
+test("a sandbox token's command also receives its permission set as JSON", async (t) => {
+  const path = command(
+    t,
+    'echo "ghs_$(echo "$1" | tr / _)_$(echo "$2" | wc -c)"',
+  );
+  const permissions = runKindPermissions.triage;
+  assert.equal(
+    await tokenCommand([path])("acme/widgets", permissions),
+    `ghs_acme_widgets_${JSON.stringify(permissions).length + 1}`,
+  );
+});
+
+test("each run kind's sandbox token requests its fixed permissions", () => {
+  const reads = {
+    contents: "read",
+    issues: "read",
+    metadata: "read",
+    pull_requests: "read",
+  };
+  // Implement and review also read the checks they wait on; on GitHub, the
+  // contents write a push needs also merges.
+  const pullRequestWork = {
+    ...reads,
+    actions: "read",
+    checks: "read",
+    contents: "write",
+    pull_requests: "write",
+    statuses: "read",
+  };
+  assert.deepEqual(runKindPermissions, {
+    triage: reads,
+    implement: pullRequestWork,
+    review: pullRequestWork,
+  });
+  assert.ok(Object.isFrozen(runKindPermissions.triage));
+  // A version 2 run's agent still asks its own question on the issue.
+  assert.deepEqual(version2Permissions, {
+    ...pullRequestWork,
+    issues: "write",
+  });
 });
 
 test("a failing or empty token command is refused without its output", async (t) => {
@@ -56,8 +100,10 @@ function cache(printed: string[]) {
   const clock = { now: new Date("2026-10-09T12:00:00Z") };
   const redactor = createRedactor();
   const tokens = githubTokens(
-    async (repository) => {
-      runs.push(repository);
+    async (repository, permissions) => {
+      runs.push(
+        permissions ? `${repository} ${permissions.contents}` : repository,
+      );
       const token = printed.shift();
       if (!token) throw new Error(`the token command for ${repository} failed`);
       return token;
@@ -77,6 +123,37 @@ test("a repository's token is reused for 30 minutes, then the command runs again
   clock.now = new Date("2026-10-09T12:30:00Z");
   assert.equal(await tokens.get("acme/widgets"), "ghs_three");
   assert.deepEqual(runs, ["acme/widgets", "acme/gadgets", "acme/widgets"]);
+});
+
+test("the host's token and each permission set's token are cached apart", async () => {
+  const { tokens, runs, clock } = cache([
+    "ghs_host",
+    "ghs_triage",
+    "ghs_triage_two",
+    "ghs_host_two",
+  ]);
+  assert.equal(await tokens.get("acme/widgets"), "ghs_host");
+  assert.equal(
+    await tokens.get("acme/widgets", runKindPermissions.triage),
+    "ghs_triage",
+  );
+  assert.equal(
+    await tokens.get("acme/widgets", runKindPermissions.triage),
+    "ghs_triage",
+  );
+  assert.equal(await tokens.get("acme/widgets"), "ghs_host");
+  clock.now = new Date("2026-10-09T12:30:00Z");
+  assert.equal(
+    await tokens.get("acme/widgets", runKindPermissions.triage),
+    "ghs_triage_two",
+  );
+  assert.equal(await tokens.get("acme/widgets"), "ghs_host_two");
+  assert.deepEqual(runs, [
+    "acme/widgets",
+    "acme/widgets read",
+    "acme/widgets read",
+    "acme/widgets",
+  ]);
 });
 
 test("concurrent requests share one run of the command", async () => {

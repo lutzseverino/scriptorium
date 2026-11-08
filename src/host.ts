@@ -33,6 +33,7 @@ import {
   readFactoryConfiguration,
   runKind,
   type FactoryConfiguration,
+  type RunKindName,
 } from "./factory-configuration.ts";
 import {
   claimLabels,
@@ -73,8 +74,11 @@ import {
 } from "./platform.ts";
 import {
   githubTokens,
+  runKindPermissions,
   sandboxEnvironment,
+  version2Permissions,
   writeSandboxToken,
+  type TokenCommand,
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
 import { ImageStorageHold, type ImageStorageStatus } from "./image-storage.ts";
@@ -103,9 +107,9 @@ export type HostPorts = {
   connect(remote: string, options: ConnectOptions): ConnectionWithLinkAdditions;
   // Runs Git in `cwd`, authenticating to GitHub as the token's holder.
   git(token: string, cwd: string, args: string[]): Promise<string>;
-  // Runs the host's token command for the repository and resolves the token
-  // it printed.
-  token(repository: string): Promise<string>;
+  // Runs the host's token command for the repository, narrowed to the
+  // permissions for a sandbox's token, and resolves the token it printed.
+  token: TokenCommand;
   // The URL the repository is cloned from, which names its platform.
   remoteUrl(repository: string): string;
   // Builds the sandbox image over the repository's toolchain Dockerfile, with
@@ -154,7 +158,8 @@ type HostRun = Run & {
   // The run's private directory, holding its token directory and the
   // agent's raw log while its agent runs.
   sandbox: string;
-  // The token the sandbox's token file holds; it is never recorded.
+  // The token the sandbox's token file holds, narrowed to its run kind; it is
+  // never recorded.
   token: string;
   // Resolves once the run's log is published and its directory removed.
   finished: Promise<void>;
@@ -206,6 +211,12 @@ export function createHost(
   const redactor = createRedactor();
   const tokens = githubTokens(ports.token, ports.now, redactor);
   const report = (line: string) => ports.report(redactor.redact(line));
+  // Git as the repository's own token holder, a token no sandbox gets. Each
+  // call takes the token as it stands, so a long pass outlives none.
+  const hostGit =
+    (repository: string): Git =>
+    async (cwd, args) =>
+      ports.git(await tokens.get(repository), cwd, args);
   let started = false;
   let interrupting = false;
   // Why image retention last waited, reported once until it changes.
@@ -309,15 +320,14 @@ export function createHost(
       modelPolicy: null,
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
+    // A repository whose own token fails to print is paused for the pass.
     try {
-      await deliver(name, await tokens.get(name));
+      await tokens.get(name);
     } catch (error) {
       pause(`${error instanceof Error ? error.message : error}`);
       return pass;
     }
-    // Each call takes the token as it stands, so a long pass outlives none.
-    const git: Git = async (cwd, args) =>
-      ports.git(await tokens.get(name), cwd, args);
+    const git = hostGit(name);
     const { clone } = directory(name);
     try {
       await updateClone(
@@ -649,8 +659,7 @@ export function createHost(
       ]),
     ];
     const { clone } = directory(name);
-    const git: Git = async (cwd, args) =>
-      ports.git(await tokens.get(name), cwd, args);
+    const git = hostGit(name);
     for (const number of numbers) {
       if (held(number)) continue;
       const marker = readClaimMarker(name, number);
@@ -987,35 +996,45 @@ export function createHost(
     ports.stopSandboxes();
   }
 
-  // Rewrites the token file of each of the repository's running sandboxes
-  // that holds another token.
-  async function deliver(repository: string, token: string) {
-    for (const run of runs)
-      if (run.repository === repository && !run.exited && run.token !== token)
+  // A sandbox's token, narrowed to its run kind's permissions, or to version
+  // 2's for a repository on that configuration version.
+  const sandboxToken = (
+    repository: string,
+    { version }: FactoryConfiguration,
+    kind: RunKindName,
+  ) =>
+    tokens.get(
+      repository,
+      version === 2 ? version2Permissions : runKindPermissions[kind],
+    );
+
+  // Refreshes every running sandbox's token within its run kind's
+  // permissions, between passes as well as during them, so a run outlives
+  // its first token and no run's token file holds another kind's token.
+  async function refreshTokens() {
+    for (const run of runs.filter((run) => !run.exited)) {
+      const name = `${run.repository}#${run.issue}`;
+      let token;
+      try {
+        token = await sandboxToken(
+          run.repository,
+          run.configuration,
+          run.runKind ?? "implement",
+        );
+      } catch (error) {
+        report(`${name}'s token was not refreshed: ${error}`);
+        continue;
+      }
+      if (run.token !== token)
         try {
           await writeSandboxToken(join(run.sandbox, "github"), token);
           run.token = token;
         } catch (error) {
           // A run that exited meanwhile took its token file with it.
           if (!run.exited)
-            report(
-              `${repository}#${run.issue}'s token file was not rewritten: ${error}`,
-            );
+            report(`${name}'s token file was not rewritten: ${error}`);
         }
-  }
-
-  // Refreshes the token of every repository with a running sandbox, between
-  // passes as well as during them, so a run outlives its first token.
-  async function refreshTokens() {
-    const repositories = new Set(
-      runs.filter((run) => !run.exited).map((run) => run.repository),
-    );
-    for (const repository of repositories)
-      try {
-        await deliver(repository, await tokens.get(repository));
-      } catch (error) {
-        report(`${repository}'s token was not refreshed: ${error}`);
-      }
+    }
   }
 
   async function launch(decision: Decision & { kind: "launch" }, pass: Pass) {
@@ -1029,10 +1048,10 @@ export function createHost(
       (decision.target ?? decision.mergeRelaunch)?.number,
     ) as string;
     const paths = directory(repository);
-    const token = await tokens.get(repository);
-    const base = (
-      await ports.git(token, paths.clone, ["rev-parse", "HEAD"])
-    ).trim();
+    // Run start mints the sandbox's token for its run kind alone.
+    const token = await sandboxToken(repository, pass.configuration!, kind);
+    const git = hostGit(repository);
+    const base = (await git(paths.clone, ["rev-parse", "HEAD"])).trim();
     const previous = find(decision);
     const marker = previous ?? readClaimMarker(repository, issue);
     const mergeRelaunchHeads = [...(marker.mergeRelaunchHeads ?? [])];
@@ -1041,11 +1060,7 @@ export function createHost(
       !mergeRelaunchHeads.includes(mergeHead(decision.mergeRelaunch))
     )
       mergeRelaunchHeads.push(mergeHead(decision.mergeRelaunch));
-    const recovery = await readRecovery(
-      async (cwd, args) => ports.git(await tokens.get(repository), cwd, args),
-      paths.clone,
-      runBranch(issue),
-    );
+    const recovery = await readRecovery(git, paths.clone, runBranch(issue));
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
     // A relaunch appends to its attempt's log. Triage and review runs keep
@@ -1217,12 +1232,7 @@ export function createHost(
           return;
         }
         try {
-          run.recovery = await readRecovery(
-            async (cwd, args) =>
-              ports.git(await tokens.get(repository), cwd, args),
-            paths.clone,
-            runBranch(issue),
-          );
+          run.recovery = await readRecovery(git, paths.clone, runBranch(issue));
         } catch (error) {
           report(
             `recovery inspection for ${repository}#${issue} failed; retain the clone and inspect its run branch before retry: ${error}`,
