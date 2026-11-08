@@ -28,8 +28,8 @@ result; a retry after failure starts a new one.
 _Avoid_: Status comment, progress comment
 
 **Run result**:
-The file a run's agent leaves for the host at exit, holding its outcome and
-the text the host posts in the factory's frame.
+The file a run's agent leaves for the host at exit, holding its outcome, the
+labels it asks for and the text the host posts in the factory's frame.
 _Avoid_: Agent comment, completion signal
 
 **Run kind**:

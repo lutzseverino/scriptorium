@@ -55,43 +55,58 @@ export type EndingReads = {
   unpushablePaths: string[];
 };
 
-// Observes one ending of an ended run or an orphaned claim on the open
-// `issue`, undefined once it closed: PRs opened since `since` count, and a
-// review reads its PR's draft state. Owned PRs accumulate, and a hold-stopped
-// merge attempt does not spend its head's recovery. Earlier outcome rows
-// settle without consulting the branch, which both runs and claims assess
-// against the same refreshed remote default branch.
+// An ended run or an orphaned claim as the host holds it: PRs opened since
+// `since` count, a review reads its PR's draft state, and its target is the
+// PR a review works on, which its run owns whatever its branch.
+type Ended = Partial<
+  Pick<Run, "mergeRelaunch" | "holdObserved" | "ownedPullRequests">
+> & {
+  issue: number;
+  since?: string;
+  review?: boolean;
+  target?: Pick<MergeRelaunch, "number">;
+  mergeRelaunchHeads?: string[];
+};
+
+// The platform's observation of an ended run's or claim's PRs, and the PRs it
+// owns, accumulated with those it owned before. An interrupted or paused run
+// reads only this.
+export async function observeOwnership(
+  platform: EndingReads["platform"],
+  ended: Ended,
+) {
+  const observation = await platform.pullRequestObservation(
+    ended.issue,
+    ended.since,
+    ended.review,
+    ended.target?.number,
+  );
+  return {
+    observation,
+    owned: [
+      ...new Set([
+        ...(ended.ownedPullRequests ?? []),
+        ...observation.ownedPullRequests,
+      ]),
+    ],
+  };
+}
+
+// Observes one ending on the open `issue`, undefined once it closed. A
+// hold-stopped merge attempt does not spend its head's recovery. Earlier
+// outcome rows settle without consulting the branch, which both runs and
+// claims assess against the same refreshed remote default branch.
 export async function observeEnding(
   reads: EndingReads,
   issue: Issue | undefined,
-  ended: Partial<
-    Pick<Run, "mergeRelaunch" | "holdObserved" | "ownedPullRequests">
-  > & {
-    issue: number;
-    since?: string;
-    review?: boolean;
-    // The PR a review works on, which its run owns whatever its branch.
-    target?: Pick<MergeRelaunch, "number">;
-    mergeRelaunchHeads?: string[];
-  },
+  ended: Ended,
 ): Promise<{
   facts: EndingFacts;
   pullRequests: InputResume["pullRequests"];
   ownedPullRequests: number[];
   mergeRelaunchHeads?: string[];
 }> {
-  const observation = await reads.platform.pullRequestObservation(
-    ended.issue,
-    ended.since,
-    ended.review,
-    ended.target?.number,
-  );
-  const owned = [
-    ...new Set([
-      ...(ended.ownedPullRequests ?? []),
-      ...observation.ownedPullRequests,
-    ]),
-  ];
+  const { observation, owned } = await observeOwnership(reads.platform, ended);
   const { mergeRelaunch } = ended;
   const held = heldPullRequests(ended.holdObserved, owned);
   const mergeRelaunchHeads =
@@ -182,7 +197,8 @@ async function readMergeCandidate(
   return behind ? candidate : undefined;
 }
 
-// A failed first implement run that may retry on the retry stage's model.
+// The run an ending settles, or the attempt 1 an orphaned claim stands for,
+// and a failed first implement run that may retry on the retry stage's model.
 export type SettlingRun = Pick<
   Run,
   | "repository"

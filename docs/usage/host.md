@@ -702,8 +702,7 @@ Sandbox images live in the host's Docker daemon, tagged as the
 
 ## Run outcomes
 
-Ended runs and orphaned claims use the same table, in order, which one
-run-ending module owns. Its first input is the run's [result](#run-results);
+Ended runs and orphaned claims use the same table, in order. Its first input is the run's [result](#run-results);
 the platform and the run's branch decide the rest, and every ending without a
 valid result that did not exit by itself: an orphaned claim, a run the factory
 found orphaned on a restart or a timed-out run, and a record from before run

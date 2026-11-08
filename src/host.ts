@@ -83,9 +83,11 @@ import {
   handBackLimit,
   mergeHead,
   observeEnding,
+  observeOwnership,
   type EndingReads,
 } from "./run-ending.ts";
 import {
+  postedLabels,
   readRunResult,
   resultFile,
   resultGuidance,
@@ -502,21 +504,17 @@ export function createHost(
       )) {
         await run.finished;
         const issue = issues.find((issue) => issue.number === run.issue);
+        const ended = {
+          ...run,
+          since: run.pullRequestSince,
+          review: run.runKind === "review",
+        };
         // An interrupted or paused run launches again; only its owned PRs
         // accumulate.
         if (run.interrupted || pausedEnding(run)) {
-          const { ownedPullRequests } = await platform.pullRequestObservation(
-            run.issue,
-            run.pullRequestSince,
-            run.runKind === "review",
-            run.target?.number,
-          );
-          run.ownedPullRequests = [
-            ...new Set([
-              ...(run.ownedPullRequests ?? []),
-              ...ownedPullRequests,
-            ]),
-          ];
+          run.ownedPullRequests = (
+            await observeOwnership(platform, ended)
+          ).owned;
           record(run);
           continue;
         }
@@ -538,20 +536,11 @@ export function createHost(
             run.configuration,
           );
           await platform.postResult(run.issue, post);
-          issue.labels = [
-            ...new Set([
-              ...issue.labels.filter((label) => !post.remove.includes(label)),
-              ...post.add,
-            ]),
-          ];
+          issue.labels = postedLabels(issue.labels, post);
           run.resultPosted = true;
           record(run);
         }
-        const ending = await observeEnding(reads, issue, {
-          ...run,
-          since: run.pullRequestSince,
-          review: run.runKind === "review",
-        });
+        const ending = await observeEnding(reads, issue, ended);
         run.ownedPullRequests = ending.ownedPullRequests;
         run.mergeRelaunchHeads = ending.mergeRelaunchHeads;
         run.ended = {

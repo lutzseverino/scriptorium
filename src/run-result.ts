@@ -81,6 +81,7 @@ export function readRunResult(
   return parseRunResult(text, configuration, kind);
 }
 
+// Validates a result's text for its kind, containing its model text.
 export function parseRunResult(
   text: string,
   configuration: FactoryConfiguration,
@@ -177,7 +178,7 @@ export function parseRunResult(
 }
 
 // The facts of the run that left a result, and the run ID the host issued it.
-type Facts = {
+type RunFacts = {
   id: string;
   kind: RunKindName;
   provider: string;
@@ -201,7 +202,7 @@ export type ResultPost = {
 // once to back the readiness it applies.
 export function resultPost(
   result: RunResult,
-  run: Facts,
+  run: RunFacts,
   configuration: FactoryConfiguration,
 ): ResultPost {
   const { comments, labels } = configuration;
@@ -232,6 +233,16 @@ export function resultPost(
     add: [...(result.labels ?? []), ...(result.state ? [result.state] : [])],
     remove: triage && labels.triage ? [labels.triage] : [],
   };
+}
+
+// An issue's labels once a result's labels are written.
+export function postedLabels(labels: string[], post: ResultPost): string[] {
+  return [
+    ...new Set([
+      ...labels.filter((label) => !post.remove.includes(label)),
+      ...post.add,
+    ]),
+  ];
 }
 
 // Posts a result's comment once: a retry after a failed label write finds the
