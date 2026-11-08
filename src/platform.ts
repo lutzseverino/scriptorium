@@ -15,7 +15,7 @@ import { renderComment } from "./comment-template.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
 import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
-import type { PullRequestState } from "./run-outcome.ts";
+import type { PullRequestState } from "./run-ending.ts";
 import {
   contractResultHold,
   triageBacked,
@@ -631,15 +631,8 @@ export function repositoryPlatform(
 
     // A run's pull request is one from this repository, not a fork, that
     // closes its issue or comes from the run's branch, opened since the first
-    // attempt started (`since`). Issue closure is observed separately.
-    async pullRequestState(
-      number: number,
-      since?: string,
-    ): Promise<PullRequestState> {
-      return state((await candidates(number, since)).found);
-    },
-
-    // A closing reference is observation, not delivery authorization. Only
+    // attempt started (`since`). Issue closure is observed separately. A
+    // closing reference is observation, not delivery authorization. Only
     // the run branch or the supplied connection's verified identity owns a PR.
     // With `draft`, the owned open PR also says whether it is a draft.
     async pullRequestObservation(

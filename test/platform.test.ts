@@ -1116,11 +1116,13 @@ test("a run's pull request is its repository's own, opened since its first attem
         };
       }
     });
-  const state = (closing: unknown[], branch: unknown[], since?: string) =>
-    repositoryPlatform(
-      answers(closing, branch).connection,
-      configuration,
-    ).pullRequestState(4, since);
+  const state = async (closing: unknown[], branch: unknown[], since?: string) =>
+    (
+      await repositoryPlatform(
+        answers(closing, branch).connection,
+        configuration,
+      ).pullRequestObservation(4, since)
+    ).state;
   const observed = async (
     closing: unknown[],
     branch: unknown[],

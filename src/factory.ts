@@ -39,10 +39,12 @@ import {
   type ReadinessHold,
 } from "./readiness.ts";
 import {
-  runOutcome,
-  type Observation,
-  type PullRequestState,
-} from "./run-outcome.ts";
+  handBackLimit,
+  settleEnding,
+  type EndingFacts,
+  type Retry,
+  type RunEnding,
+} from "./run-ending.ts";
 
 // An issue's number in its own repository, or `<owner>/<name>#<n>` in another.
 export type IssueId = number | string;
@@ -139,29 +141,11 @@ export type Run = {
     | null
     | { interrupted: true }
     | { paused: Pause; commented: boolean }
-    | {
-        timedOut: boolean;
-        orphaned?: true;
-        pullRequest: PullRequestState;
-        closesIssue?: true;
-        mergeCandidate?: MergeRelaunch;
-        // The one open PR the run owns, and for a review run whether it is
-        // still a draft, whatever its base.
-        openPullRequest?: MergeRelaunch & { draft?: true };
-        // Paths under the host's unpushable paths in commits the remote lacks.
-        unpushedChanges?: string[];
-      };
+    | RunEnding;
 };
 
 // A running- or paused-labelled issue that no run on the host holds.
-export type Claim = {
-  issue: number;
-  pullRequest: PullRequestState;
-  closesIssue?: true;
-  mergeCandidate?: MergeRelaunch;
-  inputResume?: InputResume;
-  unpushedChanges?: string[];
-};
+export type Claim = EndingFacts & { issue: number; inputResume?: InputResume };
 
 // One repository the host configuration lists, as this pass read it: its open
 // issues and its claims. A paused repository claims and launches nothing,
@@ -343,23 +327,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
           resumes(repository, claim)
         )
       ) {
-        const settled = settleOutcome(
-          {
-            repository: repository.name,
-            issue: claim.issue,
-            attempt: 1,
-            log: null,
-          },
-          {
-            ended: "orphaned",
-            pullRequest: claim.pullRequest,
-            closesIssue: claim.closesIssue,
-            unpushedChanges: claim.unpushedChanges,
-          },
-          repository,
-          snapshot,
-          models,
-        );
+        const settled = settleEnding({ claim }, repository, snapshot, models);
         if ("failure" in settled)
           retries.set(key(repository.name, claim.issue), settled);
         else {
@@ -525,30 +493,10 @@ function runningCounts(snapshot: Snapshot): Map<string, number> {
   return running;
 }
 
-// A failed first implement run that may retry on the retry stage's model.
-type SettlingRun = Pick<
-  Run,
-  | "repository"
-  | "issue"
-  | "attempt"
-  | "inputResume"
-  | "runKind"
-  | "target"
-  | "handBacks"
-> & {
-  log: string | null;
-};
-type Retry = { run: SettlingRun; failure: string };
-
-// The hand-backs an issue's reviews may make before its rounds fail.
-export const handBackLimit = 2;
-
 // A running run over the time limit is stopped, and so is one whose provider's
-// usage reached the pause threshold, which pauses it. An ended run releases its
-// claim once its issue closes and keeps it while the pull request is open. A
-// run stopped for an answer releases its claim without retry or failure.
-// A failed first implement run may retry once; any other failure fails the
-// issue. An interrupted or paused run is not settled: it launches again.
+// usage reached the pause threshold, which pauses it. An interrupted or paused
+// run is not settled: it launches again. Any other ended run settles through
+// its ending.
 function settle(
   run: Run,
   snapshot: Snapshot,
@@ -584,104 +532,7 @@ function settle(
   );
   // Unreadable repositories supply only running sandboxes.
   if (!repository) return [];
-  return settleOutcome(
-    run,
-    {
-      ended: run.ended.orphaned
-        ? "orphaned"
-        : run.ended.timedOut
-          ? "timed out"
-          : "exited",
-      pullRequest: run.ended.pullRequest,
-      closesIssue: run.ended.closesIssue,
-      unpushedChanges: run.ended.unpushedChanges,
-      openPullRequest: run.ended.openPullRequest,
-    },
-    repository,
-    snapshot,
-    models,
-  );
-}
-
-// Runs and orphaned claims settle through the same outcome table. The core
-// owns retries, gates and run-kind handoffs; the outcome module owns
-// observation precedence. Triage changes no code, so it ends once its issue
-// leaves the triage label. With review on, an implement run's open PR, and a
-// review's PR left a draft for a hand-back, pass to the next run kind instead
-// of awaiting merge.
-function settleOutcome(
-  run: SettlingRun,
-  observation: Pick<
-    Observation,
-    "ended" | "pullRequest" | "unpushedChanges" | "closesIssue"
-  > & { openPullRequest?: MergeRelaunch & { draft?: true } },
-  repository: Repository,
-  snapshot: Snapshot,
-  models: Models,
-): Decision[] | Retry {
-  const at = { repository: run.repository, issue: run.issue };
-  const { configuration } = repository;
-  const { labels } = configuration;
-  const issue = repository.issues.find((issue) => issue.number === run.issue);
-  if (run.runKind === "triage")
-    return issue && labels.triage && issue.labels.includes(labels.triage)
-      ? [
-          {
-            kind: "fail",
-            ...at,
-            failure: `the triage run ended with the issue still labelled ${labels.triage}`,
-            log: run.log,
-          },
-        ]
-      : [{ kind: "release", ...at }];
-  const outcome = runOutcome(
-    {
-      ...observation,
-      issueClosed: !issue,
-      stopped: issue ? isStopped(issue.labels, labels) : false,
-    },
-    snapshot.settings.timeLimitMinutes,
-  );
-  if (outcome.kind === "complete") return [{ kind: "complete", ...at }];
-  if (outcome.kind === "awaiting merge") {
-    const open = observation.openPullRequest;
-    if (open && runKind(configuration, "review")) {
-      if (run.runKind !== "review")
-        return [{ kind: "keep", ...at, quiet: true }];
-      if (open.draft)
-        return (run.handBacks ?? 0) < handBackLimit
-          ? [{ kind: "keep", ...at, quiet: true }]
-          : [
-              {
-                kind: "fail",
-                ...at,
-                failure: `its review rounds did not converge after ${handBackLimit} hand-backs`,
-                log: run.log,
-              },
-            ];
-    }
-    return [{ kind: "keep", ...at }];
-  }
-  if (outcome.kind === "done" || outcome.kind === "stopped")
-    return [{ kind: "release", ...at }];
-  const fail: Decision = {
-    kind: "fail",
-    ...at,
-    failure: outcome.failure,
-    log: run.log,
-    ...(outcome.unpushedChanges && {
-      unpushedChanges: outcome.unpushedChanges,
-    }),
-  };
-  if (outcome.final || run.attempt === 2 || run.runKind !== undefined)
-    return [fail];
-  // Without a policy preference, a retry needs the host's retry model.
-  if (
-    !repository.modelPolicy?.runKinds.implement?.retry &&
-    "error" in models.resolveModel(snapshot.settings.retryModel)
-  )
-    return [fail];
-  return { run, failure: outcome.failure };
+  return settleEnding({ run, ending: run.ended }, repository, snapshot, models);
 }
 
 // Every issue has one continuation for both admission and hold reconciliation.

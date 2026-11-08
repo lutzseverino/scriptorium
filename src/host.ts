@@ -20,13 +20,7 @@ import {
   type ConnectOptions,
   type ConnectionWithLinkAdditions,
 } from "@lutzseverino/postern";
-import {
-  updateClone,
-  unpushedChanges,
-  readRecovery,
-  type Recovery,
-  type Git,
-} from "./clone.ts";
+import { updateClone, readRecovery, type Recovery, type Git } from "./clone.ts";
 import {
   factoryConfigurationPath,
   launchArguments,
@@ -48,7 +42,6 @@ import {
 } from "./model-policy.ts";
 import {
   decideFactory,
-  handBackLimit,
   pullRequestIdentity,
   type Claim,
   type Decision,
@@ -59,11 +52,7 @@ import {
   type Settings,
   type Snapshot,
 } from "./factory.ts";
-import {
-  heldPullRequests,
-  repositoryHold,
-  observeHolds,
-} from "./repository-holds.ts";
+import { repositoryHold, observeHolds } from "./repository-holds.ts";
 import {
   relationshipSections,
   repositoryPlatform,
@@ -90,7 +79,12 @@ import {
   type Registry,
 } from "./providers.ts";
 import type { UsageWindow } from "./providers/usage.ts";
-import type { PullRequestState } from "./run-outcome.ts";
+import {
+  handBackLimit,
+  mergeHead,
+  observeEnding,
+  type EndingReads,
+} from "./run-ending.ts";
 import { createOwner } from "./owner.ts";
 import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
@@ -486,44 +480,46 @@ export function createHost(
           ...served.authorization,
         });
       }
+      const reads: EndingReads = {
+        platform,
+        git,
+        clone,
+        configuration: pass.configuration,
+        paused: pass.paused !== null,
+        unpushablePaths: configuration.unpushablePaths,
+      };
       for (const run of runs.filter(
         (run) => run.repository === name && run.exited,
       )) {
         await run.finished;
-        const observation = await platform.pullRequestObservation(
-          run.issue,
-          run.pullRequestSince,
-          run.runKind === "review",
-          run.target?.number,
-        );
-        run.ownedPullRequests = [
-          ...new Set([
-            ...(run.ownedPullRequests ?? []),
-            ...observation.ownedPullRequests,
-          ]),
-        ];
+        const issue = issues.find((issue) => issue.number === run.issue);
+        // An interrupted or paused run launches again; only its owned PRs
+        // accumulate.
         if (run.interrupted || pausedEnding(run)) {
+          const { ownedPullRequests } = await platform.pullRequestObservation(
+            run.issue,
+            run.pullRequestSince,
+            run.runKind === "review",
+            run.target?.number,
+          );
+          run.ownedPullRequests = [
+            ...new Set([
+              ...(run.ownedPullRequests ?? []),
+              ...ownedPullRequests,
+            ]),
+          ];
           record(run);
           continue;
         }
-        const held = heldPullRequests(run.holdObserved, run.ownedPullRequests);
-        // A hold-stopped merge attempt did not spend its head's recovery.
-        if (run.mergeRelaunch && held.includes(run.mergeRelaunch.number))
-          run.mergeRelaunchHeads = run.mergeRelaunchHeads?.filter(
-            (head) => head !== mergeHead(run.mergeRelaunch!),
-          );
-        const mergeCandidate = await readMergeCandidate(
-          git,
-          clone,
-          issues.find((issue) => issue.number === run.issue),
-          observation.mergeCandidate,
-          run.mergeRelaunchHeads ?? [],
-          pass,
-          run.holdObserved,
-          run.ownedPullRequests,
-        );
+        const ending = await observeEnding(reads, issue, {
+          ...run,
+          since: run.pullRequestSince,
+          review: run.runKind === "review",
+        });
+        run.ownedPullRequests = ending.ownedPullRequests;
+        run.mergeRelaunchHeads = ending.mergeRelaunchHeads;
         run.ended = {
-          ...(mergeCandidate && { mergeCandidate }),
+          ...ending.facts,
           // Sandcastle's idle timeout can end a run at its limit before the
           // factory stops it, so the time it ran decides, not who ended it.
           timedOut:
@@ -531,21 +527,7 @@ export function createHost(
             run.exitedAt!.getTime() - Date.parse(run.startedAt) >=
               settings.timeLimitMinutes * 60_000,
           ...(run.ended && "orphaned" in run.ended && { orphaned: true }),
-          pullRequest: observation.state,
-          ...(observation.closesIssue && { closesIssue: true }),
-          ...(observation.state === "open" &&
-            observation.mergeCandidate && {
-              openPullRequest: observation.mergeCandidate,
-            }),
         };
-        const paths = await readUnpushableChanges(
-          git,
-          clone,
-          issues.find((issue) => issue.number === run.issue),
-          run.ended.pullRequest,
-          pass.configuration,
-        );
-        if (paths.length) run.ended.unpushedChanges = paths;
         unobserved.delete(run);
         record(run);
       }
@@ -564,13 +546,7 @@ export function createHost(
         }),
         modelPolicy: pass.modelPolicy,
         ...(pass.gated !== undefined && { gated: pass.gated }),
-        claims: await readClaims(
-          name,
-          platform,
-          issues,
-          pass.configuration,
-          pass,
-        ),
+        claims: await readClaims(name, platform, issues, reads),
       };
     } catch (error) {
       pause(`its platform reads failed: ${error}`);
@@ -631,10 +607,9 @@ export function createHost(
     name: string,
     platform: RepositoryPlatform,
     issues: Issue[],
-    conventions: FactoryConfiguration,
-    pass: Pass,
+    reads: EndingReads,
   ): Promise<Claim[]> {
-    const { labels } = conventions;
+    const { labels } = reads.configuration;
     const held = (number: number) =>
       runs.some((run) => run.repository === name && run.issue === number);
     const claims: Claim[] = [];
@@ -658,8 +633,6 @@ export function createHost(
           .map((issue) => issue.number),
       ]),
     ];
-    const { clone } = directory(name);
-    const git = hostGit(name);
     for (const number of numbers) {
       if (held(number)) continue;
       const marker = readClaimMarker(name, number);
@@ -680,21 +653,13 @@ export function createHost(
           (label) => !released.includes(label),
         );
       }
-      const observation = await platform.pullRequestObservation(
-        number,
-        marker.inputResume?.since,
-        false,
-        marker.inputResume?.review?.target.number ??
-          issue?.pullRequest?.target.number,
-      );
-      const mergeCandidate = await readMergeCandidate(
-        git,
-        clone,
-        issues.find((issue) => issue.number === number),
-        observation.mergeCandidate,
-        marker.mergeRelaunchHeads ?? [],
-        pass,
-      );
+      const ending = await observeEnding(reads, issue, {
+        issue: number,
+        since: marker.inputResume?.since,
+        target:
+          marker.inputResume?.review?.target ?? issue?.pullRequest?.target,
+        mergeRelaunchHeads: marker.mergeRelaunchHeads,
+      });
       const claim: Claim = {
         issue: number,
         ...(marker.inputResume && {
@@ -704,24 +669,14 @@ export function createHost(
               ...new Map(
                 [
                   ...marker.inputResume.pullRequests,
-                  ...observation.pullRequests,
+                  ...ending.pullRequests,
                 ].map((pr) => [pr.number, pr]),
               ).values(),
             ],
           },
         }),
-        pullRequest: observation.state,
-        ...(observation.closesIssue && { closesIssue: true }),
-        ...(mergeCandidate && { mergeCandidate }),
+        ...ending.facts,
       };
-      const paths = await readUnpushableChanges(
-        git,
-        clone,
-        issues.find((issue) => issue.number === number),
-        claim.pullRequest,
-        conventions,
-      );
-      if (paths.length) claim.unpushedChanges = paths;
       claims.push(claim);
     }
     // A label-only claim's notice lives as long as the observed claim. Keep
@@ -749,81 +704,6 @@ export function createHost(
   } {
     const path = claimNoticePath(repository, issue);
     return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-  }
-
-  // This is observation only. Delivery Git operations stay with the agent.
-  // rev-list is empty exactly when origin/HEAD is an ancestor of the head,
-  // including diverged histories without relying on a platform freshness fact.
-  async function readMergeCandidate(
-    git: Git,
-    clone: string,
-    issue: Issue | undefined,
-    candidate: MergeRelaunch | undefined,
-    consumed: string[],
-    pass: Pass,
-    holdObserved?: number[] | null,
-    own: number[] = [],
-  ): Promise<MergeRelaunch | undefined> {
-    if (
-      !candidate ||
-      !issue ||
-      pass.paused !== null ||
-      isStopped(issue.labels, pass.configuration!.labels) ||
-      issue.labels.includes(pass.configuration!.labels.failed) ||
-      consumed.includes(mergeHead(candidate))
-    )
-      return undefined;
-    const defaultRef = (
-      await git(clone, ["symbolic-ref", "refs/remotes/origin/HEAD"])
-    ).trim();
-    if (
-      candidate.baseBranch !== defaultRef.slice("refs/remotes/origin/".length)
-    )
-      return undefined;
-    if (heldPullRequests(holdObserved, own).includes(candidate.number))
-      return candidate;
-    await git(clone, [
-      "fetch",
-      "--quiet",
-      "--no-tags",
-      "origin",
-      candidate.headCommit,
-    ]);
-    const behind = (
-      await git(clone, [
-        "rev-list",
-        "--max-count=1",
-        `${candidate.headCommit}..refs/remotes/origin/HEAD`,
-      ])
-    ).trim();
-    return behind ? candidate : undefined;
-  }
-
-  function mergeHead(target: MergeRelaunch): string {
-    return `${target.number}:${target.headCommit}`;
-  }
-
-  // Earlier outcome rows settle without consulting the branch. Both runs
-  // and claims assess delivery against the same refreshed remote default branch.
-  async function readUnpushableChanges(
-    git: Git,
-    clone: string,
-    issue: Issue | undefined,
-    pullRequest: PullRequestState,
-    conventions: FactoryConfiguration,
-  ): Promise<string[]> {
-    if (
-      !issue ||
-      !["none", "closed"].includes(pullRequest) ||
-      isStopped(issue.labels, conventions.labels)
-    )
-      return [];
-    return unpushedChanges(
-      git,
-      clone,
-      runBranch(issue.number),
-      configuration.unpushablePaths,
-    );
   }
 
   function find(decision: { repository: string; issue: number }) {
