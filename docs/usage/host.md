@@ -281,7 +281,7 @@ claims; resume each provider to lift it.
 The factory runs the `tokenCommand` of the repository's platform with the
 repository's `<owner>/<name>` appended. For the repository's own token, that
 is its last argument. For a sandbox's token, a second argument follows: the
-[run kind's permission set](#run-kind-token-scopes) as one JSON object, in
+[run kind's permission set](#run-kind-token-permissions) as one JSON object, in
 the form GitHub's
 [installation token request](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
 takes as `permissions`, such as
@@ -312,7 +312,7 @@ pass. A running sandbox keeps its last token, which is still valid, and the
 factory retries the refresh every minute. The factory names the failure but
 never logs the command's output.
 
-### Run kind token scopes
+### Run kind token permissions
 
 Each [run kind](factory-configuration.md#run-kinds) gets a sandbox token
 narrowed to its own GitHub App permissions. The factory fixes these sets;
@@ -596,7 +596,7 @@ in place; that weaker guarantee is accepted.
 ## Sandbox GitHub access
 
 At launch the factory mints a token narrowed to the run's
-[kind](#run-kind-token-scopes) and writes it, as GitHub CLI configuration
+[kind](#run-kind-token-permissions) and writes it, as GitHub CLI configuration
 readable only by the host's user, into a directory of its own for that run,
 and mounts the directory read-only at `/run/factory/github`.
 The sandbox's environment points the GitHub CLI at that directory
@@ -611,10 +611,10 @@ factory removes the directory when the run's agent exits, so a token outlives
 no run.
 
 That installation token is the sandbox agent's only GitHub identity, so a push
-the GitHub App or the run kind's permissions don't allow stays refused. The provider login a run signs in with
-adds none: the image's provider policy turns off ChatGPT apps for Codex and
-claude.ai connectors for Claude Code, which could otherwise act as the
-account's linked GitHub user. The
+that the GitHub App or the run kind's permissions don't allow stays refused.
+The provider login a run signs in with adds none: the image's provider policy
+turns off ChatGPT apps for Codex and claude.ai connectors for Claude Code,
+which could otherwise act as the account's linked GitHub user. The
 [sandbox image contract](sandbox-image.md#factory-agent-layer) gives the
 details.
 

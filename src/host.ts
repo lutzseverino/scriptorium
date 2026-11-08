@@ -33,6 +33,7 @@ import {
   readFactoryConfiguration,
   runKind,
   type FactoryConfiguration,
+  type RunKindName,
 } from "./factory-configuration.ts";
 import {
   claimLabels,
@@ -318,6 +319,7 @@ export function createHost(
       modelPolicy: null,
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
+    // A repository whose own token fails to print is paused for the pass.
     try {
       await tokens.get(name);
     } catch (error) {
@@ -994,8 +996,8 @@ export function createHost(
   }
 
   // A sandbox's token, narrowed to its run kind's permissions.
-  const sandboxToken = (repository: string, kind: Run["runKind"]) =>
-    tokens.get(repository, runKindPermissions[kind ?? "implement"]);
+  const sandboxToken = (repository: string, kind: RunKindName) =>
+    tokens.get(repository, runKindPermissions[kind]);
 
   // Refreshes every running sandbox's token within its run kind's
   // permissions, between passes as well as during them, so a run outlives
@@ -1005,7 +1007,7 @@ export function createHost(
       const name = `${run.repository}#${run.issue}`;
       let token;
       try {
-        token = await sandboxToken(run.repository, run.runKind);
+        token = await sandboxToken(run.repository, run.runKind ?? "implement");
       } catch (error) {
         report(`${name}'s token was not refreshed: ${error}`);
         continue;
@@ -1034,7 +1036,7 @@ export function createHost(
     ) as string;
     const paths = directory(repository);
     // Run start mints the sandbox's token for its run kind alone.
-    const token = await sandboxToken(repository, decision.runKind);
+    const token = await sandboxToken(repository, kind);
     const git = hostGit(repository);
     const base = (await git(paths.clone, ["rev-parse", "HEAD"])).trim();
     const previous = find(decision);

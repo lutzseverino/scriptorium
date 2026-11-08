@@ -10,9 +10,6 @@ import type { RunKindName } from "./factory-configuration.ts";
 import type { Mount } from "./providers.ts";
 import type { Redactor } from "./redaction.ts";
 
-// GitHub App permissions, as an installation token request names them.
-export type GitHubPermissions = Readonly<Record<string, "read" | "write">>;
-
 const reads = Object.freeze({
   contents: "read",
   issues: "read",
@@ -22,7 +19,7 @@ const reads = Object.freeze({
 // Implement and review push and open or review pull requests, and read the
 // checks they wait on. GitHub grants merging with the contents write a push
 // needs, so a token cannot withhold one from the other.
-const delivery = Object.freeze({
+const pullRequestWork = Object.freeze({
   ...reads,
   actions: "read",
   checks: "read",
@@ -31,12 +28,21 @@ const delivery = Object.freeze({
   statuses: "read",
 } as const);
 
+// GitHub App permissions, as an installation token request names them.
+export type GitHubPermissions = Readonly<
+  Partial<Record<keyof typeof pullRequestWork, "read" | "write">>
+>;
+
 // The permissions each run kind's sandbox token is narrowed to. They are the
 // factory's, not configuration: triage only reads, and no kind writes the
 // issue itself.
 export const runKindPermissions: Readonly<
   Record<RunKindName, GitHubPermissions>
-> = Object.freeze({ triage: reads, implement: delivery, review: delivery });
+> = Object.freeze({
+  triage: reads,
+  implement: pullRequestWork,
+  review: pullRequestWork,
+});
 
 // A token is reused until it is this old, then the command runs again. The
 // command must print tokens that stay valid for at least

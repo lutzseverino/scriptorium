@@ -8130,9 +8130,9 @@ test("historical PR ownership survives another run replacing the issue's current
   );
 });
 
-// The token a launch's sandbox reads from its token file.
-const sandboxTokenOf = (launch: { hosts: string }) =>
-  launch.hosts.match(/^ {4}oauth_token: "(.*)"$/m)![1];
+// The token a sandbox's GitHub CLI configuration holds.
+const sandboxTokenOf = (hosts: string) =>
+  hosts.match(/^ {4}oauth_token: "(.*)"$/m)![1];
 
 test("concurrent triage, implement and review runs in one repository each keep their own kind's token through refresh and host reads", async (t) => {
   const bare = remote(t, kindsFiles);
@@ -8172,7 +8172,7 @@ test("concurrent triage, implement and review runs in one repository each keep t
 
   assert.deepEqual(
     [triage, implementing, implement, review].map((launch) =>
-      run.minted.get(sandboxTokenOf(launch))!,
+      run.minted.get(sandboxTokenOf(launch.hosts))!,
     ),
     [
       runKindPermissions.triage,
@@ -8181,8 +8181,8 @@ test("concurrent triage, implement and review runs in one repository each keep t
       runKindPermissions.review,
     ],
   );
-  assert.deepEqual(sandboxTokenOf(triage), "ghs_acme_widgets_read");
-  assert.deepEqual(sandboxTokenOf(review), "ghs_acme_widgets_write");
+  assert.equal(sandboxTokenOf(triage.hosts), "ghs_acme_widgets_read");
+  assert.equal(sandboxTokenOf(review.hosts), "ghs_acme_widgets_write");
 
   // A refresh renews each sandbox within its own kind's permissions, and the
   // host's later reads replace none of them.
@@ -8201,9 +8201,7 @@ test("concurrent triage, implement and review runs in one repository each keep t
   await run.refreshTokens();
   await run.tick();
   assert.deepEqual(
-    [triage, implementing, review]
-      .map(hosts)
-      .map((text) => sandboxTokenOf({ hosts: text })),
+    [triage, implementing, review].map(hosts).map(sandboxTokenOf),
     ["ghs_refreshed_read", "ghs_refreshed_write", "ghs_refreshed_write"],
   );
   assert.equal(
@@ -8248,7 +8246,7 @@ test("a triage run's sandbox cannot comment, label or push", async (t) => {
   });
   await run.tick();
   const [triage, implement] = run.launched.map((launch) =>
-    sandboxPlatform(run.minted)(sandboxTokenOf(launch)),
+    sandboxPlatform(run.minted)(sandboxTokenOf(launch.hosts)),
   );
   assert.deepEqual(triage, {
     "comment on the issue": "refused",

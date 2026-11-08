@@ -96,7 +96,7 @@ function cache(printed: string[]) {
   const tokens = githubTokens(
     async (repository, permissions) => {
       runs.push(
-        permissions ? `${repository} ${permissions.issues}` : repository,
+        permissions ? `${repository} ${permissions.contents}` : repository,
       );
       const token = printed.shift();
       if (!token) throw new Error(`the token command for ${repository} failed`);
