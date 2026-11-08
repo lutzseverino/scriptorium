@@ -145,10 +145,10 @@ export function triageRefusal(
 
 // Ready labels, link additions and triage labels share the host's complete
 // actor policy.
-function actorRefusal(
+export function actorRefusal(
   actor: Actor,
   policy: Policy,
-  event: { subject: string; action: "applied" | "linked" },
+  event: { subject: string; action: "applied" | "linked" | "opened" },
   on = "",
 ): ReadinessHold | null {
   const { ready, authorizedRoles, neverAuthorize } = policy;

@@ -58,7 +58,12 @@ export const labelRoles = {
     stop: true,
     excludes: [stopped],
   },
-  reporter: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
+  reporter: {
+    versions: { 3: "optional" },
+    applied: true,
+    stop: true,
+    excludes: [stopped],
+  },
   grill: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
   owner: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
   ready: {

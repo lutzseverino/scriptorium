@@ -130,14 +130,43 @@ The host hands work between the kinds through the issue's labels and its pull
 request, and every launch passes the same pickup gates, holds and model
 checks:
 
-- **Triage** starts, claiming the issue, when it carries `labels.triage` and
-  the label's latest application was by a person whose current role the host
-  authorizes. A bot's application, such as the issue-contract validator's
-  fallback, never starts it. Its run ends once the issue leaves the triage
-  state, and fails when it never did.
+- **Triage** claims an issue opened by a person whose current repository role
+  the host authorizes, or carrying `labels.triage` applied by such a person.
+  The host's `neverAuthorize` accounts never qualify. Roles come from Postern,
+  as for readiness. A bot's label, including the validator's fallback, grants
+  no trust; a trusted author remains an independent trigger. Other state labels
+  keep an opening from overriding an existing handoff or stop.
+- **Reporter replies**: on `labels.reporter`, a new comment by the issue's
+  author re-triggers triage after a trusted reporter-state application or a
+  previously trusted factory run. Other commenters and edits of old comments
+  do not. Openings, label applications and replies are consumed durably at
+  launch, so settlement and restarts do not repeat them. A later trusted label
+  or author reply can trigger another run.
+- **Factory findings** may cite their filing run with the exact line the host
+  supplies in that run's prompt, for example:
+
+  ```html
+  <!-- scriptorium:filing-run {"run":"<host-issued run ID>"} -->
+  ```
+
+  The host accepts exactly one such line. It verifies the run against its own
+  durable launch provenance, checks that the run was trusted and predates the
+  issue, and matches the issue author to the filing credential's account.
+  A forged, unknown or untrusted citation grants no trust. Unreadable identity
+  and provenance reads never authorize a finding. A person may still apply
+  the trusted triage label. Preserve the repository's `runs/provenance/` records
+  along with its run records when moving host state.
+
 - **Implement** starts on accepted readiness, `labels.ready`, as in version 2.
 - **Review** starts on the PR an implement run ends with, keeping the claim
-  without an awaiting-merge notice.
+  without an awaiting-merge notice. It also claims an open draft PR whose
+  author has an authorized current role, is not excluded, and which no factory
+  run owns. An untrusted draft starts nothing. Independent drafts use the PR
+  number as their work item; review resolves linked issue contracts, or uses
+  the PR body as its Spec source when there is no linked issue. The PR's head
+  is consumed durably, and its explicit target survives interruptions and
+  changes out of draft. These triggers pass through the same model, capacity,
+  usage and repository-hold admission gates as existing runs.
 - **A hand-back** starts implement on the same PR when a review ends with its
   PR still a draft, at most twice; a review that would hand back a third time
   fails the issue.

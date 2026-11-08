@@ -26,6 +26,7 @@ import {
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
 import type { MergeRelaunch, InputResume } from "./platform.ts";
+import { triageTrigger, draftTrigger, type Trigger } from "./triggers.ts";
 import {
   closes,
   readinessExclusion,
@@ -56,6 +57,17 @@ export type Issue = {
   // The latest application of the triage label while the issue carries it,
   // or null or absent when it doesn't or no event applying it was found.
   triage?: Readiness | null;
+  author?: Actor;
+  reporter?: Readiness | null;
+  authorReply?: string | null;
+  filingRun?: string | null;
+  filedByTrustedRun?: boolean;
+  trustedHistory?: boolean;
+  lastTriageAt?: string;
+  reviewedHeads?: string[];
+  // A PR is also a work item, claimed by its own number. Linked issues stay
+  // available to the review skill; an issue-less PR uses its body as the spec.
+  pullRequest?: { target: MergeRelaunch; draft: boolean; headBranch?: string };
   // When the body was last edited, or null when it never was. Title and
   // ordinary discussion changes don't count. Only a parent's readiness reads
   // it.
@@ -104,6 +116,7 @@ export type Run = {
   // provider than its implement attempt's could not have one.
   selection?: Selection;
   diversity?: "unavailable";
+  trigger?: Trigger;
   attempt: 1 | 2;
   // The first attempt's failure and log a retry launched with.
   retry?: { failure: string; log: string };
@@ -163,6 +176,7 @@ export type Repository = {
   paused: string | null;
   issues: Issue[];
   claims: Claim[];
+  ownedPullRequests?: number[];
   // Open labelled PR numbers; null means the configured hold read failed.
   releaseHold?: number[] | null;
   // Open issue and PR numbers carrying `labels.hold`; null means the
@@ -260,6 +274,7 @@ export type Launch = {
   effort: string;
   selection: Selection;
   diversity?: "unavailable";
+  trigger?: Trigger;
   attempt: 1 | 2;
   retry?: { failure: string; log: string };
   // An interrupted or paused run launching again as the same attempt.
@@ -778,6 +793,7 @@ type Continuation = {
     | "target"
     | "handBacks"
     | "implementedBy"
+    | "trigger"
   >;
   claim: boolean;
   unpause: boolean;
@@ -840,16 +856,42 @@ function continuation(
             claim: true,
           }
         : undefined;
+  const trigger =
+    runKind(configuration, "triage") && !issue.pullRequest
+      ? triageTrigger(issue, labels, policy(repository))
+      : null;
+  const externalReview =
+    reviews &&
+    issue.pullRequest &&
+    !previous &&
+    !claim &&
+    !repository.ownedPullRequests?.includes(issue.number) &&
+    !snapshot.runs.some(
+      (run) =>
+        run.repository === repository.name &&
+        (ownedPullRequests(run, run.target).includes(issue.number) ||
+          issue.pullRequest?.headBranch === `factory/issue-${run.issue}`),
+    ) &&
+    draftTrigger(issue, policy(repository));
   const state: ContinuationState = resumed
     ? { kind: "resume", run: resumed }
     : (handoff ??
+      (externalReview
+        ? {
+            kind: "review",
+            target: issue.pullRequest!.target,
+            handBacks: 0,
+            claim: true,
+          }
+        : undefined) ??
       (merge
         ? { kind: "merge" }
         : retry
           ? { kind: "retry", retry }
-          : runKind(configuration, "triage") &&
+          : !issue.pullRequest &&
+              runKind(configuration, "triage") &&
               labels.triage !== undefined &&
-              issue.labels.includes(labels.triage)
+              (issue.labels.includes(labels.triage) || trigger !== null)
             ? { kind: "triage" }
             : { kind: "fresh" }));
   // A stopped claim can defer a fresh merge launch while the previous
@@ -933,6 +975,9 @@ function continuation(
         ),
     },
     launch: {
+      ...((trigger || externalReview) && {
+        trigger: trigger || externalReview || undefined,
+      }),
       ...(kind !== "implement" && { runKind: kind }),
       ...(state.kind === "fresh" || state.kind === "triage"
         ? {
@@ -1054,6 +1099,7 @@ function continuationExclusions(
     if (
       next.kind !== "merge" &&
       !answered &&
+      !issue.pullRequest &&
       !issue.labels.includes(labels.ready)
     )
       return skipped(next, `it no longer carries ${labels.ready}`);
@@ -1061,7 +1107,10 @@ function continuationExclusions(
     const reason =
       exclusionReason(issue.labels, labels, "triage") ??
       (next.previous ? "a factory run for it is still on the host" : null) ??
-      triageRefusal(issue, policy(repository), labels.triage!)?.reason;
+      (triageTrigger(issue, labels, policy(repository))
+        ? null
+        : (triageRefusal(issue, policy(repository), labels.triage!)?.reason ??
+          "no new trusted triage trigger"));
     if (reason) return skipped(next, reason);
   } else {
     if (!issue.labels.includes(labels.ready))

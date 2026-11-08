@@ -2,6 +2,8 @@
 // lists, asks the decision core what to do across all of them, and carries
 // the decisions out through each repository's hosting platform, its clone and
 // the providers' sandboxes.
+import { randomUUID } from "node:crypto";
+import { trustedFinding, type Provenance } from "./triggers.ts";
 import {
   existsSync,
   mkdirSync,
@@ -134,6 +136,7 @@ export type HostPorts = {
 export const dockerfilePath = ".factory/Dockerfile";
 
 type HostRun = Run & {
+  provenance?: Provenance;
   // Successful awaiting-merge notice for this attempt, independent of the
   // ending observation refreshed on each pass and on startup.
   awaitingMergeNotified?: true;
@@ -424,6 +427,52 @@ export function createHost(
     }
     try {
       const issues = await platform.readIssues();
+      if (runKind(pass.configuration, "review"))
+        issues.push(...(await platform.readPullRequests()));
+      // A running worker can publish on another branch. Establish ownership
+      // before admitting independent drafts, rather than waiting for its exit.
+      if (issues.some((issue) => issue.pullRequest?.draft))
+        for (const run of runs.filter(
+          (run) => run.repository === name && !run.exited,
+        )) {
+          const observation = await platform.pullRequestObservation(
+            run.issue,
+            run.pullRequestSince,
+            false,
+            run.target?.number,
+          );
+          run.ownedPullRequests = [
+            ...new Set([
+              ...(run.ownedPullRequests ?? []),
+              ...observation.ownedPullRequests,
+            ]),
+          ];
+          record(run);
+        }
+      const provenance = readProvenance(name);
+      for (const issue of issues) {
+        const history = provenance.filter(
+          (record) => record.issue === issue.number,
+        );
+        issue.trustedHistory = history.some((record) => record.trusted);
+        issue.lastTriageAt = history
+          .filter(
+            (record) =>
+              record.trigger && !record.trigger.id.startsWith("draft:"),
+          )
+          .map((record) => record.at)
+          .sort()
+          .at(-1);
+        issue.reviewedHeads = history.flatMap((record) =>
+          record.trigger?.id.startsWith("draft:")
+            ? [record.trigger.id.slice(6)]
+            : [],
+        );
+        issue.filedByTrustedRun = trustedFinding(issue, provenance, {
+          ready: pass.configuration.labels.ready,
+          ...served.authorization,
+        });
+      }
       for (const run of runs.filter(
         (run) => run.repository === name && run.exited,
       )) {
@@ -432,6 +481,7 @@ export function createHost(
           run.issue,
           run.pullRequestSince,
           run.runKind === "review",
+          run.target?.number,
         );
         run.ownedPullRequests = [
           ...new Set([
@@ -490,6 +540,7 @@ export function createHost(
         name,
         configuration: pass.configuration,
         authorization: served.authorization,
+        ownedPullRequests: recordedPullRequests(name),
         paused: pass.paused,
         issues,
         ...(pass.releaseHold !== undefined && {
@@ -620,6 +671,9 @@ export function createHost(
       const observation = await platform.pullRequestObservation(
         number,
         marker.inputResume?.since,
+        false,
+        marker.inputResume?.review?.target.number ??
+          issue?.pullRequest?.target.number,
       );
       const mergeCandidate = await readMergeCandidate(
         git,
@@ -778,6 +832,41 @@ export function createHost(
     record(run);
   }
 
+  function readProvenance(name: string): Provenance[] {
+    const path = join(directory(name).runs, "provenance");
+    return existsSync(path)
+      ? readdirSync(path)
+          .filter((file) => file.endsWith(".json"))
+          .map(
+            (file) =>
+              JSON.parse(readFileSync(join(path, file), "utf8")) as Provenance,
+          )
+      : [];
+  }
+
+  function recordedPullRequests(name: string): number[] {
+    const path = directory(name).runs;
+    const archived = readProvenance(name).flatMap(
+      (record) => record.ownedPullRequests ?? [],
+    );
+    return existsSync(path)
+      ? [
+          ...archived,
+          ...readdirSync(path)
+            .filter((file) => /^issue-\d+-attempt-\d+\.json$/.test(file))
+            .flatMap((file) => {
+              const run: Run = JSON.parse(
+                readFileSync(join(path, file), "utf8"),
+              );
+              return [
+                ...(run.ownedPullRequests ?? []),
+                ...(run.target ? [run.target.number] : []),
+              ];
+            }),
+        ]
+      : archived;
+  }
+
   // Replaces the run's record whole and at once, so a signal handler can
   // record it before the process exits.
   function record(run: HostRun) {
@@ -790,6 +879,23 @@ export function createHost(
     );
     writeFileSync(`${path}.partial`, `${JSON.stringify(recorded, null, 2)}\n`);
     renameSync(`${path}.partial`, path);
+    if (run.provenance) {
+      const archive = join(runsDirectory, "provenance");
+      mkdirSync(archive, { recursive: true });
+      const provenancePath = join(archive, `${run.provenance.id}.json`);
+      run.provenance.ownedPullRequests = [
+        ...new Set([
+          ...(run.provenance.ownedPullRequests ?? []),
+          ...(run.ownedPullRequests ?? []),
+          ...(run.target ? [run.target.number] : []),
+        ]),
+      ];
+      writeFileSync(
+        `${provenancePath}.partial`,
+        `${JSON.stringify(run.provenance)}\n`,
+      );
+      renameSync(`${provenancePath}.partial`, provenancePath);
+    }
   }
 
   // Before anything else, the first pass removes the sandboxes an earlier
@@ -968,7 +1074,27 @@ export function createHost(
       ("interrupted" in previous.ended || "paused" in previous.ended)
         ? previous.holdObserved
         : [];
+    let account: string | null = null;
+    try {
+      account = await pass.platform!.filingAccount();
+    } catch {
+      // Installation tokens need not expose a viewer. Findings from an
+      // unidentifiable credential require a person's trusted label.
+    }
+    const provenance: Provenance =
+      decision.relaunch && previous?.provenance
+        ? previous.provenance
+        : {
+            id: randomUUID(),
+            issue,
+            at: startedAt,
+            account,
+            trusted: true,
+            ...(decision.trigger && { trigger: decision.trigger }),
+          };
     const run: HostRun = {
+      provenance,
+      ...(decision.trigger && { trigger: decision.trigger }),
       configuration: pass.configuration!,
       repository,
       base,
@@ -1036,24 +1162,29 @@ export function createHost(
         name: `${repository}#${issue}`,
         cwd: paths.clone,
         image: pass.image!,
-        prompt: prompt(
-          registry.providers
-            .get(run.provider)!
-            .renderInvocation(
-              runKind(pass.configuration!, kind)!.skill,
-              invocationArguments,
-            ),
-          pass.hasReviewPolicy,
-          decision.retry,
-          recovery,
-          decision.mergeRelaunch,
-          decision.inputResume,
-          pass.configuration!.labels.releaseHold,
-          pass.configuration!.labels.hold,
-          decision.runKind === undefined && decision.target
-            ? { target: decision.target, handBacks: decision.handBacks ?? 1 }
-            : undefined,
-        ),
+        prompt:
+          prompt(
+            registry.providers
+              .get(run.provider)!
+              .renderInvocation(
+                runKind(pass.configuration!, kind)!.skill,
+                invocationArguments,
+              ),
+            pass.hasReviewPolicy,
+            decision.retry,
+            recovery,
+            decision.mergeRelaunch,
+            decision.inputResume,
+            pass.configuration!.labels.releaseHold,
+            pass.configuration!.labels.hold,
+            decision.runKind === undefined && decision.target
+              ? { target: decision.target, handBacks: decision.handBacks ?? 1 }
+              : undefined,
+          ) +
+          (decision.runKind === "review"
+            ? `\nReview target: PR #${decision.target?.number ?? decision.mergeRelaunch?.number}. Resolve its linked issue contract; when it has no linked issue, use the PR body as the Spec source.`
+            : "") +
+          `\nFactory filing run: ${provenance.id}. Cite findings filed by this run with this exact line in the issue body: <!-- scriptorium:filing-run {"run":"${provenance.id}"} -->`,
         branch: runBranch(issue),
         log: raw,
         idleTimeoutSeconds: settings.timeLimitMinutes * 60,
@@ -1244,6 +1375,8 @@ export function createHost(
           const observation = await platform.pullRequestObservation(
             decision.issue,
             since,
+            false,
+            previous?.target?.number ?? issue.pullRequest?.target.number,
           );
           // A review stopped with its PR ready to merge resumes as review,
           // and once its gate is cleared when it stopped at one.
