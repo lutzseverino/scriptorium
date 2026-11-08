@@ -7738,22 +7738,28 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   legacyIssue.branchPullRequests.push(publishedPR(legacyRemote));
   v2.finish();
   const currentIssue = run.github.find("acme/current", 5);
-  currentIssue.labels = ["state:ready", "factory:running"];
+  triage.finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    body: "## Agent Brief",
+  });
+  await run.drain();
+  // Settlement applies the result's readiness and releases triage's claim.
+  // Without a configured triage result, the owner's readiness starts
+  // implement on the next pass.
+  await run.tick();
+  assert.deepEqual(currentIssue.labels, ["state:ready"]);
   currentIssue.timeline.push({
     event: "labeled",
     label: "state:ready",
     actor: "owner",
     at: "2026-10-09T12:00:00Z",
   });
-  triage.finish();
-  await run.drain();
-  // Settlement releases triage's claim; the next pass sees ready work.
-  await run.tick();
   await run.tick();
   assert.equal(run.launched.length, 3, run.reports.join("\n"));
   assert.equal(invocation(run.launched[2].options.prompt), "/implement #5");
   assert.equal(run.launched[2].options.agent.name, "claude-code");
-  assert.deepEqual(legacyIssue.comments, ["Legacy waiting: working"]);
+  assert.deepEqual(notices(legacyIssue), ["Legacy waiting: working"]);
 
   currentIssue.branchPullRequests.push({
     ...publishedPR(currentRemote, "factory/issue-5"),
@@ -7766,8 +7772,12 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   assert.equal(run.launched.length, 4);
   assert.equal(invocation(run.launched[3].options.prompt), "/review #42");
   assert.equal(run.launched[3].options.name, "acme/current#5");
-  assert.deepEqual(currentIssue.comments, []);
-  assert.deepEqual(legacyIssue.comments, ["Legacy waiting: working"]);
+  // Only the hold on the triage run's own readiness, which a configured
+  // triage result would back, preceded the owner's, and it is resolved.
+  assert.deepEqual(notices(currentIssue), [
+    "<!-- scriptorium:hold:readiness -->\nResolved: this reason no longer holds the issue.",
+  ]);
+  assert.deepEqual(notices(legacyIssue), ["Legacy waiting: working"]);
 });
 
 test("a version 3 issue goes from implement to review to a hand-back on the same PR, without an awaiting-merge notice", async (t) => {
