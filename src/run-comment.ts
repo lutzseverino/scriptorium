@@ -17,7 +17,7 @@ import type { InputResume } from "./platform.ts";
 import type { RunResult } from "./run-result.ts";
 import { reference } from "./readiness.ts";
 
-export const phases = ["triage", "implement", "review", "merge"] as const;
+const phases = ["triage", "implement", "review", "merge"] as const;
 export type Phase = (typeof phases)[number];
 
 // Each phase state, and the pass's status while its latest write leaves a
@@ -132,6 +132,8 @@ export function isFactoryComment(comment: Comment): boolean {
 
 const unfinished = ["running", "paused", "stopped"];
 
+// The one writer of an issue's run, action and close comments, worded by the
+// repository's comment templates.
 export function issueComments(
   tracker: IssueTracker,
   configuration: PlatformConventions,

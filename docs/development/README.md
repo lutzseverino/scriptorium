@@ -191,7 +191,8 @@ nothing from outside itself but Node.js, Sandcastle and Postern, so no
 Markdown parser, and that the platform projection and decision modules read
 no issue body. The validator's result is comment content, read through
 Postern; readiness authorization stays in the factory and contract decisions
-are the validator's.
+are the validator's. `src/run-comment.ts` alone reads the factory's own
+comments back, by their marker lines.
 The token tests drive the cache with a fake token command and clock, and pin
 each run kind's permission set. The host tests' token command mints a narrowed
 token for each permission set, and a fake platform refuses a sandbox's writes

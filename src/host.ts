@@ -30,6 +30,7 @@ import {
   type RunKindName,
 } from "./factory-configuration.ts";
 import {
+  askLabels,
   claimLabels,
   gateLabels,
   isStopped,
@@ -444,7 +445,11 @@ export function createHost(
     try {
       const issues = await platform.readIssues();
       if (runKind(pass.configuration, "review"))
-        issues.push(...(await platform.readPullRequests()));
+        issues.push(
+          ...(await platform.readPullRequests(
+            new Set(readProvenance(name).map((record) => record.issue)),
+          )),
+        );
       // A running worker can publish on another branch. Establish ownership
       // before admitting independent drafts, rather than waiting for its exit.
       if (issues.some((issue) => issue.pullRequest?.draft))
@@ -1292,7 +1297,7 @@ export function createHost(
             final: true,
           },
           {
-            key: "failed",
+            key: `failed:${run?.provenance?.id ?? "claim"}`,
             failed: labels.failed,
             reason: decision.failure,
             unpushable: decision.unpushedChanges
@@ -1358,21 +1363,23 @@ export function createHost(
             : previous
               ? undefined
               : issue.continuation?.review;
-          // A person must act on a gate, or on a stop in their state. A
-          // recorded continuation's stop was told when its run stopped.
+          // A person must act on a gate review reached, or on a stop in their
+          // state; an unreadable gate read reaches none. A recorded
+          // continuation's stop was told when its run stopped.
           const id = previous?.provenance?.id ?? "claim";
-          const asked = [labels.reporter, labels.grill, labels.owner].find(
-            (label) => label !== undefined && issue.labels.includes(label),
+          const reached = gates.filter((label) => issue.labels.includes(label));
+          const gate =
+            ready && (reached.length || pass.gated?.includes(ready.number))
+              ? (reached.length ? reached : gates).join(", ")
+              : undefined;
+          const asked = askLabels(labels).find((label) =>
+            issue.labels.includes(label),
           );
-          const gate = gates.filter((label) => issue.labels.includes(label));
           const action: Action | undefined =
             !previous && issue.continuation
               ? undefined
-              : review?.gated
-                ? {
-                    key: `gate:${id}`,
-                    gate: (gate.length ? gate : gates).join(", "),
-                  }
+              : gate
+                ? { key: `gate:${id}`, gate }
                 : asked
                   ? { key: `stop:${id}`, stopped: asked }
                   : undefined;

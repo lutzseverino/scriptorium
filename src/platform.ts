@@ -171,15 +171,16 @@ export function repositoryPlatform(
     }
   }
 
-  // A released stop's continuation, for a stopped work item whose comments
-  // no other read needed. Unreadable comments find none this pass, so its
-  // claim waits rather than replacing it.
+  // A released stop's continuation, for a stopped or `worked` work item whose
+  // comments no other read needed. Unreadable comments find none this pass,
+  // so its claim waits rather than replacing it.
   async function readContinuation(
     number: number,
     labels: string[],
     comments?: Comment[],
+    worked = false,
   ): Promise<{ continuation?: InputResume }> {
-    if (!comments && isStopped(labels, configuration.labels))
+    if (!comments && (worked || isStopped(labels, configuration.labels)))
       try {
         comments = await issueTracker.comments(number);
       } catch (error) {
@@ -452,7 +453,9 @@ export function repositoryPlatform(
     // Postern has no PR listing/draft/label port. Read the inventory through
     // its authenticated transport, then each PR and author role through Postern.
     // Include ready PRs too, so an active review survives a draft-state change.
-    async readPullRequests(): Promise<Issue[]> {
+    // A PR a factory run worked on as its own work item may hold a released
+    // stop's continuation, which outlives the stop's label.
+    async readPullRequests(worked: Set<number>): Promise<Issue[]> {
       if (connection.repository.platform !== "github") return [];
       const [owner, name] = path.split("/");
       const actor = actorLookup();
@@ -522,7 +525,12 @@ export function repositoryPlatform(
             number: pr.number,
             createdAt: pr.createdAt,
             labels: prLabels,
-            ...(await readContinuation(pr.number, prLabels)),
+            ...(await readContinuation(
+              pr.number,
+              prLabels,
+              undefined,
+              worked.has(pr.number),
+            )),
             author: await actor(pr.author),
             pullRequest: {
               target: {

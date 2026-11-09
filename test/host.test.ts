@@ -8327,6 +8327,84 @@ test("an unowned trusted draft starts review against its PR body and resumes the
   assert.equal(recordOf(run.state, 42, 1).target.number, 42);
 });
 
+test("an independent review's answered stop resumes review on its PR after its label goes, across a restart", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const pr = {
+    ...publishedPR(bare, "grill/domain"),
+    number: 42,
+    body: "Record the chosen design",
+    author: { login: "owner", bot: false },
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 42,
+          isPullRequest: true,
+          labels: [],
+          branchPullRequests: [pr],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  run.github.drafts.add(42);
+  await run.tick();
+  assert.equal(invocation(run.launched[0].options.prompt), "/review #42");
+  const item = run.github.find("acme/widgets", 42);
+  // The review marks the PR ready and asks the owner.
+  run.github.drafts.delete(42);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "Which design should the record keep?",
+  });
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(item.labels, ["state:owner"]);
+  assert.equal(actions(item).length, 1);
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  // The owner answers and removes the stop; no label keeps the continuation.
+  item.labels = [];
+  await restarted.tick();
+  assert.equal(run.launched.length, 2, run.reports.join("\n"));
+  assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
+  assert.equal(recordOf(run.state, 42, 1).target.number, 42);
+  assert.equal(runComments(item).length, 1);
+  assert.equal(actions(item).length, 1);
+});
+
+test("a review stop while the gate read fails asks for its stop, not a gate", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const pr = { ...publishedPR(bare), number: 42 };
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests.push(pr);
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
+  issue.labels = ["state:owner", "factory:running"];
+  // An invalid gate inventory fails the read, which reads as gated.
+  run.github.gates["gate:owner-review"] = [-1];
+  run.launched[1].finish();
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(issue.labels, ["state:owner"]);
+  assert.deepEqual(
+    actions(issue).map((comment) => comment.split("\n")[0]),
+    [
+      "The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/comment).",
+    ],
+  );
+});
+
 test("a running worker's PR on another branch is owned before independent draft admission", async (t) => {
   const bare = remote(t, kindsFiles);
   const run = host(t, {

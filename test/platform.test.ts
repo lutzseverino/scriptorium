@@ -1996,7 +1996,7 @@ test("PR inventory includes every page and preserves labels, draft state, author
     if (request === "GET /user") return { status: 200, data: user("factory") };
   });
   const platform = repositoryPlatform(connection, configuration);
-  const issues = await platform.readPullRequests();
+  const issues = await platform.readPullRequests(new Set());
   assert.deepEqual(
     issues.map((item) => [
       item.number,
@@ -2062,7 +2062,7 @@ test("incomplete or unreadable PR inventories never become trusted draft trigger
       data: { data: { repository: { pullRequests } } },
     }));
     await assert.rejects(
-      repositoryPlatform(connection, configuration).readPullRequests(),
+      repositoryPlatform(connection, configuration).readPullRequests(new Set()),
       { reason: "invalidResponse" },
     );
   }

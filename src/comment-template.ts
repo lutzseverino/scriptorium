@@ -1,5 +1,6 @@
 // The factory's deterministic issue-comment language and its own wording.
-const phaseNames = [
+// The names within a run comment phase, which renders as one line.
+const lineNames = [
   "check",
   "state",
   "reason",
@@ -19,7 +20,7 @@ const names = {
     "implement",
     "review",
     "merge",
-    ...phaseNames,
+    ...lineNames,
     "result",
   ],
   action: ["failed", "stopped", "gate", "reason", "unpushable", "link"],
@@ -27,7 +28,7 @@ const names = {
 } as const;
 
 type Comment = keyof typeof names;
-export type Values = {
+type Values = {
   [name: string]: string | number | string[] | Values | null | undefined;
 };
 type Part = string | { name: string; section?: Part[] };
