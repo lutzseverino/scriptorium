@@ -128,6 +128,12 @@ An agent CLI and the subscription behind it, on which the factory runs a
 model, such as Claude Code or Codex.
 _Avoid_: Vendor, worker
 
+**Model guidance**:
+The host owner's short statement of which work a model in the host's catalog
+suits, from which every launcher chooses a model by fit, the cheaper one where
+several fit.
+_Avoid_: Model profile, model card
+
 **Sandbox image pair**:
 The agent image a repository's runs start from and the toolchain image it is
 built on, sharing one hash of the repository's `.scriptorium/Dockerfile` and the
