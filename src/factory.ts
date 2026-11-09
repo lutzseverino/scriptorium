@@ -68,6 +68,9 @@ export type Issue = {
   trustedHistory?: boolean;
   lastTriageAt?: string;
   reviewedHeads?: string[];
+  // The continuation its unfinished pass's run comment holds for a released
+  // stop, which resumes its work on the same PRs.
+  continuation?: InputResume;
   // A PR is also a work item, claimed by its own number. Linked issues stay
   // available to the review skill; an issue-less PR uses its body as the spec.
   pullRequest?: { target: MergeRelaunch; draft: boolean; headBranch?: string };
@@ -105,8 +108,7 @@ export type Pause = {
 
 // A run the host started, in the repository named `<owner>/<name>`. `ended`
 // is null while its sandbox runs, interrupted once a factory restart stopped
-// its sandbox, and paused once its agent exited on a pause's cause, with
-// whether its issue was told.
+// its sandbox, and paused once its agent exited on a pause's cause.
 export type Run = {
   repository: string;
   issue: number;
@@ -140,11 +142,7 @@ export type Run = {
   log: string;
   // The result the run left when its agent exited, as the host read it.
   result?: ReadResult;
-  ended:
-    | null
-    | { interrupted: true }
-    | { paused: Pause; commented: boolean }
-    | RunEnding;
+  ended: null | { interrupted: true } | { paused: Pause } | RunEnding;
 };
 
 // A running- or paused-labelled issue that no run on the host holds.
@@ -933,7 +931,8 @@ function continuationExclusions(
   if (next.kind === "resume") {
     if (exclusionReason(issue.labels, labels, "resume"))
       return [{ kind: "release", ...at }];
-    if (pause && !pause.commented)
+    // Its issue is told once, as the paused label replaces the running one.
+    if (pause && !issue.labels.includes(labels.paused))
       return [{ kind: "pause", ...at, pause: pause.paused }];
   } else if (
     next.kind === "merge" ||

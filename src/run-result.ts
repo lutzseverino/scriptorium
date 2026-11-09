@@ -244,17 +244,17 @@ export function postedLabels(labels: string[], post: ResultPost): string[] {
   ];
 }
 
-// Posts a result's comment once: a retry after a failed label write finds the
-// comment by its marker line and leaves it as it is.
+// Posts a result's comment once, resolving its link: a retry after a failed
+// label write finds the comment by its marker line and leaves it as it is.
 export async function postResultComment(
   tracker: IssueTracker,
   issue: number,
   { comment, marker }: Pick<ResultPost, "comment" | "marker">,
-): Promise<void> {
-  const posted = (await tracker.comments(issue)).some((existing) =>
+): Promise<string> {
+  const posted = (await tracker.comments(issue)).find((existing) =>
     existing.body.split(/\r\n?|\n/).includes(marker),
   );
-  if (!posted) await tracker.createComment(issue, comment);
+  return (posted ?? (await tracker.createComment(issue, comment))).url;
 }
 
 // The run-result interface as the run's prompt states it.

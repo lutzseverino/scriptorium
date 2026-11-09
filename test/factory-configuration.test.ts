@@ -241,27 +241,28 @@ for (const name of [
     );
   });
 
-test("comment templates are optional and individually configurable in version 2", (t) => {
+test("comment templates are optional and individually configurable in both versions", (t) => {
   const path = join(directory(t), "config.json");
-  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
-  for (const comments of [
-    {},
-    { pause: "Waiting: {cause}" },
-    { failure: "{unpushableCount}", close: "Done.\n" },
-    {
-      awaitingMerge:
-        "Held: {provider}/{model}@{effort} {attempt} {log} {label}",
-    },
-  ]) {
-    writeFileSync(path, JSON.stringify({ ...configuration, comments }));
-    assert.deepEqual(readFactoryConfiguration(path), {
-      ...configuration,
-      comments,
-    });
+  for (const name of ["valid", "version-3"]) {
+    const configuration = JSON.parse(readFileSync(fixture(name), "utf8"));
+    for (const comments of [
+      {},
+      { run: "{status}{#implement}: {state}{/implement}" },
+      { action: "{#failed}Failed: {reason}{/failed} {link}", close: "Done.\n" },
+      {
+        run: "{#merge}{provider}/{model}@{effort} {attempt} {round} {link}{/merge}",
+      },
+    ]) {
+      writeFileSync(path, JSON.stringify({ ...configuration, comments }));
+      assert.deepEqual(readFactoryConfiguration(path), {
+        ...configuration,
+        comments,
+      });
+    }
   }
 });
 
-test("every supplied comment template is validated before any comment is needed", (t) => {
+test("every supplied comment template is validated before any comment is needed, and the replaced templates are refused", (t) => {
   const path = join(directory(t), "config.json");
   const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   for (const comments of [
@@ -270,24 +271,29 @@ test("every supplied comment template is validated before any comment is needed"
     "text",
     1,
     { other: "unknown" },
-    { pause: "" },
-    { failure: null },
+    { pause: "The factory paused this run." },
+    { failure: "The factory run failed: {failure}." },
+    { awaitingMerge: "Awaiting merge." },
+    { run: "" },
+    { action: null },
     { close: {} },
-    ...["", null, 1, [], {}].map((awaitingMerge) => ({ awaitingMerge })),
-    { awaitingMerge: "{failure}" },
-    { awaitingMerge: "{#provider}{unknown}{/provider}" },
-    { awaitingMerge: "{#log}never closed" },
-    { awaitingMerge: "{/log}" },
-    { awaitingMerge: "{#log}{#provider}{/log}{/provider}" },
-    { pause: "{failure}" },
-    { failure: "{reset}" },
+    ...["", null, 1, [], {}].map((run) => ({ run })),
+    { run: "{failed}" },
+    { run: "{#implement}{unknown}{/implement}" },
+    { run: "{#review}never closed" },
+    { run: "{/merge}" },
+    { run: "{#triage}{#provider}{/triage}{/provider}" },
+    { action: "{provider}" },
+    { action: "{#gate}never closed" },
     { close: "{provider}" },
-    { pause: "{#reset}never closed" },
-    { failure: "{/log}" },
     { close: "{#tickets}{unknown}{/tickets}" },
   ]) {
     writeFileSync(path, JSON.stringify({ ...configuration, comments }));
-    assert.throws(() => readFactoryConfiguration(path), /comments\./);
+    assert.throws(
+      () => readFactoryConfiguration(path),
+      /comments\./,
+      JSON.stringify(comments),
+    );
   }
 });
 

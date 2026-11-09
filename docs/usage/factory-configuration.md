@@ -4,7 +4,9 @@ Each repository names its conventions in `.factory/config.json`. The factory
 reads it from the repository's default branch on every pass, alongside
 `.factory/Dockerfile`. Labels, the contract result, the model-label prefix,
 the skills and their arguments have no defaults. Optional comment templates default to the factory's own wording; see
-[the ownership decision](../adr/0005-default-the-factorys-own-comment-wording.md).
+[the ownership decision](../adr/0005-default-the-factorys-own-comment-wording.md)
+and [ADR 0008](../adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md),
+which replaced its per-comment templates with the run and action comments.
 
 Version 3 maps up to three [run kinds](#run-kinds) to skills; version 2 runs
 one implement skill. Each version is validated against its own contract,
@@ -21,8 +23,9 @@ it does not yet support; older hosts need not accept newer configurations.
 Version 2 keeps its single implement invocation, configured labels (including
 `needsInput`), model-label prefix, contract-result identity and optional settings.
 It acquires no triage or review run, state label requirement or repository model
-policy from the host upgrade. Version 3 uses the run kinds and optional model
-policy described below. Neither version accepts unknown or malformed fields;
+policy from the host upgrade. Both versions share the
+[comment templates](#comment-templates), which Scriptorium v4 changed for both.
+Version 3 uses the run kinds and optional model policy described below. Neither version accepts unknown or malformed fields;
 versions outside the two-version window are refused rather than converted.
 
 ## Version 3
@@ -179,7 +182,7 @@ checks:
 
 - **Implement** starts on accepted readiness, `labels.ready`, as in version 2.
 - **Review** starts on the PR an implement run ends with, keeping the claim
-  without an awaiting-merge notice. It also claims an open draft PR whose
+  while the run comment shows the review. It also claims an open draft PR whose
   author has an authorized current role, is not excluded, and which no factory
   run owns. An untrusted draft starts nothing. Independent drafts use the PR
   number as their work item; review resolves linked issue contracts, or uses
@@ -321,7 +324,7 @@ values are invalid.
 | `modelLabelPrefix`      | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
 | `skill`                 | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
 | `arguments`             | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
-| `comments`              | Optional object with optional `pause`, `failure`, `close` and `awaitingMerge` comment templates. Each supplied entry is a non-empty string.     |
+| `comments`              | Optional object with optional `run`, `action` and `close` comment templates. Each supplied entry is a non-empty string.                         |
 
 Version 1 configurations, the old `prompt` field, and version 2
 configurations without `contractResult` are refused, each with the fields at
@@ -473,10 +476,13 @@ the factory.
 
 ## Comment templates
 
-The factory writes four issue comments deterministically, without an agent,
-prompt or provider usage. Add `comments` to the required configuration to
-replace any of their wording. This optional example changes only the pause
-comment and keeps the default failure, parent-close and awaiting-merge comments:
+The factory writes its issue comments deterministically, without an agent,
+prompt or provider usage, as [run comments](host.md#run-comments) describe:
+one run comment per pass through the pipeline, edited in place, a fresh
+action comment when a person must act, and a parent's close comment. Add
+`comments` to the required configuration to replace any of their wording.
+This optional example changes only the action comment and keeps the default
+run and parent-close comments:
 
 ```json
 {
@@ -492,17 +498,19 @@ comment and keeps the default failure, parent-close and awaiting-merge comments:
   "skill": "ship",
   "arguments": "#{issue}",
   "comments": {
-    "pause": "Waiting for {provider}: {cause}.{#reset} Resets {reset}.{/reset}{#threshold} Threshold: {threshold}%.{/threshold} The factory will remove `{label}` when it resumes."
+    "action": "{#failed}Failed: {reason}. Remove `{failed}` to retry.{/failed}{#stopped}Waiting in `{stopped}`.{/stopped}{#gate}Gated by {gate}.{/gate} [Run]({link})"
   }
 }
 ```
 
 Omitting `comments`, supplying `"comments": {}`, or omitting an individual
-entry uses the relevant default. Version remains `2`; there is no host
-setting. Supplied entries must be non-empty JSON strings; whitespace and
-newlines are preserved. Encode a newline as `\n` in JSON. No placeholder is
-required, so a fixed comment is valid. No disclaimer is injected; put any
-repository-required disclaimer in each template.
+entry uses the relevant default, in either version. Supplied entries must be
+non-empty JSON strings; whitespace and newlines are preserved. Encode a
+newline as `\n` in JSON. No placeholder is required, so a fixed comment is
+valid. No disclaimer is injected; put any repository-required disclaimer in
+each template. Scriptorium v4 replaced the `pause`, `failure` and
+`awaitingMerge` templates with `run` and `action`, and refuses the old names
+in both versions: remove them, or move their wording to the new templates.
 
 A [run result](host.md#run-results)'s frame is not a template: it starts with
 `comments.disclaimer`, `> _This was generated by AI._` when absent, or for a
@@ -516,74 +524,77 @@ The language has exactly three forms, with case-sensitive, letter-only names
 
 - `{name}` inserts that fact. Missing or empty facts insert nothing.
 - `{#name}…{/name}` renders the block when the fact exists. A scalar renders
-  it once; a list renders it once per item, in order. Within a list section,
-  `{name}` inserts the current item. Other facts remain available, and sections
-  may nest. An empty list renders no block. A numeric zero is present.
+  it once; a list renders it once per item, in order; a phase renders it once
+  with the phase's facts in scope. Within a list section, `{name}` inserts the
+  current item. Other facts remain available, and sections may nest. An empty
+  list renders no block. A numeric zero is present.
 - Every other brace is literal text, including `{ "a": 1 }`, `{}` and
   `{model_name}`. There is no escape syntax: `{{provider}}` renders a literal
   brace around the provider value, and a backslash does not escape a token.
 
-A list inserted directly with `{name}` joins its items with newlines; use a
-section to supply per-item formatting. Inserted values are text, never parsed
-as more template syntax. These are the only names for each comment:
+A list inserted directly with `{name}` joins its items with newlines, and a
+phase inserted directly inserts nothing; use a section to supply per-item or
+per-phase formatting. Inserted values are text, never parsed as more template
+syntax. These are the only names for each comment:
 
-| Comment         | Names                                                                                                |
-| --------------- | ---------------------------------------------------------------------------------------------------- |
-| `pause`         | `provider`, `model`, `effort`, `attempt`, `cause`, `reset`, `threshold`, `label`                     |
-| `failure`       | `failure`, `provider`, `model`, `effort`, `attempt`, `log`, `unpushable`, `unpushableCount`, `label` |
-| `close`         | `tickets`                                                                                            |
-| `awaitingMerge` | `provider`, `model`, `effort`, `attempt`, `log`, `reason`, `label`                                   |
+| Comment  | Names                                                                                                                                                                                         |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`    | `status`, `triage`, `implement`, `review`, `merge`, `result`, and within a phase `check`, `state`, `reason`, `reset`, `provider`, `model`, `effort`, `attempt`, `round`, `link`, `unpushable` |
+| `action` | `failed`, `stopped`, `gate`, `reason`, `unpushable`, `link`                                                                                                                                   |
+| `close`  | `tickets`                                                                                                                                                                                     |
 
-`label` is the configured paused, failed or running label for `pause`,
-`failure` or `awaitingMerge`, respectively. `cause` and
-`failure` remain factory-written English phrases. `threshold` is the numeric
-pause threshold only for a pause at that threshold; it is empty for an actual
-usage-limit pause. `reset` and `log` are empty when absent. A failed claim
-without a run has no provider, model, effort, attempt or log. Their sections
-do not render. `unpushable` is the list of paths the factory cannot push, and
-`unpushableCount` is their number, present only when at least one path exists.
-For `awaitingMerge`, `reason` says why the run ended, from its run result, or,
-without one, what the factory observed; it is empty when neither says.
-`tickets` contains closed-ticket references such as `#4` or `owner/repo#4`.
-For `awaitingMerge`, provider, model, effort, attempt and log describe the ended
-run. A label-only orphan claim has none of those facts; their sections do not
-render. The notice means the claim is retained without a live agent until the
-owner resolves its open pull request. Removing a state label alone does not
-resume an unsettled host run, and merging need not close the issue. See the
-[run outcomes and recovery rules](host.md#run-outcomes).
+For `run`, `status` is the pass's state: `in progress`, `paused`,
+`waiting for an answer`, `awaiting merge`, `merged` or `failed`. Each phase,
+`triage`, `implement`, `review` and `merge`, is present while it shows:
+implement and merge always, review once the repository turns it on, and
+triage once it ran in the pass. Within a phase, `check` is `x` once it is
+done or merged and a space otherwise; `state` is `running`, `paused`, `done`,
+`stopped`, `failed`, `awaiting merge` or `merged`, empty before it starts;
+`reason` is the pause's cause, the failure, why the run ended while its pull
+request awaits merge, or the state label a stop waits in; and `reset` is the
+pause's reset. `provider`, `model`, `effort`, `attempt` and `round` are the
+facts of the phase's latest run, `round` only for review and its hand-backs;
+`link` is its run result's comment; and `unpushable` lists the paths the
+factory cannot push. A merge phase has run facts only for a merge relaunch.
+`result` is the latest run result's body, contained as the result's own
+comment contains it, between two marker lines the factory reads back on its
+next edit; it is empty before any run left one, and is best inserted once.
+`cause`, `failure` and the other reasons remain factory-written English
+phrases.
+
+For `action`, exactly one of `failed`, `stopped` and `gate` is present, the
+occasion's label: the failed label, the stop state that waits on a person, or
+the gate labels review stopped at. `reason` is the failure, and `unpushable`
+the code-formatted unpushable paths of a failure, joined with commas, present
+only when at least one exists. `link` is the run comment's URL. `tickets`
+contains closed-ticket references such as `#4` or `owner/repo#4`.
 
 Every supplied template is validated when configuration is read, before any
 comment is needed. An unknown name in any of the three syntax forms, including
 a name belonging to a different comment, or an unbalanced/mismatched section
 invalidates configuration even inside a section that would render nothing.
-Malformed `comments` objects, empty or non-string entries and unknown fields
-also invalidate it. Invalid templates use the repository pause and recovery
-behavior below; they do not fail an individual run or post an issue pause
-comment. Existing pause-comment single delivery and label transitions remain
-the same, including after restart. The retry context and agent-written comments
-are separate interfaces.
+Malformed `comments` objects, empty or non-string entries and unknown fields,
+including the replaced `pause`, `failure` and `awaitingMerge`, also invalidate
+it. Invalid templates use the repository pause and recovery behavior below;
+they do not fail an individual run or post an issue comment. The retry context
+and agent-written comments are separate interfaces.
 
 ### Default templates
 
 These are the complete default strings in JSON form, with `\n` denoting each
-newline. Defaults and overrides go through the same renderer.
+newline. Defaults and overrides go through the same renderer. The run
+comment's four phase sections differ only in their names and titles.
 
-Pause:
+Run:
 
 ```json
-"The factory paused this run: {provider} {cause}{#reset}, resets {reset}{/reset}.\n\n- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n\nThe factory resumes the run by itself and removes `{label}` when it does; nobody needs to act."
+"**Factory run: {status}**\n\n{#triage}- [{check}] Triage{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/triage}{#implement}- [{check}] Implement{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/implement}{#review}- [{check}] Review{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/review}{#merge}- [{check}] Merge{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/merge}{#result}\n<details>\n<summary>Latest run result</summary>\n\n{result}\n\n</details>\n{/result}"
 ```
 
-Failure:
+Action:
 
 ```json
-"The factory run failed: {failure}.\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}{#unpushable}- Unpushable: `{unpushable}`\n{/unpushable}{#unpushableCount}\nA person with permission to push these paths must deliver the change.\n\n{/unpushableCount}Remove `{label}` to let the factory pick this issue up again."
-```
-
-Awaiting merge:
-
-```json
-"The factory agent run has ended, but its pull request remains open.{#reason} It ended: {reason}.{/reason}\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}The factory retains this issue's claim without a live agent. A behind, factory-owned pull request targeting the default branch may get one merge relaunch per PR head, through the repository's installed babysit. Each advance of the default branch can earn another relaunch for a new head; an unchanged consumed head stays awaiting merge. Otherwise the owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Needs-input and failed issues do not get merge relaunches. Removing the configured needs-input label after answering the question resumes the same work and PR on a current base once pickup gates allow it. Removing `{label}` alone does not authorize a relaunch. A merged pull request closes the issue only with an actual closing reference; a branch-only merge still needs an owner decision."
+"{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
 ```
 
 Parent close:

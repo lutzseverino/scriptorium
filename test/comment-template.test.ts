@@ -4,38 +4,38 @@ import { renderComment } from "../src/comment-template.ts";
 
 test("comment templates substitute facts and conditionally render scalar sections", () => {
   const template =
-    "{provider}: {cause}{#reset}, resets {reset}{/reset}{#threshold} at {threshold}%{/threshold}; {model}";
+    "{provider}: {reason}{#reset}, resets {reset}{/reset}{#attempt} attempt {attempt}{/attempt}; {model}";
   assert.equal(
-    renderComment("pause", template, {
+    renderComment("run", template, {
       provider: "codex",
-      cause: "usage limit",
+      reason: "usage limit",
       reset: "17:00 UTC",
     }),
     "codex: usage limit, resets 17:00 UTC; ",
   );
   assert.equal(
-    renderComment("pause", template, {
+    renderComment("run", template, {
       provider: "codex",
-      cause: "pause threshold",
+      reason: "pause threshold",
       reset: null,
-      threshold: 0,
+      attempt: 0,
     }),
-    "codex: pause threshold at 0%; ",
+    "codex: pause threshold attempt 0; ",
   );
 });
 
 test("list sections repeat with the current item and retain surrounding scalar facts", () => {
   const template =
-    "{#unpushableCount}{unpushableCount} paths:\n{#unpushable}{#label}{label}: {/label}{unpushable}\n{/unpushable}Deliver once.{/unpushableCount}";
+    "{#attempt}{attempt} paths:\n{#unpushable}{#state}{state}: {/state}{unpushable}\n{/unpushable}Deliver once.{/attempt}";
   assert.equal(
-    renderComment("failure", template, {
+    renderComment("run", template, {
       unpushable: ["a.yml", "b.yml"],
-      unpushableCount: 2,
-      label: "broken",
+      attempt: 2,
+      state: "failed",
     }),
-    "2 paths:\nbroken: a.yml\nbroken: b.yml\nDeliver once.",
+    "2 paths:\nfailed: a.yml\nfailed: b.yml\nDeliver once.",
   );
-  assert.equal(renderComment("failure", template, { unpushable: [] }), "");
+  assert.equal(renderComment("run", template, { unpushable: [] }), "");
   assert.equal(
     renderComment("close", "{#tickets}- {tickets}\n{/tickets}", {
       tickets: [],
@@ -50,22 +50,22 @@ test("list sections repeat with the current item and retain surrounding scalar f
 
 test("other braces are literal, and neither a placeholder nor an escape is required", () => {
   assert.equal(
-    renderComment("pause", '{ "a": 1 } {} {model_name} {model2} { model }', {}),
+    renderComment("run", '{ "a": 1 } {} {model_name} {model2} { model }', {}),
     '{ "a": 1 } {} {model_name} {model2} { model }',
   );
   assert.equal(
-    renderComment("pause", "{{provider}} \\{provider}", { provider: "codex" }),
+    renderComment("run", "{{provider}} \\{provider}", { provider: "codex" }),
     "{codex} \\codex",
   );
   assert.equal(
-    renderComment("pause", "A fixed comment.", {}),
+    renderComment("action", "A fixed comment.", {}),
     "A fixed comment.",
   );
 });
 
 test("unknown names and unbalanced sections are invalid even inside an empty section", () => {
   for (const template of [
-    "{failure}",
+    "{failed}",
     "{#tickets}x{/tickets}",
     "{#reset}{unknown}{/reset}",
     "{/reset}",
@@ -73,67 +73,121 @@ test("unknown names and unbalanced sections are invalid even inside an empty sec
     "{#reset}{#model}{/reset}{/model}",
   ])
     assert.throws(
-      () => renderComment("pause", template, {}),
+      () => renderComment("run", template, {}),
       /unknown name|unbalanced section/,
     );
-});
-
-test("the default failure comment preserves its wording with and without available details", () => {
-  assert.equal(
-    renderComment("failure", undefined, { failure: "no run", label: "broken" }),
-    "The factory run failed: no run.\n\nRemove `broken` to let the factory pick this issue up again.",
-  );
-  assert.equal(
-    renderComment("failure", undefined, {
-      failure: "stopped",
-      label: "broken",
-      provider: "codex",
-      model: "gpt-5.5",
-      effort: "high",
-      attempt: 2,
-      log: "/host/run.log",
-      unpushable: ["a.yml", "b.yml"],
-      unpushableCount: 2,
-    }),
-    "The factory run failed: stopped.\n\n- Model: `codex/gpt-5.5@high`, attempt 2\n- Log: `/host/run.log` on the factory host\n\n- Unpushable: `a.yml`\n- Unpushable: `b.yml`\n\nA person with permission to push these paths must deliver the change.\n\nRemove `broken` to let the factory pick this issue up again.",
-  );
-  assert.equal(
-    renderComment("failure", undefined, {
-      failure: "stopped",
-      label: "broken",
-      provider: "codex",
-      model: "gpt-5.5",
-      effort: "high",
-      attempt: 1,
-    }),
-    "The factory run failed: stopped.\n\n- Model: `codex/gpt-5.5@high`, attempt 1\n\nRemove `broken` to let the factory pick this issue up again.",
+  assert.throws(
+    () => renderComment("action", "{provider}", {}),
+    /unknown name \{provider\} in action comment template/,
   );
 });
 
-test("default pause comments preserve both causes and omit absent resets", () => {
-  const facts = {
-    provider: "codex",
-    model: "gpt-5.5",
-    effort: "high",
-    attempt: 1,
-    label: "waiting",
-  };
+test("an object's section renders once with its facts in scope, and inserts nothing directly", () => {
+  const template =
+    "{status}:{#implement} [{check}] {state}{#provider} {provider}{/provider}{/implement}{#review} review{/review}{implement}";
   assert.equal(
-    renderComment("pause", undefined, {
-      ...facts,
-      cause: "usage limit",
-      reset: null,
+    renderComment("run", template, {
+      status: "paused",
+      implement: { check: " ", state: "paused", provider: "codex" },
     }),
-    "The factory paused this run: codex usage limit.\n\n- Model: `codex/gpt-5.5@high`, attempt 1\n\nThe factory resumes the run by itself and removes `waiting` when it does; nobody needs to act.",
+    "paused: [ ] paused codex",
   );
   assert.equal(
-    renderComment("pause", undefined, {
-      ...facts,
-      cause: "pause threshold",
-      reset: "15:00 UTC",
-      threshold: 95,
+    renderComment("run", template, {
+      status: "merged",
+      implement: { check: "x", state: "done" },
+      review: { check: " " },
     }),
-    "The factory paused this run: codex pause threshold, resets 15:00 UTC.\n\n- Model: `codex/gpt-5.5@high`, attempt 1\n\nThe factory resumes the run by itself and removes `waiting` when it does; nobody needs to act.",
+    "merged: [x] done review",
+  );
+});
+
+test("the default run comment shows each phase's line and the latest result in a details block", () => {
+  assert.equal(
+    renderComment("run", undefined, {
+      status: "paused",
+      triage: {
+        check: "x",
+        state: "done",
+        provider: "codex",
+        model: "gpt-5.5",
+        effort: "high",
+        attempt: 1,
+        link: "https://platform.test/c/1",
+      },
+      implement: {
+        check: " ",
+        state: "paused",
+        reason: "usage limit",
+        reset: "15:00 UTC",
+        provider: "claude-code",
+        model: "claude-opus-5-5",
+        effort: "high",
+        attempt: 2,
+        round: 2,
+      },
+      merge: {
+        check: " ",
+        state: "failed",
+        reason: "unpushable paths",
+        unpushable: ["a.yml", "b.yml"],
+      },
+      result: "The brief.",
+    }),
+    [
+      "**Factory run: paused**",
+      "",
+      "- [x] Triage: done · `codex/gpt-5.5@high`, attempt 1 · [result](https://platform.test/c/1)",
+      "- [ ] Implement: paused (usage limit, resets 15:00 UTC) · `claude-code/claude-opus-5-5@high`, attempt 2, round 2",
+      "- [ ] Merge: failed (unpushable paths)",
+      "  - Unpushable: `a.yml`",
+      "  - Unpushable: `b.yml`",
+      "",
+      "<details>",
+      "<summary>Latest run result</summary>",
+      "",
+      "The brief.",
+      "",
+      "</details>",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(
+    renderComment("run", undefined, {
+      status: "in progress",
+      implement: { check: " " },
+      merge: { check: " " },
+    }),
+    "**Factory run: in progress**\n\n- [ ] Implement\n- [ ] Merge\n",
+  );
+});
+
+test("the default action comment names its occasion's label in one line linking the run comment", () => {
+  const link = "https://platform.test/c/9";
+  assert.equal(
+    renderComment("action", undefined, {
+      failed: "broken",
+      reason: "the run ended without an open pull request",
+      link,
+    }),
+    "The factory run failed: the run ended without an open pull request. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    renderComment("action", undefined, {
+      failed: "broken",
+      reason: "its branch changes paths the factory can't push",
+      unpushable: "`a.yml`, `b.yml`",
+      link,
+    }),
+    "The factory run failed: its branch changes paths the factory can't push. A person with permission to push `a.yml`, `b.yml` must deliver the change. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    renderComment("action", undefined, { stopped: "state:owner", link }),
+    "The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    renderComment("action", undefined, { gate: "gate:owner-review", link }),
+    "Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/c/9).",
   );
 });
 
@@ -141,47 +195,5 @@ test("the default close comment preserves local and cross-repository ticket refe
   assert.equal(
     renderComment("close", undefined, { tickets: ["#4", "acme/other#8"] }),
     "All sub-issues are closed. Closing this parent.\n\n- #4\n- acme/other#8",
-  );
-});
-
-test("awaiting-merge defaults and overrides render run facts and omit absent orphan details", () => {
-  assert.equal(
-    renderComment("awaitingMerge", undefined, { label: "working" }),
-    "The factory agent run has ended, but its pull request remains open.\n\nThe factory retains this issue's claim without a live agent. A behind, factory-owned pull request targeting the default branch may get one merge relaunch per PR head, through the repository's installed babysit. Each advance of the default branch can earn another relaunch for a new head; an unchanged consumed head stays awaiting merge. Otherwise the owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Needs-input and failed issues do not get merge relaunches. Removing the configured needs-input label after answering the question resumes the same work and PR on a current base once pickup gates allow it. Removing `working` alone does not authorize a relaunch. A merged pull request closes the issue only with an actual closing reference; a branch-only merge still needs an owner decision.",
-  );
-  assert.equal(
-    renderComment(
-      "awaitingMerge",
-      "{provider}/{model}@{effort} #{attempt}{#log} ({log}){/log}; {label}",
-      {
-        provider: "codex",
-        model: "gpt-5.5",
-        effort: "high",
-        attempt: 2,
-        log: "/host/run.log",
-        label: "working",
-      },
-    ),
-    "codex/gpt-5.5@high #2 (/host/run.log); working",
-  );
-  assert.equal(
-    renderComment(
-      "awaitingMerge",
-      "Held.{#provider} {provider}/{model}@{effort} #{attempt}{/provider}{#log} ({log}){/log} {label}",
-      { label: "working" },
-    ),
-    "Held. working",
-  );
-  // The reason the run ended, its result's or what the host observed.
-  assert.match(
-    renderComment("awaitingMerge", undefined, {
-      reason: "its required checks were still running",
-      label: "working",
-    }),
-    /^The factory agent run has ended, but its pull request remains open\. It ended: its required checks were still running\.\n\n/,
-  );
-  assert.equal(
-    renderComment("awaitingMerge", "Held{#reason}: {reason}{/reason}.", {}),
-    "Held.",
   );
 });

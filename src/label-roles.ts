@@ -26,6 +26,8 @@ type Role = {
   // A stop waits on an answer: a run ending in it keeps its work and PR for
   // resumption once the issue is ready again.
   stop?: true;
+  // Only a person answers this stop, so its run comment's action asks them.
+  asks?: true;
   // A gate stops review at ready-to-merge until the owner removes it.
   gate?: true;
   // Pickup order: lower ranks go first; an absent label counts as normal.
@@ -64,10 +66,21 @@ export const labelRoles = {
     versions: { 3: "optional" },
     applied: true,
     stop: true,
+    asks: true,
     excludes: [stopped],
   },
-  grill: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
-  owner: { versions: { 3: "optional" }, stop: true, excludes: [stopped] },
+  grill: {
+    versions: { 3: "optional" },
+    stop: true,
+    asks: true,
+    excludes: [stopped],
+  },
+  owner: {
+    versions: { 3: "optional" },
+    stop: true,
+    asks: true,
+    excludes: [stopped],
+  },
   ready: {
     versions: { 2: "required", 3: "required" },
     applied: true,
@@ -220,6 +233,9 @@ export const claimLabels = (labels: Labels) =>
 
 export const stopLabels = (labels: Labels) =>
   configured(labels, (role) => role.stop);
+
+export const askLabels = (labels: Labels) =>
+  configured(labels, (role) => role.asks);
 
 export const gateLabels = (labels: Labels) =>
   configured(labels, (role) => role.gate);

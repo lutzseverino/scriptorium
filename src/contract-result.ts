@@ -8,9 +8,9 @@ import type {
   FactoryConfiguration,
   PlatformConventions,
 } from "./factory-configuration.ts";
-import { isHoldComment } from "./hold-comments.ts";
 import { configured } from "./label-roles.ts";
 import type { ReadinessHold } from "./readiness.ts";
+import { isFactoryComment } from "./run-comment.ts";
 
 // The one result format this factory reads. Any other format, including the
 // earlier line without one, holds the issue.
@@ -39,9 +39,9 @@ type Result = {
 // Why the validator's latest result does not let the ready label count, or
 // null when it does. A result older than any change to the issue waits for the
 // validator's next result, since the validator evaluates every comment, edit
-// and label event. The factory's own hold comments and its writes of the
-// labels its configuration names, other than the ready label, are not changes
-// the validator's decision on an open issue reads.
+// and label event. The factory's own hold, run and action comments and its
+// writes of the labels its configuration names, other than the ready label,
+// are not changes the validator's decision on an open issue reads.
 export function contractResultHold(
   facts: ContractFacts,
   configuration: Pick<FactoryConfiguration, "labels" | "contractResult">,
@@ -97,7 +97,7 @@ export function contractResultHold(
     facts.comments.some(
       (comment) =>
         comment.id !== posted.comment.id &&
-        !isHoldComment(comment.body) &&
+        !isFactoryComment(comment) &&
         newer(comment.updatedAt),
     ) ||
     facts.labelChanges.some(

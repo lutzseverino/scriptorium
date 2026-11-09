@@ -522,9 +522,11 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   - is newer than every comment created or edited on the issue, its body's
     last edit, its latest comment deletion and every label change, to the
     second. The factory's own hold comments, known by their exact marker and
-    wording, and changes to the labels its configuration names, other than the ready label, don't count, so neither
-    a hold comment nor the running label written at pickup makes a result
-    stale;
+    wording, its [run and action comments](#run-comments), known by their
+    marker line and the bot account that posts them, and changes to the labels
+    its configuration names, other than the ready label, don't count, so
+    neither a hold comment, an edit of the run comment nor the running label
+    written at pickup makes a result stale;
   - names a contract source, an Agent Brief comment or the issue body, that
     the platform still reports with the edit time the result records.
 
@@ -589,8 +591,8 @@ Open blockers, including a parent's blockers, usage drains and owner holds,
 provider caps and states already carrying labels or notices (running, paused,
 needs-input, failed and skip) stay log-only. A transient unreadable role
 lookup, a stale contract result and an unreadable comment list also stay
-log-only. Existing awaiting-merge, failure, pause and close notices
-keep their own wording and lifecycle. If no valid repository configuration is
+log-only. The [run, action and parent-close comments](#run-comments) keep
+their own wording and lifecycle. If no valid repository configuration is
 cached, including after a restart, the host cannot read its issues and posts
 no hold comment.
 
@@ -660,7 +662,54 @@ asked for. A failed result fails the run with its own reason. Either retries as
 any failed first implement attempt does. The process log records each result's
 outcome and reason, or why it was invalid, when the agent exits. The run's
 [completion signal](#foreground-execution-and-incomplete-runs) remains separate
-loop control.
+loop control. The posted result's body also becomes the
+[run comment](#run-comments)'s latest result, and its phase's line links it.
+
+## Run comments
+
+Each pass through the pipeline has one run comment on its issue, or on the
+pull request of an independent review, from its first launch, triage or
+implement on readiness, to merge or failure. Every run kind, stop and resume
+of the pass edits the same comment in place, as
+[ADR 0008](../adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md)
+records. It holds a heading with the pass's state, a checklist line for each
+phase (Triage, Implement, Review and Merge) with its state and its latest
+run's provider, model, effort, attempt, review round and result link, a pause
+or failure on the line of the phase it happened in, and the latest run
+result's body in a `<details>` block. Triage shows once it ran in the pass,
+and Review once the repository turns review on. A phase that starts, and a
+merge, finishes an earlier phase left running, paused or stopped. A failure after its pull
+request closed or merged without closing the issue is the merge's.
+
+The comment's last line is its marker,
+`<!-- scriptorium:run {…} -->`, whose JSON holds each phase's facts, whether
+the pass has ended and, after a stop releases the claim, its continuation:
+the PRs and review the answered stop resumes on. The factory reads the
+marker back on every write, so what the issue was told survives host
+restarts without host state; it trusts only a comment its bot account posted.
+A write after the pass merged or failed starts the next pass's comment, so a
+retry after a failure, once its failed label is removed, starts a new one.
+
+Progress writes, at each launch, posted result, pause and wait for merge, are
+best-effort: a failed one is logged and the next write carries the state on.
+A pass's final write, at merge or failure, a stop's continuation and every
+action are required: the decision fails and retries on a later pass, and a
+retry finds the same comment and posts no action twice. An unchanged comment
+is not edited.
+
+An action comment is posted fresh, once per occasion, only when a person must
+act: when a run's stop leaves the issue in the reporter, grill or owner state,
+when review stops at a gate, and when the run fails. It is one line naming the
+label to act on, with a link to the run comment, and mentions nobody. Its
+marker line names the run comment and the occasion, which makes a retried or
+re-observed occasion find it. A version 2 stop under the needs-input label
+gets no action comment: its agent asked on the issue itself. A pause, a
+resume and a pull request awaiting merge edit only the run comment.
+
+A parent whose sub-issues closed gets the close comment, posted fresh before
+it closes. Hold comments stay separate, since holds precede claims. Every
+comment's wording comes from the
+[comment templates](factory-configuration.md#comment-templates).
 
 ## Redaction
 
@@ -681,20 +730,24 @@ process redacted its own logs as it wrote them.
 
 The process owns everything under `stateDirectory`:
 
-| Path                                             | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status.json`                                    | The status file.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `events.jsonl`                                   | The append-only [operational event stream](#operational-events) for external delivery.                                                                                                                                                                                                                                                                                                                                                                                       |
-| `events-state.json`                              | The process-owned event checkpoint and pending append, including its related usage or owner policy write. Keep it with the event stream across restarts.                                                                                                                                                                                                                                                                                                                     |
-| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                                                                                                                                                                                         |
-| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                                                                                                                                                 |
-| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `usage.json`                                     | Each provider's last good usage reading with when it was read and its reset, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                                                                                    |
-| `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                                                                                                                                             |
-| `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                                                |
-| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline and whether its issue was told when it paused, whether it delivered the awaiting-merge notice, its run result as read and whether its comment and labels landed, and whether the host settled it. |
-| `repositories/<owner>/<name>/claims/`            | Successful awaiting-merge notice markers for label-only orphan claims, `issue-<n>.json`; removed when their claim settles or is no longer observed.                                                                                                                                                                                                                                                                                                                          |
-| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory, result directory and raw log.                                                                                                                                                                                                                                                                                                                                                    |
+| Path                                             | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status.json`                                    | The status file.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `events.jsonl`                                   | The append-only [operational event stream](#operational-events) for external delivery.                                                                                                                                                                                                                                                                                                                                                            |
+| `events-state.json`                              | The process-owned event checkpoint and pending append, including its related usage or owner policy write. Keep it with the event stream across restarts.                                                                                                                                                                                                                                                                                          |
+| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                                                                                                                                                              |
+| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                                                                                                                      |
+| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `usage.json`                                     | Each provider's last good usage reading with when it was read and its reset, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                                                         |
+| `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                                                                                                                  |
+| `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                     |
+| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline, its run result as read and whether its comment and labels landed, and whether the host settled it. What the issue was told lives in its [run comment](#run-comments). |
+| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory, result directory and raw log.                                                                                                                                                                                                                                                                                                                         |
+
+Scriptorium v4 reads no `repositories/<owner>/<name>/claims/` directory, which
+earlier releases kept for awaiting-merge notices and stop continuations, and an
+operator can delete it. A stop an earlier release recorded there resumes as a
+fresh attempt on the issue's branch.
 
 Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
@@ -726,7 +779,7 @@ the configured triage, reporter, grill and owner states.
 | Pull request merged with a closing reference to this issue | Done           | Close the issue and clear the claim's running, paused, needs-input and failed labels. |
 | Pull request merged without a closing reference            | Failed, final  | Fail without retrying; the owner must decide whether the work finished the issue.     |
 | A stop label present                                       | Stopped        | Release the claim and retain the existing work and PR context for resumption.         |
-| Pull request open                                          | Awaiting merge | Tell the issue once and keep the claim; assess a merge relaunch below.                |
+| Pull request open                                          | Awaiting merge | Show it on the run comment and keep the claim; assess a merge relaunch below.         |
 | Unpushed commits under `unpushablePaths`                   | Failed, final  | Fail without retrying and name the paths.                                             |
 | Anything else                                              | Failed         | Retry an implement attempt 1 once; fail attempt 2, a triage and a review run.         |
 
@@ -737,24 +790,21 @@ to the rows below it. With review on, a pull request left open hands off instead
 merge, as [run kinds](factory-configuration.md#handoffs) describe: an
 implement run's PR starts review, and a review's PR left a draft starts a
 hand-back to implement on the same PR, at most twice. A review that would
-hand back a third time fails the issue because its rounds did not converge. A handed-off PR gets no
-awaiting-merge notice. A review that marked its PR ready and left it open
+hand back a third time fails the issue because its rounds did not converge. A handed-off PR does not
+await merge. A review that marked its PR ready and left it open
 awaits merge like any other run.
 
-An ended run awaiting merge posts one deterministic issue notice, without an
-agent or provider usage. It says the run ended, why, its pull request remains
-open, and the factory retains the claim without a live agent while it waits.
-The reason is the run result's, or, without a result, what the factory
-observed: the time limit, or that no factory run holds the claim. An
-eligible stale PR gets a merge relaunch as described below. Otherwise the owner
-resolves the pull request by merging or closing it; the factory keeps observing
-the outcome under the table above. Merging does not always close the issue. The
-notice uses the factory's default wording or the optional
-[`comments.awaitingMerge` template](factory-configuration.md#comment-templates).
-Successful delivery is recorded for that attempt or retained orphan claim, so
-later polls and host restarts do not repeat it. Older unsettled records and
-label-only orphan claims get the notice once when next observed awaiting
-merge. A failed comment write can retry on a later pass.
+An ended run awaiting merge shows it on the Merge line of its
+[run comment](#run-comments), with why the run ended, and the factory retains
+the claim without a live agent while it waits. The reason is the run result's,
+or, without a result, what the factory observed: the time limit, or that no
+factory run holds the claim. An eligible stale PR gets a merge relaunch as
+described below. Otherwise the owner resolves the pull request by merging or
+closing it; the factory keeps observing the outcome under the table above.
+Merging does not always close the issue. Later polls and host restarts find
+the comment already showing it and edit nothing, and a failed write retries
+on a later pass. A failure, or a stop that waits on a person, also posts an
+action comment.
 
 The running label and an unsettled host run record are independent pickup
 gates. Removing the running label alone leaves the host record holding the
@@ -766,7 +816,7 @@ The configured state labels have these meanings:
 - `labels.running`: the factory holds the issue, including while awaiting merge.
 - `labels.needsInput`: an owner question holds the work. Once answered, remove
   this label to resume the same work and PR, whether the PR is open or
-  closed-unmerged. The host retains the resume marker across restarts and
+  closed-unmerged. The run comment keeps the continuation across restarts and
   starts a fresh attempt 1 once the existing readiness, authorization, blockers,
   skip, repository, capacity and usage gates allow pickup. Its prompt directs
   the agent to preserve the PR, reviews, answers, handoff context and all local
@@ -789,8 +839,8 @@ the table; an existing run record supplies its attempt number, and a claim
 with no record counts as attempt 1. An issue carrying the configured running
 or paused label that no run on the host holds is such a claim. Failing or
 releasing a claim removes whichever of the two labels it carries, and a claim
-kept awaiting merge or retried carries the running label. The notice starts no
-babysitting or retry attempt by itself and changes no outcome precedence.
+kept awaiting merge or retried carries the running label. The run comment starts
+no babysitting or retry attempt by itself and changes no outcome precedence.
 
 ### Merge relaunches
 
@@ -1031,11 +1081,12 @@ dated reset.
 A paused run bypasses the run outcome table, whether its pull request is open,
 it has none, or the factory stopped it at the time limit. It is not a failure:
 it spends no attempt or retry and takes no provider cap slot. The factory
-replaces the issue's running label with the configured paused label and posts
-one comment giving the cause, `usage limit` or `pause threshold`, the reset
-when known, and the run's model and attempt, and saying that the factory
-resumes the run by itself and nobody needs to act. It contains no log output.
-Later passes and restarts don't repeat it.
+replaces the issue's running label with the configured paused label and shows
+the pause on its phase's line of the [run comment](#run-comments): the cause,
+`usage limit` or `pause threshold`, the reset when known, and the run's model
+and attempt. It asks nobody to act, since the factory resumes the run by
+itself, and contains no log output. The paused label records that the issue
+was told, so later passes and restarts don't repeat it.
 
 The run relaunches like an [interrupted run](#restarts): as the same attempt,
 with the same model, effort, prompt, retry context and log, on its
@@ -1062,8 +1113,9 @@ quota.
 It also waits for its provider's cap and for its repository to resume, however
 long those take. Before it launches, the factory swaps the paused label back for the
 running label; if that write fails, the run does not launch that pass.
-Resuming posts nothing. A relaunch that hits the limit again pauses again,
-with a new comment, and nothing caps the number of pauses.
+Resuming shows the run running again on the same run comment. A relaunch that
+hits the limit again pauses again, edited onto that comment, and nothing caps
+the number of pauses.
 
 While a run is paused, its claim is released, and both labels removed, once
 its issue closes or carries the configured needs-input label. An open issue
@@ -1512,7 +1564,7 @@ standard output, [redacted](#redaction).
 `events.jsonl` under `stateDirectory` is the version 1 producer contract for
 external consumers such as homelab. The factory writes data only: it sends no
 notification request and starts no agent or prompt for these events. The
-existing per-run pause comment remains separate.
+run comment's pause line remains separate.
 
 Every newline-terminated UTF-8 JSON record contains `version: 1`, `id`,
 `sequence`, `type`, `provider`, `observedAt`, `reason` and `state`. `state` is
@@ -1520,15 +1572,15 @@ the complete provider observation described above, at that transition. No
 credential, provider response body, free-text reset, or raw agent output is
 included. `reason` uses the fixed categories below, rather than provider text.
 
-| `type`                | Transition and `reason`                                                                                                                                                                                                     |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `held`                | An automatic usage hold (`usage-hold`) or owner hold (`owner-hold`) begins. They are separate records.                                                                                                                      |
-| `released`            | That hold ends, with `usage-hold` or `owner-hold` identifying which. A usage release can follow a low reading, reset, fallback deadline or configuration change; it does not release an owner hold.                         |
-| `drain_started`       | New claims become held; `reason` is the provider state's hold reason. Running work continues below the pause threshold.                                                                                                     |
-| `drained`             | A held provider has no running work (`no-running-work`). With zero running work at the start, this follows `drain_started` immediately. It does not delay reopening claims on a low reading.                                |
-| `paused_at_threshold` | Usage in force first reaches the pause threshold (`pause-threshold`), including with zero running work. This records the threshold observation; individual sandbox stops and their comments follow the usual run lifecycle. |
-| `reserve_granted`     | An accepted owner request grants a reserve raise (`owner-request`), including a repeated request for the same threshold.                                                                                                    |
-| `resumed`             | An owner request is accepted (`owner-request`), or new claims automatically reopen (`claims-reopened`). An accepted request can leave usage holding claims; inspect `state.claimsHeld` and `nextAction`.                    |
+| `type`                | Transition and `reason`                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `held`                | An automatic usage hold (`usage-hold`) or owner hold (`owner-hold`) begins. They are separate records.                                                                                                                          |
+| `released`            | That hold ends, with `usage-hold` or `owner-hold` identifying which. A usage release can follow a low reading, reset, fallback deadline or configuration change; it does not release an owner hold.                             |
+| `drain_started`       | New claims become held; `reason` is the provider state's hold reason. Running work continues below the pause threshold.                                                                                                         |
+| `drained`             | A held provider has no running work (`no-running-work`). With zero running work at the start, this follows `drain_started` immediately. It does not delay reopening claims on a low reading.                                    |
+| `paused_at_threshold` | Usage in force first reaches the pause threshold (`pause-threshold`), including with zero running work. This records the threshold observation; individual sandbox stops and their run comments follow the usual run lifecycle. |
+| `reserve_granted`     | An accepted owner request grants a reserve raise (`owner-request`), including a repeated request for the same threshold.                                                                                                        |
+| `resumed`             | An owner request is accepted (`owner-request`), or new claims automatically reopen (`claims-reopened`). An accepted request can leave usage holding claims; inspect `state.claimsHeld` and `nextAction`.                        |
 
 The first observation reports any existing active holds. Repeated passes and
 restarts emit no new event for an unchanged transition. Each accepted resume

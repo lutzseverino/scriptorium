@@ -28,6 +28,7 @@ const consumers = [
   ["platform.ts", "provisioned", "async createStateLabels"],
   ["platform.ts", "claimLabels", "async readClosedClaims"],
   ["host.ts", "claimLabels", "async function readClaims"],
+  ["host.ts", "askLabels", "async function apply"],
   ["factory.ts", "exclusionReason", "function continuationExclusions"],
   ["factory.ts", "exclusionReason", "function exclusion("],
   ["factory.ts", "priority", "function priorityFirst"],
