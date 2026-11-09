@@ -23,10 +23,9 @@ type Common = {
   contractResult: { marker: string; author: string };
   modelLabelPrefix: string;
   comments?: {
-    pause?: string;
-    failure?: string;
+    run?: string;
+    action?: string;
     close?: string;
-    awaitingMerge?: string;
     // The disclaimers that start the frame of a run result, and of a triage
     // run's result.
     disclaimer?: string;
@@ -51,7 +50,7 @@ export type PlatformConventions = Pick<
   FactoryConfiguration,
   "labels" | "contractResult" | "comments"
 > & {
-  runKinds?: { triage?: RunKind };
+  runKinds?: { triage?: RunKind; review?: RunKind };
   triageResult?: { marker: string; author: string };
 };
 
@@ -256,10 +255,9 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     }
     if (Object.hasOwn(root, "comments")) {
       const comments = object(root.comments, [], "comments.", [
-        "pause",
-        "failure",
+        "run",
+        "action",
         "close",
-        "awaitingMerge",
         "disclaimer",
         "triageDisclaimer",
       ]);
@@ -267,12 +265,7 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
         if (comments && Object.hasOwn(comments, name))
           text(comments[name], `comments.${name}`);
       if (comments)
-        for (const name of [
-          "pause",
-          "failure",
-          "close",
-          "awaitingMerge",
-        ] as const) {
+        for (const name of ["run", "action", "close"] as const) {
           if (!Object.hasOwn(comments, name)) continue;
           const template = comments[name];
           if (typeof template !== "string" || template.length === 0)

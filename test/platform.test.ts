@@ -562,6 +562,64 @@ test("the factory's own hold comments and configured label writes do not make th
     );
 });
 
+test("posting or editing the factory's run, action and hold comments never makes a ready issue wait on the validator", async () => {
+  const factory = (id: number, body: string, bot = true): Comment => ({
+    ...briefComment,
+    id,
+    nodeId: `IC_${id}`,
+    author: bot
+      ? { login: "factory[bot]", bot: true }
+      : { login: "owner", bot: false },
+    body,
+    createdAt: later,
+    updatedAt: later,
+  });
+  const run = (id: number, bot?: boolean) =>
+    factory(
+      id,
+      '**Factory run: in progress**\n\n- [ ] Implement: running\n<!-- scriptorium:run {"phases":{"implement":{"state":"running"}}} -->',
+      bot,
+    );
+  const action = (id: number, bot?: boolean) =>
+    factory(
+      id,
+      'The factory waits in `state:owner` for an answer. See [the run comment](https://github.com/acme/widgets/issues/1#issuecomment-13).\n<!-- scriptorium:action {"run":13,"occasion":"stop:a"} -->',
+      bot,
+    );
+  const hold = factory(
+    15,
+    "<!-- scriptorium:hold:readiness -->\nThe factory is holding this issue: a reason.",
+  );
+  assert.equal(
+    await held([briefComment, resultComment(), run(13), action(14), hold]),
+    null,
+  );
+  // Every other comment, and anyone else's marked one, still waits.
+  for (const comment of [
+    run(13, false),
+    action(14, false),
+    factory(16, "A factory note without its marker."),
+  ])
+    assertHold(
+      await held([briefComment, resultComment(), comment]),
+      { reason: /^waits: the issue changed after/, waiting: true },
+      comment.body,
+    );
+  // So do body edits, deletions and brief-source edits beside them.
+  for (const [comments, options] of [
+    [
+      [briefComment, resultComment(), run(13)],
+      { details: { lastEditedAt: later } },
+    ],
+    [[briefComment, resultComment(), run(13)], { deletion: later }],
+    [[{ ...briefComment, updatedAt: later }, resultComment(), run(13)], {}],
+  ] as const)
+    assertHold(await held([...comments], options), {
+      reason: /^waits: /,
+      waiting: true,
+    });
+});
+
 test("the contract source the result names must be present and unedited", async () => {
   const waits =
     /^waits: the issue changed after the validator's latest contract result/;
@@ -1043,12 +1101,11 @@ test("removing a label the issue lacks succeeds, and a new state label is added 
         ? { status: 404, data: { message: "Label does not exist" } }
         : { status: 200, data: [] },
   );
-  await repositoryPlatform(connection, configuration).fail(4, "failed");
+  await repositoryPlatform(connection, configuration).transition(4, "fail");
   assert.deepEqual(requests, [
     "POST /repos/acme/widgets/issues/4/labels",
     "DELETE /repos/acme/widgets/issues/4/labels/factory%3Arunning",
     "DELETE /repos/acme/widgets/issues/4/labels/factory%3Apaused",
-    "POST /repos/acme/widgets/issues/4/comments",
   ]);
 });
 
@@ -1302,11 +1359,6 @@ function failing(issueLabels: string[], failAt: number) {
         throw new PlatformError("notFound", "Label does not exist");
       issueLabels.splice(issueLabels.indexOf(label), 1);
     },
-    async createComment() {
-      writes.push("comment");
-      fail();
-      return {} as never;
-    },
   };
   const connection = {
     repository: {
@@ -1328,12 +1380,12 @@ test("a state transition that fails part way leaves its claimed issue a state la
     ["unpause", [labels.paused], [labels.running]],
   ] as const) {
     const complete = failing([labels.ready, ...before], Infinity);
-    await complete.platform[transition](4, "comment");
+    await complete.platform.transition(4, transition);
     const steps = complete.writes.length;
     for (let failAt = 0; failAt < steps; failAt++) {
       const issueLabels = [labels.ready, ...before];
       const { platform, writes } = failing(issueLabels, failAt);
-      await assert.rejects(platform[transition](4, "comment"), {
+      await assert.rejects(platform.transition(4, transition), {
         reason: "unavailable",
       });
       assert.ok(
@@ -1342,7 +1394,7 @@ test("a state transition that fails part way leaves its claimed issue a state la
       );
     }
     const issueLabels = [labels.ready, ...before];
-    await failing(issueLabels, Infinity).platform[transition](4, "comment");
+    await failing(issueLabels, Infinity).platform.transition(4, transition);
     assert.deepEqual(issueLabels, [labels.ready, ...after], transition);
   }
 });
@@ -1364,14 +1416,14 @@ test("closed-issue cleanup preserves unrelated labels and can resume after any f
     for (let failAt = 0; failAt < 3; failAt++) {
       const issueLabels = [...unrelated, ...active];
       await assert.rejects(
-        failing(issueLabels, failAt).platform.releaseClosed(4),
+        failing(issueLabels, failAt).platform.transition(4, "closed"),
         {
           reason: "unavailable",
         },
       );
       const recovered = failing(issueLabels, Infinity).platform;
-      await recovered.releaseClosed(4);
-      await recovered.releaseClosed(4);
+      await recovered.transition(4, "closed");
+      await recovered.transition(4, "closed");
       assert.deepEqual(issueLabels, unrelated);
     }
   }

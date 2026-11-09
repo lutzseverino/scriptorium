@@ -33,6 +33,7 @@ import {
   claimLabels,
   gateLabels,
   isStopped,
+  stopLabels,
   transition,
 } from "./label-roles.ts";
 import {
@@ -100,7 +101,7 @@ import { pauseDeadline } from "./pause.ts";
 import { followRunLog, readLogEnd } from "./run-log.ts";
 import { hostStatus, writeStatus } from "./status.ts";
 import { createUsage } from "./usage.ts";
-import { renderComment } from "./comment-template.ts";
+import type { Action, Phase, RunUpdate } from "./run-comment.ts";
 import { createEvents, providerStatus } from "./events.ts";
 
 export type HostPorts = {
@@ -144,9 +145,6 @@ export const dockerfilePath = ".factory/Dockerfile";
 
 type HostRun = Run & {
   provenance?: Provenance;
-  // Successful awaiting-merge notice for this attempt, independent of the
-  // ending observation refreshed on each pass and on startup.
-  awaitingMergeNotified?: true;
   // Its run result's comment and labels are on the issue.
   resultPosted?: true;
   // PR/head pairs whose automatic merge recovery has already launched.
@@ -535,10 +533,19 @@ export function createHost(
             },
             run.configuration,
           );
-          await platform.postResult(run.issue, post);
+          const link = await platform.postResult(run.issue, post);
           issue.labels = postedLabels(issue.labels, post);
           run.resultPosted = true;
           record(run);
+          await tell(pass, issue, {
+            phase: phaseOf(run),
+            facts: {
+              state: outcomeStates[run.result.outcome],
+              reason: run.result.reason,
+              link,
+            },
+            result: run.result,
+          });
         }
         const ending = await observeEnding(reads, issue, ended);
         run.ownedPullRequests = ending.ownedPullRequests;
@@ -627,7 +634,8 @@ export function createHost(
   }
 
   // Reconcile closed issues even when a live run holds them or their only
-  // remaining marker is needs-input. Open claims keep pending questions.
+  // remaining marker is needs-input. Open claims keep pending questions, and
+  // so does an issue whose run comment holds a released stop's continuation.
   async function readClaims(
     name: string,
     platform: RepositoryPlatform,
@@ -639,17 +647,12 @@ export function createHost(
       runs.some((run) => run.repository === name && run.issue === number);
     const claims: Claim[] = [];
     const closed = await platform.readClosedClaims();
-    for (const number of closed) await platform.releaseClosed(number);
-    const markerDirectory = directory(name).claims;
-    const waiting = existsSync(markerDirectory)
-      ? readdirSync(markerDirectory)
-          .filter((file) => /^issue-\d+\.json$/.test(file))
-          .map((file) => Number(file.slice(6, -5)))
-          .filter((number) => readClaimMarker(name, number).inputResume)
-      : [];
+    for (const number of closed) await platform.transition(number, "closed");
     const numbers = [
       ...new Set([
-        ...waiting,
+        ...issues
+          .filter((issue) => issue.continuation)
+          .map((issue) => issue.number),
         ...closed,
         ...issues
           .filter((issue) =>
@@ -660,19 +663,19 @@ export function createHost(
     ];
     for (const number of numbers) {
       if (held(number)) continue;
-      const marker = readClaimMarker(name, number);
       const issue = issues.find((issue) => issue.number === number);
+      const inputResume = issue?.continuation;
       if (
-        marker.inputResume &&
+        inputResume &&
         issue &&
         !isStopped(issue.labels, labels) &&
         transition(labels, "release").remove.some((label) =>
           issue.labels.includes(label),
         )
       ) {
-        // A prior release may have failed after persisting its resume marker.
-        // No host run owns this claim; finish releasing it before pickup gates.
-        await platform.release(number);
+        // A prior release may have failed after recording its continuation.
+        // No host run owns this claim; finish releasing it before pickup.
+        await platform.transition(number, "release");
         const released = transition(labels, "release").remove;
         issue.labels = issue.labels.filter(
           (label) => !released.includes(label),
@@ -680,22 +683,19 @@ export function createHost(
       }
       const ending = await observeEnding(reads, issue, {
         issue: number,
-        since: marker.inputResume?.since,
-        target:
-          marker.inputResume?.review?.target ?? issue?.pullRequest?.target,
-        mergeRelaunchHeads: marker.mergeRelaunchHeads,
+        since: inputResume?.since,
+        target: inputResume?.review?.target ?? issue?.pullRequest?.target,
       });
       const claim: Claim = {
         issue: number,
-        ...(marker.inputResume && {
+        ...(inputResume && {
           inputResume: {
-            ...marker.inputResume,
+            ...inputResume,
             pullRequests: [
               ...new Map(
-                [
-                  ...marker.inputResume.pullRequests,
-                  ...ending.pullRequests,
-                ].map((pr) => [pr.number, pr]),
+                [...inputResume.pullRequests, ...ending.pullRequests].map(
+                  (pr) => [pr.number, pr],
+                ),
               ).values(),
             ],
           },
@@ -704,31 +704,7 @@ export function createHost(
       };
       claims.push(claim);
     }
-    // A label-only claim's notice lives as long as the observed claim. Keep
-    // it across label swaps, but not after the claim disappears.
-    const { claims: notices } = directory(name);
-    const retained = new Set(claims.map(({ issue }) => `issue-${issue}.json`));
-    if (existsSync(notices))
-      for (const file of readdirSync(notices))
-        if (/^issue-\d+\.json$/.test(file) && !retained.has(file))
-          rmSync(join(notices, file));
     return claims;
-  }
-
-  function claimNoticePath(repository: string, issue: number): string {
-    return join(directory(repository).claims, `issue-${issue}.json`);
-  }
-
-  function readClaimMarker(
-    repository: string,
-    issue: number,
-  ): {
-    awaitingMergeNotified?: true;
-    inputResume?: InputResume;
-    mergeRelaunchHeads?: string[];
-  } {
-    const path = claimNoticePath(repository, issue);
-    return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
   }
 
   function find(decision: { repository: string; issue: number }) {
@@ -739,9 +715,6 @@ export function createHost(
   }
 
   function forget(decision: { repository: string; issue: number }) {
-    rmSync(claimNoticePath(decision.repository, decision.issue), {
-      force: true,
-    });
     const run = find(decision);
     if (!run) return;
     runs.splice(runs.indexOf(run), 1);
@@ -867,7 +840,7 @@ export function createHost(
             : pausedEnding(recorded)
               ? recoveredPause(recorded)
               : recorded.pausing
-                ? { paused: recorded.pausing, commented: false }
+                ? { paused: recorded.pausing }
                 : {
                     timedOut: false,
                     pullRequest: "none",
@@ -894,7 +867,7 @@ export function createHost(
     for (const run of runs.filter((run) => !run.exited)) {
       run.exited = true;
       run.exitedAt = ports.now();
-      if (run.pausing) run.ended = { paused: run.pausing, commented: false };
+      if (run.pausing) run.ended = { paused: run.pausing };
       else {
         run.interrupted = true;
         run.ended = { interrupted: true };
@@ -964,8 +937,7 @@ export function createHost(
     const git = hostGit(repository);
     const base = (await git(paths.clone, ["rev-parse", "HEAD"])).trim();
     const previous = find(decision);
-    const marker = previous ?? readClaimMarker(repository, issue);
-    const mergeRelaunchHeads = [...(marker.mergeRelaunchHeads ?? [])];
+    const mergeRelaunchHeads = [...(previous?.mergeRelaunchHeads ?? [])];
     if (
       decision.mergeRelaunch &&
       !mergeRelaunchHeads.includes(mergeHead(decision.mergeRelaunch))
@@ -1050,8 +1022,6 @@ export function createHost(
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
       holdObserved: observeHolds(holdObserved, pass),
       ownedPullRequests: previous?.ownedPullRequests,
-      ...(decision.relaunch &&
-        marker.awaitingMergeNotified && { awaitingMergeNotified: true }),
       startedAt,
       pullRequestSince:
         previous?.pullRequestSince ??
@@ -1177,7 +1147,7 @@ export function createHost(
         // The raw log goes with the sandbox, so its end is read first. A stop
         // at the pause threshold decides how the run ended, whatever the log
         // says.
-        if (run.pausing) run.ended = { paused: run.pausing, commented: false };
+        if (run.pausing) run.ended = { paused: run.pausing };
         else {
           run.result = readRunResult(
             join(sandbox, "result", resultFile),
@@ -1200,7 +1170,6 @@ export function createHost(
                   at: run.exitedAt.toISOString(),
                   until: pauseDeadline(reset, run.exitedAt).toISOString(),
                 },
-                commented: false,
               };
             }
           } catch (error) {
@@ -1221,10 +1190,46 @@ export function createHost(
       })
       .finally(() => pending.delete(run.finished));
     pending.add(run.finished);
+    await tell(
+      pass,
+      pass.read?.issues.find((item) => item.number === issue),
+      {
+        phase: phaseOf(run),
+        facts: {
+          state: "running",
+          ...runFacts(run),
+          link: undefined,
+        },
+      },
+    );
+  }
+
+  // Writes the open issue's run comment and an action to tell once. A
+  // progress write is best-effort. A final write, a continuation or an
+  // action is required and rejects, so its decision retries on a later pass.
+  async function tell(
+    pass: Pass,
+    issue: Issue | undefined,
+    update: RunUpdate,
+    action?: Action,
+  ) {
+    if (!issue) return;
+    try {
+      await pass.platform!.comments.write(issue.number, update, action);
+    } catch (error) {
+      if (action || update.final || update.resume) throw error;
+      report(
+        `${pass.name}#${issue.number} run comment was not written; a later write retries it: ${error}`,
+      );
+    }
   }
 
   async function apply(decision: Decision, pass: Pass) {
     const platform = pass.platform!;
+    const issue = pass.read?.issues.find(
+      (issue) => issue.number === decision.issue,
+    );
+    const { labels } = pass.configuration!;
     switch (decision.kind) {
       case "close": {
         await platform.close(decision.issue, decision.tickets);
@@ -1235,11 +1240,16 @@ export function createHost(
         return;
       }
       case "complete":
+        await tell(pass, issue, {
+          phase: "merge",
+          facts: { state: "merged" },
+          final: true,
+        });
         await platform.complete(decision.issue);
         forget(decision);
         return;
       case "claim":
-        await platform.claim(decision.issue);
+        await platform.transition(decision.issue, "claim");
         return;
       case "launch":
         await launch(decision, pass);
@@ -1257,62 +1267,63 @@ export function createHost(
         run.controller.abort(new Error(decision.reason));
         return;
       }
-      case "fail":
-        await platform.fail(
-          decision.issue,
-          failureComment(
-            pass.configuration!,
-            decision.failure,
-            decision.log,
-            find(decision),
-            decision.unpushedChanges,
-          ),
+      case "fail": {
+        // A pull request that closed or merged fails the merge itself.
+        const run = find(decision);
+        const ended =
+          run?.ended && "pullRequest" in run.ended
+            ? run.ended
+            : pass.read?.claims.find((claim) => claim.issue === decision.issue);
+        await tell(
+          pass,
+          issue,
+          {
+            phase:
+              ended?.pullRequest === "closed" || ended?.pullRequest === "merged"
+                ? "merge"
+                : run
+                  ? phaseOf(run)
+                  : "implement",
+            facts: {
+              state: "failed",
+              reason: decision.failure,
+              unpushable: decision.unpushedChanges,
+            },
+            final: true,
+          },
+          {
+            key: "failed",
+            failed: labels.failed,
+            reason: decision.failure,
+            unpushable: decision.unpushedChanges
+              ?.map((path) => `\`${path}\``)
+              .join(", "),
+          },
         );
+        await platform.transition(decision.issue, "fail");
         forget(decision);
         return;
+      }
       case "keep": {
         // Awaiting merge takes no cap slot but retains its attempt and PR
-        // history until the claim settles, including across a restart.
+        // history until the claim settles, including across a restart. The
+        // next run kind takes a quiet keep's PR, so nothing awaits merge yet.
+        if (!decision.quiet)
+          await tell(pass, issue, {
+            phase: "merge",
+            facts: { state: "awaiting merge", reason: decision.reason },
+          });
         const run = find(decision);
-        if (run) {
-          // The next run kind takes the PR, so nothing awaits merge yet.
-          if (!run.awaitingMergeNotified && !decision.quiet) {
-            await platform.awaitingMerge(
-              decision.issue,
-              awaitingMergeComment(pass.configuration!, decision.reason, run),
-            );
-            run.awaitingMergeNotified = true;
-          }
-          record(run);
-        } else {
-          const path = claimNoticePath(decision.repository, decision.issue);
-          if (!existsSync(path)) {
-            await platform.awaitingMerge(
-              decision.issue,
-              awaitingMergeComment(pass.configuration!, decision.reason),
-            );
-            mkdirSync(directory(decision.repository).claims, {
-              recursive: true,
-            });
-            writeFileSync(
-              `${path}.partial`,
-              '{"awaitingMergeNotified":true}\n',
-            );
-            renameSync(`${path}.partial`, path);
-          }
-        }
+        if (run) record(run);
         return;
       }
       case "release": {
-        const issue = pass.read?.issues.find(
-          (issue) => issue.number === decision.issue,
-        );
-        const { labels } = pass.configuration!;
-        const waiting = issue && isStopped(issue.labels, labels);
+        const stop =
+          issue &&
+          stopLabels(labels).find((label) => issue.labels.includes(label));
         const previous = find(decision);
-        const marker = readClaimMarker(decision.repository, decision.issue);
-        if (waiting) {
-          const since = previous?.pullRequestSince ?? marker.inputResume?.since;
+        if (stop) {
+          const since = previous?.pullRequestSince ?? issue.continuation?.since;
           const observation = await platform.pullRequestObservation(
             decision.issue,
             since,
@@ -1331,6 +1342,7 @@ export function createHost(
             !ended.openPullRequest.draft
               ? ended.openPullRequest
               : undefined;
+          const gates = gateLabels(labels);
           const review = ready
             ? {
                 target: pullRequestIdentity(ready),
@@ -1339,62 +1351,75 @@ export function createHost(
                 }),
                 handBacks: previous!.handBacks ?? 0,
                 gated:
-                  gateLabels(labels).some((label) =>
-                    issue.labels.includes(label),
-                  ) ||
+                  gates.some((label) => issue.labels.includes(label)) ||
                   pass.gated === null ||
                   (pass.gated?.includes(ready.number) ?? false),
               }
             : previous
               ? undefined
-              : marker.inputResume?.review;
-          const path = claimNoticePath(decision.repository, decision.issue);
-          mkdirSync(directory(decision.repository).claims, { recursive: true });
-          writeFileSync(
-            `${path}.partial`,
-            JSON.stringify({
-              ...marker,
-              inputResume: {
-                ...(since && { since }),
-                pullRequests: observation.pullRequests,
-                ...(review && { review }),
-              },
-            }),
+              : issue.continuation?.review;
+          // A person must act on a gate, or on a stop in their state. A
+          // recorded continuation's stop was told when its run stopped.
+          const id = previous?.provenance?.id ?? "claim";
+          const asked = [labels.reporter, labels.grill, labels.owner].find(
+            (label) => label !== undefined && issue.labels.includes(label),
           );
-          renameSync(`${path}.partial`, path);
+          const gate = gates.filter((label) => issue.labels.includes(label));
+          const action: Action | undefined =
+            !previous && issue.continuation
+              ? undefined
+              : review?.gated
+                ? {
+                    key: `gate:${id}`,
+                    gate: (gate.length ? gate : gates).join(", "),
+                  }
+                : asked
+                  ? { key: `stop:${id}`, stopped: asked }
+                  : undefined;
+          // The run comment keeps the continuation until the work resumes. A
+          // stop with no run, continuation or PR has nothing to continue.
+          if (previous || issue.continuation || observation.pullRequests.length)
+            await tell(
+              pass,
+              issue,
+              {
+                phase: previous ? phaseOf(previous) : "implement",
+                facts: { state: "stopped", reason: `waits in \`${stop}\`` },
+                resume: {
+                  ...(since && { since }),
+                  pullRequests: observation.pullRequests,
+                  ...(review && { review }),
+                },
+              },
+              action,
+            );
         }
-        await platform.release(decision.issue);
-        if (waiting) {
-          // Keep the durable resume marker while retiring the attempt.
-          if (previous) {
-            runs.splice(runs.indexOf(previous), 1);
-            previous.settled = true;
-            record(previous);
-          }
-        } else forget(decision);
+        await platform.transition(decision.issue, "release");
+        if (!stop) forget(decision);
+        else if (previous) {
+          // Retire the attempt; its continuation is on the issue.
+          runs.splice(runs.indexOf(previous), 1);
+          previous.settled = true;
+          record(previous);
+        }
         return;
       }
       case "pause": {
         const run = find(decision);
-        const ended = run && pausedEnding(run);
-        if (!ended) return;
-        await platform.pause(
-          decision.issue,
-          pauseComment(
-            pass.configuration!,
-            decision.pause,
-            run,
-            configuration.usage.pauseThreshold,
-          ),
-        );
-        // Recorded as told, so neither a later pass nor a restart tells it
-        // again.
-        ended.commented = true;
-        record(run);
+        if (!run || !pausedEnding(run)) return;
+        await platform.transition(decision.issue, "pause");
+        await tell(pass, issue, {
+          phase: phaseOf(run),
+          facts: {
+            state: "paused",
+            reason: decision.pause.cause,
+            reset: decision.pause.reset,
+          },
+        });
         return;
       }
       case "unpause":
-        await platform.unpause(decision.issue);
+        await platform.transition(decision.issue, "unpause");
         return;
       case "skip":
         report(
@@ -1656,9 +1681,7 @@ export function prompt(
 }
 
 // How a run ended, when it paused.
-function pausedEnding(
-  run: Pick<Run, "ended">,
-): { paused: Pause; commented: boolean } | null {
+function pausedEnding(run: Pick<Run, "ended">): { paused: Pause } | null {
   return run.ended && "paused" in run.ended ? run.ended : null;
 }
 
@@ -1666,13 +1689,13 @@ function pausedEnding(
 // record from before they were recorded pauses at its exit, or, lacking that,
 // at its start, so its deadline counts from then and never from the restart.
 function recoveredPause(recorded: {
-  ended: { paused: Partial<Pause> & Pick<Pause, "reset">; commented: boolean };
+  ended: { paused: Partial<Pause> & Pick<Pause, "reset"> };
   exitedAt?: string | null;
   startedAt: string;
-}): { paused: Pause; commented: boolean } {
-  const { paused, commented } = recorded.ended;
+}): { paused: Pause } {
+  const { paused } = recorded.ended;
   if (typeof paused.at === "string" && typeof paused.until === "string")
-    return { paused: paused as Pause, commented };
+    return { paused: paused as Pause };
   const at = new Date(recorded.exitedAt ?? recorded.startedAt);
   return {
     paused: {
@@ -1681,63 +1704,30 @@ function recoveredPause(recorded: {
       at: at.toISOString(),
       until: pauseDeadline(paused.reset, at).toISOString(),
     },
-    commented,
   };
 }
 
-// A retained claim without a host run has no model or log to name.
-function awaitingMergeComment(
-  configuration: FactoryConfiguration,
-  reason?: string,
-  run?: HostRun,
-): string {
-  return renderComment("awaitingMerge", configuration.comments?.awaitingMerge, {
-    provider: run?.provider,
-    model: run?.model,
-    effort: run?.effort,
-    attempt: run?.attempt,
-    log: run?.log,
-    reason,
-    label: configuration.labels.running,
-  });
+// The run comment's phase a run works in: a merge relaunch merges.
+function phaseOf(run: Pick<Run, "runKind" | "mergeRelaunch">): Phase {
+  return run.mergeRelaunch ? "merge" : (run.runKind ?? "implement");
 }
 
-// Each pause tells its issue once; it names no log output.
-function pauseComment(
-  configuration: FactoryConfiguration,
-  pause: Pause,
-  run: HostRun,
-  threshold: number | null,
-): string {
-  return renderComment("pause", configuration.comments?.pause, {
+// A run's facts on its phase's line; review rounds count its hand-backs.
+function runFacts(run: Run) {
+  return {
     provider: run.provider,
     model: run.model,
     effort: run.effort,
     attempt: run.attempt,
-    cause: pause.cause,
-    reset: pause.reset,
-    threshold: pause.cause === "pause threshold" ? threshold : null,
-    label: configuration.labels.paused,
-  });
+    round:
+      run.runKind === "review" || run.handBacks !== undefined
+        ? (run.handBacks ?? 0) + 1
+        : undefined,
+  };
 }
 
-// A claim no run holds has no model or log to name.
-function failureComment(
-  configuration: FactoryConfiguration,
-  failure: string,
-  log: string | null,
-  run?: HostRun,
-  unpushed?: string[],
-): string {
-  return renderComment("failure", configuration.comments?.failure, {
-    failure,
-    provider: run?.provider,
-    model: run?.model,
-    effort: run?.effort,
-    attempt: run?.attempt,
-    log,
-    unpushable: unpushed,
-    unpushableCount: unpushed?.length || undefined,
-    label: configuration.labels.failed,
-  });
-}
+const outcomeStates = {
+  done: "done",
+  stop: "stopped",
+  failed: "failed",
+} as const;

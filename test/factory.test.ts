@@ -1710,8 +1710,10 @@ const limit = {
   at: "2026-10-09T11:30:00.000Z",
   until: "2026-10-09T12:50:00.000Z",
 } as const;
-const pausing = { paused: limit, commented: false };
-const pausedRun = { paused: limit, commented: true };
+// A paused run whose issue still carries the running label, and one whose
+// paused label replaced it.
+const pausing = { paused: limit };
+const pausedRun = { paused: limit };
 const pausedLabels = ["ready-for-agent", "factory:paused"];
 
 test("adding the skip label leaves running work, outcomes, retries and resumes unchanged", () => {
@@ -1723,7 +1725,7 @@ test("adding the skip label leaves running work, outcomes, retries and resumes u
     pausing,
     pausedRun,
   ]) {
-    const labels = ended && "paused" in ended ? pausedLabels : claimed;
+    const labels = ended === pausedRun ? pausedLabels : claimed;
     const current = repository(widgets, [issue(4, [...labels])]);
     current.configuration.labels.skip = "manual-delivery";
     const input = {
@@ -1755,7 +1757,7 @@ test("a run that ended on its provider's usage limit pauses its issue once, with
       runs: [
         run(4, { attempt: 2, retry, ended: pausing }),
         run(5, {
-          ended: { paused: { ...limit, reset: null }, commented: false },
+          ended: { paused: { ...limit, reset: null } },
         }),
       ],
       settings: { caps: { "claude-code": 1 } },
@@ -1795,7 +1797,7 @@ test("a paused run resumes as the same attempt only once its provider's usage re
           effort: "low",
           attempt: 2,
           retry,
-          ended: { paused: { ...limit, reset }, commented: true },
+          ended: { paused: { ...limit, reset } },
         }),
       ],
       usage,
@@ -1958,10 +1960,13 @@ test("a paused run continues whatever would now hold its pickup", () => {
 });
 
 test("a paused run releases its claim once its issue closed or needs input, told or not", () => {
-  for (const ended of [pausing, pausedRun])
+  for (const [ended, state] of [
+    [pausing, "factory:running"],
+    [pausedRun, "factory:paused"],
+  ] as const)
     assert.deepEqual(
       decide({
-        issues: [issue(5, [...pausedLabels, "factory:needs-input"])],
+        issues: [issue(5, ["ready-for-agent", state, "factory:needs-input"])],
         runs: [run(4, { ended }), run(5, { ended })],
         usage: { "claude-code": 10 },
       }).filter(({ kind }) => kind !== "skip"),
@@ -2325,7 +2330,7 @@ test("at 89, 90, 94 and 95 percent, new claims stop at the drain threshold and r
   const resumed = (used: number) =>
     decide({
       issues: [issue(4, pausedLabels)],
-      runs: [run(4, { ended: { paused: thresholdPause, commented: true } })],
+      runs: [run(4, { ended: { paused: thresholdPause } })],
       usage: { "claude-code": used },
       settings: thresholds,
     });
@@ -2550,7 +2555,7 @@ test("without a drain threshold the pause threshold alone stops claims and runs,
   );
   const resumed = decide({
     issues: [issue(4, pausedLabels)],
-    runs: [run(4, { ended: { paused: thresholdPause, commented: true } })],
+    runs: [run(4, { ended: { paused: thresholdPause } })],
     usage: { "claude-code": 94 },
     settings: pauseOnly,
   });
@@ -2680,7 +2685,6 @@ test("an owner hold holds its provider's new claims and retries through low and 
         run(5, {
           ended: {
             paused: { ...thresholdPause, until: "2026-10-09T11:45:00.000Z" },
-            commented: true,
           },
         }),
       ],
@@ -2704,7 +2708,7 @@ test("an owner hold holds its provider's new claims and retries through low and 
 test("an owner hold never releases a paused run its usage still holds", () => {
   const decisions = decide({
     issues: [issue(5, pausedLabels)],
-    runs: [run(5, { ended: { paused: thresholdPause, commented: true } })],
+    runs: [run(5, { ended: { paused: thresholdPause } })],
     usage: { "claude-code": 92 },
     owners: { "claude-code": { hold: ownerHold, reserve: null } },
     settings: thresholds,
@@ -2722,7 +2726,7 @@ test("a reserve raise lifts the drain threshold for new claims only, up to the r
       issues: [issue(4, claimed), issue(5, pausedLabels), issue(6)],
       runs: [
         run(4, { ended: none }),
-        run(5, { ended: { paused: thresholdPause, commented: true } }),
+        run(5, { ended: { paused: thresholdPause } }),
       ],
       usage: { "claude-code": used },
       owners,
@@ -2842,7 +2846,6 @@ test("merge delivery respects skip and failed labels and unresolved models after
                 at: now,
                 until: now,
               },
-              commented: true,
             }
           : ending === "interrupted"
             ? { interrupted: true }
@@ -3087,7 +3090,6 @@ test("interrupted, paused and merge relaunches hold a recorded model removed fro
         at: now,
         until: now,
       },
-      commented: true,
     },
     {
       timedOut: false,
@@ -3100,9 +3102,11 @@ test("interrupted, paused and merge relaunches hold a recorded model removed fro
       },
     },
   ]) {
+    // A paused run's issue was told once its paused label replaced running.
+    const state = "paused" in ended ? "factory:paused" : "factory:running";
     const decisions = decideFactory(
       snapshot({
-        issues: [issue(1, ["ready-for-agent", "factory:running"])],
+        issues: [issue(1, ["ready-for-agent", state])],
         runs: [run(1, { ended })],
         usage: { "claude-code": 0 },
         settings: { defaultModel: "claude-opus-5-5" },
@@ -3137,7 +3141,6 @@ test("every relaunch holds an unlisted current label even when its recorded mode
         at: now,
         until: now,
       },
-      commented: true,
     },
     {
       timedOut: false,
@@ -3155,7 +3158,7 @@ test("every relaunch holds an unlisted current label even when its recorded mode
         issues: [
           issue(1, [
             "ready-for-agent",
-            "factory:running",
+            "paused" in ended ? "factory:paused" : "factory:running",
             "model:codex/gpt-unlisted",
           ]),
         ],
@@ -3182,7 +3185,6 @@ test("a pending pause notice is delivered before the removed-model relaunch hold
   );
   const paused = {
     paused: { cause: "usage limit" as const, reset: null, at: now, until: now },
-    commented: false,
   };
   const input = snapshot({
     issues: [issue(1, ["ready-for-agent", "factory:running"])],
@@ -3192,7 +3194,11 @@ test("a pending pause notice is delivered before the removed-model relaunch hold
   assert.deepEqual(decideFactory(input, models), [
     { kind: "pause", ...at(1), pause: paused.paused },
   ]);
-  paused.commented = true;
+  // Told once the paused label replaces the running one.
+  input.repositories[0].issues[0].labels = [
+    "ready-for-agent",
+    "factory:paused",
+  ];
   const decisions = decideFactory(input, models);
   assert.deepEqual(launches(decisions), []);
   assert.ok(
@@ -3221,7 +3227,6 @@ test("relaunch model and configuration reasons remain independently actionable u
         at: now,
         until: now,
       },
-      commented: true,
     },
     {
       timedOut: false,
@@ -3234,7 +3239,8 @@ test("relaunch model and configuration reasons remain independently actionable u
       },
     },
   ]) {
-    const candidate = issue(1, ["factory:running", "model:gpt-unlisted"]);
+    const state = "paused" in ended ? "factory:paused" : "factory:running";
+    const candidate = issue(1, [state, "model:gpt-unlisted"]);
     const repo = repository(widgets, [candidate], {
       paused: "invalid configuration",
     });
@@ -3246,7 +3252,7 @@ test("relaunch model and configuration reasons remain independently actionable u
         )
         .sort();
     assert.deepEqual(held(), [holdKeys.model, holdKeys.configuration]);
-    candidate.labels = ["factory:running"];
+    candidate.labels = [state];
     assert.deepEqual(held(), [holdKeys.configuration]);
     assert.deepEqual(launches(decideFactory(input, models)), []);
   }
@@ -3346,7 +3352,6 @@ test("a release hold permits pickup, retries, interrupted and paused relaunches 
               at: "2026-10-08T00:00:00Z",
               until: "2026-10-08T01:00:00Z",
             },
-            commented: true,
           },
         }),
       ],
@@ -3415,7 +3420,6 @@ test("a factory hold stops pickup, retries, interrupted and paused relaunches, n
               at: "2026-10-08T00:00:00Z",
               until: "2026-10-08T01:00:00Z",
             },
-            commented: true,
           },
         }),
       ],
@@ -3645,11 +3649,11 @@ for (const ended of [
   { interrupted: true as const },
   {
     paused: { cause: "usage limit" as const, reset: null, at: now, until: now },
-    commented: true,
   },
 ])
   test(`a continuing merge excludes every owned PR, ending: ${"interrupted" in ended ? "interrupted" : "paused"}`, () => {
-    const repo = holdingRepository(widgets, [issue(4, claimed)], {
+    const labels = "paused" in ended ? pausedLabels : claimed;
+    const repo = holdingRepository(widgets, [issue(4, labels)], {
       factoryHold: [41],
     });
     const decisions = decide({
@@ -3685,12 +3689,15 @@ test("each continuation validates its model label once and reconciles independen
     { interrupted: true },
     {
       paused: { cause: "usage limit", reset: null, at: now, until: now },
-      commented: true,
     },
     { timedOut: false, pullRequest: "open", mergeCandidate },
   ];
   for (const ended of endings) {
-    const candidate = issue(4, ["ready-for-agent", "model:unavailable"]);
+    const candidate = issue(4, [
+      "ready-for-agent",
+      "model:unavailable",
+      ...(ended && "paused" in ended ? ["factory:paused"] : []),
+    ]);
     const repo = holdingRepository(widgets, [candidate], {
       paused: "invalid configuration",
       factoryHold: [50],

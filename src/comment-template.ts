@@ -1,49 +1,45 @@
 // The factory's deterministic issue-comment language and its own wording.
+const phaseNames = [
+  "check",
+  "state",
+  "reason",
+  "reset",
+  "provider",
+  "model",
+  "effort",
+  "attempt",
+  "round",
+  "link",
+  "unpushable",
+] as const;
 const names = {
-  pause: [
-    "provider",
-    "model",
-    "effort",
-    "attempt",
-    "cause",
-    "reset",
-    "threshold",
-    "label",
+  run: [
+    "status",
+    "triage",
+    "implement",
+    "review",
+    "merge",
+    ...phaseNames,
+    "result",
   ],
-  failure: [
-    "failure",
-    "provider",
-    "model",
-    "effort",
-    "attempt",
-    "log",
-    "unpushable",
-    "unpushableCount",
-    "label",
-  ],
+  action: ["failed", "stopped", "gate", "reason", "unpushable", "link"],
   close: ["tickets"],
-  awaitingMerge: [
-    "provider",
-    "model",
-    "effort",
-    "attempt",
-    "log",
-    "reason",
-    "label",
-  ],
 } as const;
 
 type Comment = keyof typeof names;
-type Values = Record<string, string | number | string[] | null | undefined>;
+export type Values = {
+  [name: string]: string | number | string[] | Values | null | undefined;
+};
 type Part = string | { name: string; section?: Part[] };
 
+// One checklist line of the run comment, for the phase `name`.
+const phase = (name: string, title: string) =>
+  `{#${name}}- [{check}] ${title}{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · \`{provider}/{model}@{effort}\`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: \`{unpushable}\`\n{/unpushable}{/${name}}`;
+
 const defaults = {
-  awaitingMerge:
-    "The factory agent run has ended, but its pull request remains open.{#reason} It ended: {reason}.{/reason}\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}The factory retains this issue's claim without a live agent. A behind, factory-owned pull request targeting the default branch may get one merge relaunch per PR head, through the repository's installed babysit. Each advance of the default branch can earn another relaunch for a new head; an unchanged consumed head stays awaiting merge. Otherwise the owner must resolve the pull request by merging or closing it; the factory will continue observing the outcome under its existing rules. Needs-input and failed issues do not get merge relaunches. Removing the configured needs-input label after answering the question resumes the same work and PR on a current base once pickup gates allow it. Removing `{label}` alone does not authorize a relaunch. A merged pull request closes the issue only with an actual closing reference; a branch-only merge still needs an owner decision.",
-  pause:
-    "The factory paused this run: {provider} {cause}{#reset}, resets {reset}{/reset}.\n\n- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n\nThe factory resumes the run by itself and removes `{label}` when it does; nobody needs to act.",
-  failure:
-    "The factory run failed: {failure}.\n\n{#provider}- Model: `{provider}/{model}@{effort}`, attempt {attempt}\n{/provider}{#log}- Log: `{log}` on the factory host\n{/log}{#provider}\n{/provider}{#unpushable}- Unpushable: `{unpushable}`\n{/unpushable}{#unpushableCount}\nA person with permission to push these paths must deliver the change.\n\n{/unpushableCount}Remove `{label}` to let the factory pick this issue up again.",
+  run: `**Factory run: {status}**\n\n${phase("triage", "Triage")}${phase("implement", "Implement")}${phase("review", "Review")}${phase("merge", "Merge")}{#result}\n<details>\n<summary>Latest run result</summary>\n\n{result}\n\n</details>\n{/result}`,
+  action:
+    "{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link}).",
   close:
     "All sub-issues are closed. Closing this parent.\n{#tickets}\n- {tickets}{/tickets}",
 };
@@ -97,7 +93,11 @@ export function renderComment(
         if (typeof part === "string") return part;
         const value = facts[part.name];
         if (!part.section)
-          return Array.isArray(value) ? value.join("\n") : String(value ?? "");
+          return Array.isArray(value)
+            ? value.join("\n")
+            : typeof value === "object"
+              ? ""
+              : String(value ?? "");
         if (value === undefined || value === null || value === "") return "";
         return Array.isArray(value)
           ? value
@@ -105,7 +105,11 @@ export function renderComment(
                 render(part.section!, { ...facts, [part.name]: item }),
               )
               .join("")
-          : render(part.section, facts);
+          : // An object's section renders once, with its facts in scope.
+            render(
+              part.section,
+              typeof value === "object" ? { ...facts, ...value } : facts,
+            );
       })
       .join("");
   }

@@ -5,17 +5,18 @@
 import {
   PlatformError,
   type Account,
+  type Comment,
   type ConnectionWithLinkAdditions,
   type IssueReference,
   type PullRequest,
 } from "@lutzseverino/postern";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { reconcileHolds, type HoldKey } from "./hold-comments.ts";
-import { renderComment } from "./comment-template.ts";
 import { postResultComment, type ResultPost } from "./run-result.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
-import { reference, type Actor, type ReadinessHold } from "./readiness.ts";
+import type { Actor, ReadinessHold } from "./readiness.ts";
+import { issueComments, passContinuation } from "./run-comment.ts";
 import type { PullRequestState } from "./run-ending.ts";
 import {
   contractResultHold,
@@ -26,6 +27,7 @@ import {
   claimLabels,
   configured,
   gateLabels,
+  isStopped,
   provisioned,
   transition as labelTransition,
   type Transition,
@@ -74,6 +76,7 @@ export function repositoryPlatform(
   const { labels } = configuration;
   const { issueTracker, pullRequests, access } = connection;
   const path = connection.repository.path;
+  const comments = issueComments(issueTracker, configuration);
   // An issue as the decision core identifies it: its number in this
   // repository, or `<path>#<n>` in another.
   const id = (linked: IssueReference): IssueId =>
@@ -133,11 +136,16 @@ export function repositoryPlatform(
 
   // The validator's decision on a ready issue, checked against the issue's
   // comments and latest comment deletion, read here, and its other facts, and
-  // whether the factory's triage result backs the brief it approved.
+  // whether the factory's triage result backs the brief it approved, with the
+  // comments when they could be read.
   async function readContractResult(
     number: number,
     facts: Omit<ContractFacts, "comments" | "latestDeletion">,
-  ): Promise<{ hold: ReadinessHold | null; triage: boolean }> {
+  ): Promise<{
+    hold: ReadinessHold | null;
+    triage: boolean;
+    comments?: Comment[];
+  }> {
     try {
       const comments = await issueTracker.comments(number);
       const latestDeletion =
@@ -148,6 +156,7 @@ export function repositoryPlatform(
       return {
         hold: contractResultHold(all, configuration),
         triage: triageBacked(all, configuration),
+        comments,
       };
     } catch (error) {
       if (!(error instanceof PlatformError)) throw error;
@@ -160,6 +169,24 @@ export function repositoryPlatform(
         triage: false,
       };
     }
+  }
+
+  // A released stop's continuation, for a stopped work item whose comments
+  // no other read needed. Unreadable comments find none this pass, so its
+  // claim waits rather than replacing it.
+  async function readContinuation(
+    number: number,
+    labels: string[],
+    comments?: Comment[],
+  ): Promise<{ continuation?: InputResume }> {
+    if (!comments && isStopped(labels, configuration.labels))
+      try {
+        comments = await issueTracker.comments(number);
+      } catch (error) {
+        if (!(error instanceof PlatformError)) throw error;
+      }
+    const continuation = comments && passContinuation(comments);
+    return continuation ? { continuation } : {};
   }
 
   // Whether an open PR is still a draft. Postern's neutral PR port does not
@@ -490,10 +517,12 @@ export function repositoryPlatform(
           )
             throw invalid();
           const pr = await pullRequests.pullRequest(node.number);
+          const prLabels = node.labels.nodes.map((label) => label.name);
           items.push({
             number: pr.number,
             createdAt: pr.createdAt,
-            labels: node.labels.nodes.map((label) => label.name),
+            labels: prLabels,
+            ...(await readContinuation(pr.number, prLabels)),
             author: await actor(pr.author),
             pullRequest: {
               target: {
@@ -587,6 +616,11 @@ export function repositoryPlatform(
             authorReply,
           }),
           labels: issue.labels,
+          ...(await readContinuation(
+            issue.number,
+            issue.labels,
+            contract?.comments ?? (reporter ? replies : undefined),
+          )),
           ready: ready
             ? {
                 at: ready.time,
@@ -706,15 +740,10 @@ export function repositoryPlatform(
       return [...numbers].sort((a, b) => a - b);
     },
 
-    claim: (issue: number) => transition(issue, "claim"),
-
-    // A claim ends without whichever of its running and paused labels it
-    // carries.
-    release: (issue: number) => transition(issue, "release"),
-
-    // A closed issue no longer needs an owner's answer. Keep this separate
-    // from release, which also settles open issues with pending questions.
-    releaseClosed: (issue: number) => transition(issue, "closed"),
+    // The factory's state label writes. A claim ends without whichever of
+    // its running and paused labels it carries, and a closed issue also
+    // without a pending question's.
+    transition,
 
     async complete(issue: number) {
       // Clear failure before closure: closed-claim reconciliation can finish
@@ -724,43 +753,26 @@ export function repositoryPlatform(
       await transition(issue, "closed");
     },
 
-    async fail(issue: number, comment: string) {
-      await transition(issue, "fail");
-      await issueTracker.createComment(issue, comment);
-    },
-
     reconcileHolds: (
       issue: number,
       holds: { key: HoldKey; reason: string }[],
     ) => reconcileHolds(issueTracker, issue, holds),
 
+    // The run, action and parent-close comments' one writer.
+    comments,
+
     // A run result's comment, then its labels, so readiness a triage result
-    // applies finds its brief.
-    async postResult(issue: number, post: ResultPost) {
-      await postResultComment(issueTracker, issue, post);
+    // applies finds its brief. Resolves the comment's link.
+    async postResult(issue: number, post: ResultPost): Promise<string> {
+      const link = await postResultComment(issueTracker, issue, post);
       if (post.add.length) await issueTracker.addLabels(issue, post.add);
       for (const label of post.remove) await remove(issue, label);
+      return link;
     },
-
-    async awaitingMerge(issue: number, comment: string) {
-      await issueTracker.createComment(issue, comment);
-    },
-
-    async pause(issue: number, comment: string) {
-      await transition(issue, "pause");
-      await issueTracker.createComment(issue, comment);
-    },
-
-    unpause: (issue: number) => transition(issue, "unpause"),
 
     // The platform's default close reason, completed on GitHub.
     async close(issue: number, tickets: IssueId[]) {
-      await issueTracker.createComment(
-        issue,
-        renderComment("close", configuration.comments?.close, {
-          tickets: tickets.map(reference),
-        }),
-      );
+      await comments.close(issue, tickets);
       await issueTracker.closeIssue(issue);
     },
   };

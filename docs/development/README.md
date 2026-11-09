@@ -136,7 +136,9 @@ identity. Host tests cover trigger consumption and finding verification across
 restarts, plus independent draft PR review and explicit-target recovery. `test/run-ending.test.ts` drives the run-ending
 module's observation and outcome table for ended runs and orphaned claims, and
 `test/run-result.test.ts` the run-result interface, its containment and its
-frame. `test/label-roles.test.ts`
+frame. `test/run-comment.test.ts` drives the one writer of the run, action and
+close comments over a fake tracker: passes, final-write retries, actions told
+once and continuations. `test/label-roles.test.ts`
 checks that every label consumer derives its roles from `src/label-roles.ts`,
 and `test/model-policy.test.ts` reads repository model policies. The host
 configuration's tests read the fixture files in
@@ -145,7 +147,7 @@ the fixtures in `test/fixtures/factory-configuration/`; run it alone with
 `node --test test/factory-configuration.test.ts`. The host tests also cover
 repository-specific labels and prompts, configuration edits on the default
 branch, run settling while configuration or the Dockerfile is missing, and
-paused runs: their label writes, single comment, recovery and resume,
+paused runs: their label writes, run comment, recovery and resume,
 including runs stopped at the pause threshold and their kill and exit races.
 They also replay the public `events.jsonl` stream as an external consumer,
 cover provider status with an empty frontier, and inject filesystem failures

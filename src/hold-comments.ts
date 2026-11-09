@@ -1,6 +1,6 @@
 // The hosting platform's comments are the durable index for actionable holds.
 // Cleared and recurring reasons reuse the same comment, including after restart.
-import type { IssueTracker } from "@lutzseverino/postern";
+import type { Comment, IssueTracker } from "@lutzseverino/postern";
 
 export const holdKeys = {
   model: "model-label",
@@ -32,12 +32,25 @@ export async function reconcileHolds(
     if (!match) continue;
     const key = match[1];
     const reason = pending.get(key);
-    const body = holdComment(key, reason);
-    if (body !== comment.body) await tracker.updateComment(comment.id, body);
+    await upsert(tracker, issue, comment, holdComment(key, reason));
     pending.delete(key);
   }
   for (const [key, reason] of pending)
-    await tracker.createComment(issue, holdComment(key, reason));
+    await upsert(tracker, issue, undefined, holdComment(key, reason));
+}
+
+// A marker-keyed comment's write: the comment its marker found, edited only
+// when its body changed, or a new one.
+export async function upsert(
+  tracker: IssueTracker,
+  issue: number,
+  comment: Comment | undefined,
+  body: string,
+): Promise<Comment> {
+  if (!comment) return tracker.createComment(issue, body);
+  return comment.body === body
+    ? comment
+    : tracker.updateComment(comment.id, body);
 }
 
 function holdComment(key: string, reason?: string): string {
