@@ -1428,3 +1428,25 @@ test("trusted unowned draft PRs start review with and without linked issues, thr
     );
   }
 });
+
+test("removing review configuration makes its stale PR relaunch implement", () => {
+  const stale = run({
+    continuation: { runKind: "review" },
+    ended: {
+      timedOut: false,
+      pullRequest: "open",
+      openPullRequest: pr,
+      mergeCandidate: pr,
+    },
+  });
+  const launch = launchOf(
+    decide({
+      issues: [issue(4, claimed)],
+      runs: [stale],
+      kinds: { review: false },
+    }),
+  )!;
+  assert.ok(launch);
+  assert.equal(launch.continuation.runKind, undefined);
+  assert.deepEqual(launch.continuation.mergeRelaunch, pr);
+});

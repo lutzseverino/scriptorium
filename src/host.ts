@@ -1026,7 +1026,9 @@ export function createHost(
       ...(decision.diversity && { diversity: decision.diversity }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
       holdObserved: observeHolds(holdObserved, pass),
-      ownedPullRequests: previous?.ownedPullRequests,
+      ownedPullRequests:
+        previous?.ownedPullRequests ??
+        continuation.inputResume?.pullRequests.map(({ number }) => number),
       startedAt,
       pullRequestSince:
         previous?.pullRequestSince ??

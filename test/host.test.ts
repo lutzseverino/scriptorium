@@ -9001,3 +9001,31 @@ for (const legacy of [false, true])
       run.launched[1].options.prompt,
     );
   });
+
+test("needs-input resume excludes every preserved owned PR from prompt hold facts", async (t) => {
+  const bare = remote(t, releaseHoldFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  const pr = publishedPR(bare);
+  issue.branchPullRequests.push(pr, { ...pr, number: 41 });
+  issue.labels.push("factory:needs-input");
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  issue.labels = ["ready-for-agent"];
+  run.github.releaseHolds["acme/widgets"] = [40, 41, 80];
+  await run.restart().tick();
+  assert.equal(run.launched.length, 2);
+  const prompt = run.launched[1].options.prompt!;
+  assert.match(prompt, /Needs-input resume: continue PR #40.*PR #41/);
+  assert.match(prompt, /release-hold: active: #80/);
+  assert.doesNotMatch(
+    prompt,
+    /release-hold: active: #40|release-hold: active: #41/,
+  );
+  assert.deepEqual(recordOf(run.state, 4, 1).ownedPullRequests, [40, 41]);
+});

@@ -771,6 +771,9 @@ function continuation(
         : state.kind === "resume"
           ? (resumed!.continuation.runKind ?? "implement")
           : "implement";
+  // The current configuration selects the kind; retained facts cannot override it.
+  const retained = { ...(run?.continuation ?? { attempt: 1 as const }) };
+  delete retained.runKind;
   const expanded = launchArguments(
     configuration,
     kind,
@@ -860,7 +863,7 @@ function continuation(
                 }),
               }
             : {
-                ...(run?.continuation ?? { attempt: 1 }),
+                ...retained,
                 relaunch: true,
                 ...((state.kind === "merge"
                   ? target
