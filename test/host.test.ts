@@ -998,7 +998,7 @@ function host(
       "claude-code": { cap: caps["claude-code"], credential: claudeToken },
       codex: { cap: caps.codex, credential: codexLogin },
     },
-    models: { default: "claude-sonnet-5-5", retry: "gpt-5.5" },
+    models: { effort: "high", default: "claude-sonnet-5-5", retry: "gpt-5.5" },
     timeLimitMinutes: 240,
     usage: {
       drainThreshold: 80,
@@ -1016,16 +1016,17 @@ function host(
     imageRetention: { obsoletePairs: 3, cacheMinimumAgeHours: 24 },
     ...configuration,
   };
+  const providerPorts = {
+    sandcastle,
+    fetch: () => {
+      throw new Error("the host reads usage through its port");
+    },
+    codexExecutable: "/nonexistent/codex",
+  };
   const registry = createRegistry(
     resolved.providers,
-    {
-      sandcastle,
-      fetch: () => {
-        throw new Error("the host reads usage through its port");
-      },
-      codexExecutable: "/nonexistent/codex",
-    },
-    resolved.models.allowed,
+    resolved.models,
+    providerPorts,
   );
   const builds: string[] = [];
   const reports: string[] = [];
@@ -1115,7 +1116,11 @@ function host(
     report: (line) => reports.push(line),
   };
   function process() {
-    const instance = createHost(resolved, registry, ports);
+    const instance = createHost(
+      resolved,
+      createRegistry(resolved.providers, resolved.models, providerPorts),
+      ports,
+    );
     instances.push(instance);
     return {
       ...instance,
@@ -1303,7 +1308,11 @@ test("a failed launch record leaves no sandbox or cap slot and its orphaned clai
     repositories: { "acme/widgets": [{ number: 4 }] },
     remotes: { "acme/widgets": remote(t, factoryFiles) },
     configuration: {
-      models: { default: "claude-sonnet-5-5", retry: "claude-sonnet-5-5" },
+      models: {
+        effort: "high",
+        default: "claude-sonnet-5-5",
+        retry: "claude-sonnet-5-5",
+      },
     },
     caps: { "claude-code": 1, codex: 1 },
   });
@@ -3093,7 +3102,11 @@ test("the configured skill, arguments and state labels drive first attempts, ret
       }),
     },
     configuration: {
-      models: { default: "claude-sonnet-5-5", retry: "claude-opus-5-5" },
+      models: {
+        effort: "high",
+        default: "claude-sonnet-5-5",
+        retry: "claude-opus-5-5",
+      },
     },
   });
   await run.tick();
@@ -6788,6 +6801,7 @@ for (const labels of [
       remotes: { [name]: remote(t, factoryFiles) },
       configuration: {
         models: {
+          effort: "high",
           default: "claude-sonnet-5-5",
           retry: "gpt-5.5",
           allowed: ["claude-sonnet-5-5", "gpt-5.5"],
@@ -8528,6 +8542,57 @@ test("historical PR ownership survives another run replacing the issue's current
 // The token a sandbox's GitHub CLI configuration holds.
 const sandboxTokenOf = (hosts: string) =>
   hosts.match(/^ {4}oauth_token: "(.*)"$/m)![1];
+
+test("triage receives host model facts through the shared launch boundary, including a restart", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: [], author: "owner" }],
+    },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+    configuration: {
+      models: {
+        effort: "medium",
+        default: "claude-sonnet-5-5",
+        retry: "gpt-5.5",
+        metadata: {
+          "claude-sonnet-5-5": { guidance: "Routine triage", effort: "low" },
+        },
+      },
+    },
+  });
+  await run.tick();
+  const modelFacts = (index: number) => {
+    const line = run.launched[index].options
+      .prompt!.split("\n")
+      .find((line) => line.startsWith("Host models: "));
+    assert.ok(line, "the host supplies model facts to triage");
+    return JSON.parse(line.slice("Host models: ".length));
+  };
+  const initial = modelFacts(0);
+  assert.deepEqual(initial.defaults.triage, {
+    provider: "claude-code",
+    model: "claude-sonnet-5-5",
+    effort: "low",
+  });
+  assert.equal(initial.catalog[0].guidance, "Routine triage");
+  assert.equal(initial.catalog[1].effectiveEffort, "medium");
+  assert.equal(recordOf(run.state, 4, 1).effort, "low");
+  run.configuration.models.effort = "xhigh";
+  run.configuration.models.metadata = {
+    "claude-sonnet-5-5": {
+      guidance: "Revised triage guidance",
+      effort: "high",
+    },
+  };
+  run.interrupt();
+  await run.restart().tick();
+  assert.equal(run.launched.length, 2);
+  const resumed = modelFacts(1);
+  assert.equal(resumed.effort, "xhigh");
+  assert.equal(resumed.catalog[0].guidance, "Revised triage guidance");
+  assert.equal(resumed.catalog[0].effectiveEffort, "high");
+  assert.equal(recordOf(run.state, 4, 1).effort, "low");
+});
 
 test("concurrent triage, implement and review runs in one repository each keep their own kind's token through refresh and host reads", async (t) => {
   const bare = remote(t, kindsFiles);

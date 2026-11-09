@@ -25,7 +25,6 @@ export function claudeCodeAdapter(
     name: "claude-code",
     credential,
     efforts,
-    defaultEffort: "high",
     vendorPrefixes: ["claude-"],
     renderInvocation: (skill, args) => `/${skill}${args ? ` ${args}` : ""}`,
     async launch(request: LaunchRequest) {

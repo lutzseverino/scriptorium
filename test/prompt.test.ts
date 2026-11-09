@@ -45,6 +45,34 @@ test("prompt renders identical explicit facts without reading a retry log or int
   );
 });
 
+test("prompt transmits host model facts unchanged across triage continuations", () => {
+  const models = {
+    effort: "medium",
+    defaults: {
+      triage: { provider: "codex", model: "gpt-work", effort: "low" },
+    },
+    catalog: [
+      {
+        identity: "codex/gpt-work",
+        provider: "codex",
+        model: "gpt-work",
+        guidance: "Routine work",
+        effort: "low",
+        effectiveEffort: "low",
+      },
+    ],
+  };
+  for (const continuation of [
+    { attempt: 1, runKind: "triage" as const },
+    { attempt: 1, runKind: "triage" as const, relaunch: true },
+  ] satisfies Continuation[]) {
+    const rendered = prompt(continuation, { ...facts, models });
+    assert.ok(rendered.includes(`Host models: ${JSON.stringify(models)}`));
+    assert.equal(rendered, prompt(continuation, { ...facts, models }));
+    assert.doesNotMatch(rendered, /choose.*model|cheaper|best.*fit/);
+  }
+});
+
 test("prompt renders shared hold results including every owned PR exclusion and failed reads", () => {
   for (const [numbers, expected] of [
     [[40, 41], null],

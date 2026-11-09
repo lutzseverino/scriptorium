@@ -29,6 +29,7 @@ const registry = createRegistry(
     "claude-code": { credential: "/etc/factory/claude-token" },
     codex: { credential: "/etc/factory/codex-auth.json" },
   },
+  { effort: "high" },
   fakePorts().ports,
 );
 
@@ -3082,8 +3083,11 @@ test("unlisted labels hold pickup and retry without a fallback, and listed label
       "claude-code": { credential: "/unused" },
       codex: { credential: "/unused" },
     },
+    {
+      effort: "high",
+      allowed: ["claude-sonnet-5-5", "claude-opus-5-5", "gpt-listed"],
+    },
     fakePorts().ports,
-    ["claude-sonnet-5-5", "claude-opus-5-5", "gpt-listed"],
   );
   for (const runs of [
     [],
@@ -3114,8 +3118,8 @@ test("unlisted labels hold pickup and retry without a fallback, and listed label
 test("interrupted, paused and merge relaunches hold a recorded model removed from the allowed list", () => {
   const models = createRegistry(
     { "claude-code": { credential: "/unused" } },
+    { effort: "high", allowed: ["claude-opus-5-5"] },
     fakePorts().ports,
-    ["claude-opus-5-5"],
   );
   for (const ended of [
     { interrupted: true as const },
@@ -3165,8 +3169,8 @@ test("every relaunch holds an unlisted current label even when its recorded mode
       "claude-code": { credential: "/unused" },
       codex: { credential: "/unused" },
     },
+    { effort: "high", allowed: ["claude-sonnet-5-5"] },
     fakePorts().ports,
-    ["claude-sonnet-5-5"],
   );
   for (const ended of [
     { interrupted: true as const },
@@ -3216,8 +3220,8 @@ test("every relaunch holds an unlisted current label even when its recorded mode
 test("a pending pause notice is delivered before the removed-model relaunch hold", () => {
   const models = createRegistry(
     { "claude-code": { credential: "/unused" } },
+    { effort: "high", allowed: ["claude-opus-5-5"] },
     fakePorts().ports,
-    ["claude-opus-5-5"],
   );
   const paused = {
     paused: { cause: "usage limit" as const, reset: null, at: now, until: now },
@@ -3251,8 +3255,8 @@ test("relaunch model and configuration reasons remain independently actionable u
       "claude-code": { credential: "/unused" },
       codex: { credential: "/unused" },
     },
+    { effort: "high", allowed: ["claude-sonnet-5-5"] },
     fakePorts().ports,
-    ["claude-sonnet-5-5"],
   );
   for (const ended of [
     { interrupted: true as const },
@@ -3300,8 +3304,8 @@ test("pending automatic and orphan retries retain all model and configuration ho
       "claude-code": { credential: "/unused" },
       codex: { credential: "/unused" },
     },
+    { effort: "high", allowed: ["claude-sonnet-5-5", "claude-opus-5-5"] },
     fakePorts().ports,
-    ["claude-sonnet-5-5", "claude-opus-5-5"],
   );
   for (const orphan of [false, true]) {
     const candidate = issue(1, [

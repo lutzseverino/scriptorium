@@ -9,7 +9,7 @@ import { providerStatus, type ProviderStatus } from "./events.ts";
 import { fresh, usageReading, usageHold, usageHoldAfter } from "./usage.ts";
 import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
 import type { OwnerControl } from "./factory.ts";
-import { createRegistry } from "./providers.ts";
+import { createRegistry, type ModelFacts } from "./providers.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 
 export const statusUsage =
@@ -54,6 +54,7 @@ type BudgetProvider = Omit<
 export type LaunchBudget = {
   version: 1;
   observedAt: string;
+  models: ModelFacts;
   providers: BudgetProvider[];
 };
 
@@ -96,7 +97,9 @@ export async function status(
   }
   const live = args.includes("--live-usage");
   const registry =
-    live && !ports.readUsage ? createRegistry(configuration.providers) : null;
+    live && !ports.readUsage
+      ? createRegistry(configuration.providers, configuration.models)
+      : null;
   const budget = await readBudget(configuration, {
     now: ports.now,
     ...(live && {
@@ -175,6 +178,8 @@ export async function readBudget(
   return {
     version: 1,
     observedAt,
+    models: createRegistry(configuration.providers, configuration.models)
+      .modelFacts,
     providers: await Promise.all(
       Object.entries(configuration.providers).map(
         async ([provider, { cap }]): Promise<BudgetProvider> => {
@@ -495,6 +500,7 @@ export function formatStatus(budget: LaunchBudget): string {
     entry === null ? "unavailable" : JSON.stringify(entry);
   return [
     `Observed ${budget.observedAt}; not a launch grant or reservation.`,
+    `models=${JSON.stringify(budget.models)}`,
     ...budget.providers.flatMap((provider) => [
       `${provider.provider}: cap=${provider.cap} running=${value(provider.running)} free=${value(provider.free)} paused=${value(provider.paused)} retained=${value(provider.retained)}`,
       ...[

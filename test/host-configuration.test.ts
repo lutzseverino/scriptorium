@@ -38,6 +38,86 @@ function read(path: string) {
   return { configuration, warnings };
 }
 
+test("host effort is required rather than inferred from the adapter", (t) => {
+  const path = join(directory(t), "host.json");
+  const config = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  delete config.models.effort;
+  writeFileSync(path, JSON.stringify(config));
+  assert.match(refused(path).join("\n"), /models\.effort: is missing/);
+});
+
+test("model metadata stays within capabilities and diagnoses its fields", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const [models, problem] of [
+    [{ effort: "max" }, /models\.effort.*codex.*effort "max"/],
+    [{ effort: "invalid" }, /models\.effort.*claude-code.*effort "invalid"/],
+    [{ effort: "" }, /models\.effort: is not a non-empty string/],
+    [
+      { metadata: { "gpt-work": { effort: "max" } } },
+      /models\.metadata\.gpt-work\.effort:.*codex/,
+    ],
+    [
+      { metadata: { "claude-work": { effort: "invalid" } } },
+      /models\.metadata\.claude-work\.effort:.*claude-code/,
+    ],
+    [
+      { metadata: { "gpt-work": { guidance: " " } } },
+      /models\.metadata\.gpt-work\.guidance: is not a non-empty string/,
+    ],
+    [
+      { metadata: { "gpt-work": {} } },
+      /models\.metadata\.gpt-work: needs guidance/,
+    ],
+    [
+      { metadata: { "missing/work": { guidance: "Routine work" } } },
+      /models\.metadata\.missing\/work: provider missing is not configured/,
+    ],
+    [
+      {
+        allowed: ["claude-sonnet-5-5", "claude-opus-5-5"],
+        metadata: { "gpt-work": { guidance: "Routine work" } },
+      },
+      /models\.metadata\.gpt-work: model codex\/gpt-work is not in models.allowed/,
+    ],
+    [
+      {
+        metadata: {
+          "gpt-work": { effort: "low" },
+          "codex/gpt-work": { effort: "high" },
+        },
+      },
+      /models\.metadata\.codex\/gpt-work: conflicts.*codex\/gpt-work/,
+    ],
+    [
+      { metadata: { "gpt-work": { cap: 4, guidance: "Routine work" } } },
+      /models\.metadata\.gpt-work\.cap: is not a host configuration field/,
+    ],
+    [
+      { metadata: { "gpt-work@low": { guidance: "Routine work" } } },
+      /models\.metadata\.gpt-work@low: must not specify an effort/,
+    ],
+  ] as const) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, models: { ...base.models, ...models } }),
+    );
+    assert.throws(() => read(path), problem);
+  }
+});
+
+test("a model override shadows host effort, while later selections still validate effective effort", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const models = {
+    ...base.models,
+    effort: "max",
+    metadata: { "gpt-work": { effort: "low" } },
+  };
+  writeFileSync(path, JSON.stringify({ ...base, models }));
+  assert.deepEqual(read(path).configuration.models, models);
+});
+
 test("a complete host configuration is read as written", () => {
   assert.deepEqual(read(fixture("valid")).warnings, []);
   assert.deepEqual(read(fixture("valid")).configuration, {
@@ -46,7 +126,11 @@ test("a complete host configuration is read as written", () => {
       "claude-code": { cap: 2, credential: "/etc/factory/claude-token" },
       codex: { cap: 1, credential: "/etc/factory/codex-auth.json" },
     },
-    models: { default: "claude-sonnet-5-5", retry: "claude-opus-5-5@xhigh" },
+    models: {
+      effort: "high",
+      default: "claude-sonnet-5-5",
+      retry: "claude-opus-5-5@xhigh",
+    },
     timeLimitMinutes: 240,
     usage: {
       drainThreshold: 90,

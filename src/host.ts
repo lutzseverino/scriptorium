@@ -1102,6 +1102,7 @@ export function createHost(
               ? (continuation.target ?? continuation.mergeRelaunch)?.number
               : undefined,
           filingRun: provenance.id,
+          models: kind === "triage" ? registry.modelFacts : undefined,
           credentialLimits:
             "Use only the supplied credentials; never discover or switch identities.",
         }),

@@ -17,6 +17,7 @@ import { holdKeys } from "../src/hold-comments.ts";
 import type { ModelPolicy } from "../src/model-policy.ts";
 import type { MergeRelaunch } from "../src/platform.ts";
 import type { Actor } from "../src/readiness.ts";
+import { createRegistry } from "../src/providers.ts";
 
 // Run kinds through the decision core, on a version 3 configuration and a
 // host whose capabilities are placeholder providers and models.
@@ -179,6 +180,7 @@ function decide({
   details = {},
   repositories,
   usage = {},
+  resolver = models,
 }: {
   issues?: Issue[];
   runs?: Run[];
@@ -189,6 +191,7 @@ function decide({
   details?: Partial<Repository>;
   repositories?: Repository[];
   usage?: Snapshot["usage"];
+  resolver?: Models;
 } = {}): Decision[] {
   const snapshot: Snapshot = {
     now,
@@ -218,7 +221,7 @@ function decide({
       ...settings,
     },
   };
-  return decideFactory(snapshot, models);
+  return decideFactory(snapshot, resolver);
 }
 
 const at = { repository: widgets, issue: 4 };
@@ -838,6 +841,7 @@ function stages(
   policy?: ModelPolicy,
   issueLabels: string[] = [],
   settings: Partial<Settings> = {},
+  resolver: Models = models,
 ) {
   const model = (decisions: Decision[]) => {
     const launch = launchOf(decisions);
@@ -851,6 +855,7 @@ function stages(
         issues: [issue(4, [labels.triage, ...issueLabels])],
         policy,
         settings,
+        resolver,
       }),
     ),
     initial: model(
@@ -858,6 +863,7 @@ function stages(
         issues: [issue(4, [labels.ready, ...issueLabels])],
         policy,
         settings,
+        resolver,
       }),
     ),
     retry: model(
@@ -866,6 +872,7 @@ function stages(
         runs: [failedFirst],
         policy,
         settings,
+        resolver,
       }),
     ),
     review: model(
@@ -874,10 +881,139 @@ function stages(
         runs: [ended({}, true)],
         policy,
         settings,
+        resolver,
       }),
     ),
   };
 }
+
+test("all run kinds resolve omitted and explicit effort through the host registry", () => {
+  const resolver = createRegistry(
+    {
+      "claude-code": { credential: "/unused" },
+      codex: { credential: "/unused" },
+    },
+    {
+      effort: "medium",
+      metadata: { "gpt-work": { effort: "low" } },
+    },
+  );
+  const settings = {
+    defaultModel: "claude-work",
+    retryModel: "gpt-work",
+    caps: { "claude-code": 2, codex: 2 },
+  };
+  assert.deepEqual(stages(undefined, [], settings, resolver), {
+    triage: "claude-code/claude-work@medium host-default",
+    initial: "claude-code/claude-work@medium host-default",
+    retry: "codex/gpt-work@low host-default",
+    review: "claude-code/claude-work@medium host-default",
+  });
+  assert.deepEqual(
+    stages(
+      undefined,
+      [],
+      { ...settings, defaultModel: "gpt-work@xhigh" },
+      resolver,
+    ),
+    {
+      triage: "codex/gpt-work@xhigh host-default",
+      initial: "codex/gpt-work@xhigh host-default",
+      retry: "codex/gpt-work@low host-default",
+      review: "codex/gpt-work@xhigh host-default",
+    },
+  );
+  assert.deepEqual(
+    stages(
+      {
+        version: 1,
+        fallback: "wait",
+        runKinds: {
+          triage: { provider: "codex", model: "gpt-work" },
+          implement: {
+            retry: { provider: "claude-code", model: "claude-other" },
+          },
+          review: { provider: "codex", model: "gpt-work", effort: "high" },
+        },
+      },
+      ["model:gpt-work@xhigh"],
+      settings,
+      resolver,
+    ),
+    {
+      triage: "codex/gpt-work@low policy",
+      initial: "codex/gpt-work@xhigh issue-label",
+      retry: "claude-code/claude-other@medium policy",
+      review: "codex/gpt-work@high policy",
+    },
+  );
+  assert.equal(
+    stages(undefined, ["model:gpt-work"], settings, resolver).initial,
+    "codex/gpt-work@low issue-label",
+  );
+});
+
+test("fallback and diversity alternatives retain their own host effort resolution", () => {
+  const resolver = createRegistry(
+    {
+      "claude-code": { credential: "/unused" },
+      codex: { credential: "/unused" },
+    },
+    { effort: "medium", metadata: { "gpt-work": { effort: "low" } } },
+  );
+  const settings = {
+    defaultModel: "gpt-work",
+    retryModel: "gpt-work",
+    reviewModel: "gpt-work",
+    caps: { "claude-code": 1, codex: 1 },
+  };
+  const busy = run({ issue: 8, provider: "claude-code", model: "claude-work" });
+  const fallback = launchOf(
+    decide({
+      issues: [issue(4), issue(8, claimed)],
+      runs: [busy],
+      settings,
+      resolver,
+      policy: {
+        version: 1,
+        fallback: "host-default",
+        runKinds: {
+          implement: {
+            initial: {
+              provider: "claude-code",
+              model: "claude-work",
+              effort: "high",
+            },
+          },
+        },
+      },
+    }),
+  );
+  assert.ok(fallback);
+  assert.equal(
+    `${fallback.provider}/${fallback.model}@${fallback.effort} ${fallback.selection}`,
+    "codex/gpt-work@low fallback",
+  );
+  const diverse = launchOf(
+    decide({
+      issues: [issue(4, claimed)],
+      runs: [ended({ provider: "claude-code", model: "claude-work" }, true)],
+      settings,
+      resolver,
+      kinds: { differentProvider: true },
+      policy: {
+        version: 1,
+        fallback: "host-default",
+        runKinds: { review: { provider: "claude-code", model: "claude-work" } },
+      },
+    }),
+  );
+  assert.ok(diverse);
+  assert.equal(
+    `${diverse.provider}/${diverse.model}@${diverse.effort} ${diverse.selection}`,
+    "codex/gpt-work@low diversity",
+  );
+});
 
 test("without a policy every stage takes the host's default, and the label only the initial attempt", () => {
   assert.deepEqual(stages(), {

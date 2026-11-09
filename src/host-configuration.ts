@@ -7,6 +7,7 @@ import type { PlatformName } from "@lutzseverino/postern";
 import {
   adapterNames,
   createRegistry,
+  type ModelSettings,
   type ProviderSettings,
 } from "./providers.ts";
 import { imageBuilders, type ImageBuilder } from "./sandbox-image.ts";
@@ -17,12 +18,9 @@ export type HostConfiguration = {
   providers: Record<string, ProviderSettings & { cap: number }>;
   // The default models for an implement attempt and its retry, and optional
   // defaults for triage and review runs, which otherwise take `default`.
-  models: {
+  models: ModelSettings & {
     default: string;
     retry: string;
-    triage?: string;
-    review?: string;
-    allowed?: string[];
   };
   timeLimitMinutes: number;
   usage: UsagePolicy;
@@ -253,13 +251,29 @@ function hostConfigurationProblems(value: unknown): string[] {
       ),
       models: object(
         {
+          effort: text(),
           default: text(),
           retry: text(),
           triage: text(),
           review: text(),
           allowed: list(text(), { nonEmpty: true }),
+          metadata: record(
+            (entry, path, problems) => {
+              object({ guidance: text(), effort: text() }, [
+                "guidance",
+                "effort",
+              ])(entry, path, problems);
+              if (
+                typeof entry === "object" &&
+                entry !== null &&
+                Object.keys(entry).length === 0
+              )
+                problems.push(`${path}: needs guidance and/or effort`);
+            },
+            () => null,
+          ),
         },
-        ["triage", "review", "allowed"],
+        ["triage", "review", "allowed", "metadata"],
       ),
       // Both durations become timers, which wait at most 2^31 - 1 milliseconds.
       timeLimitMinutes: number(
@@ -385,34 +399,10 @@ function hostConfigurationProblems(value: unknown): string[] {
   }
   if (problems.length === 0) {
     const configuration = value as HostConfiguration;
-    const unrestricted = createRegistry(configuration.providers);
-    const seen = new Set<string>();
-    configuration.models.allowed?.forEach((value, index) => {
-      const path = `models.allowed[${index}]`;
-      if (value.includes("@")) {
-        problems.push(`${path}: must not specify an effort`);
-        return;
-      }
-      const resolved = unrestricted.resolveModel(value);
-      if ("error" in resolved) problems.push(`${path}: ${resolved.error}`);
-      else {
-        const identity = `${resolved.provider}/${resolved.model}`;
-        if (seen.has(identity)) problems.push(`${path}: repeats ${identity}`);
-        seen.add(identity);
-      }
-    });
-    if (problems.length > 0) return problems;
-    const registry = createRegistry(
-      configuration.providers,
-      undefined,
-      configuration.models.allowed,
-    );
-    for (const field of ["default", "retry", "triage", "review"] as const) {
-      const model = configuration.models[field];
-      if (model === undefined) continue;
-      const resolved = registry.resolveModel(model);
-      if ("error" in resolved)
-        problems.push(`models.${field}: ${resolved.error}`);
+    try {
+      createRegistry(configuration.providers, configuration.models);
+    } catch (error) {
+      problems.push(...(error as Error).message.split("\n"));
     }
   }
   return problems;

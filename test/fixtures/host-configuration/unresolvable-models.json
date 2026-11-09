@@ -3,7 +3,11 @@
   "providers": {
     "codex": { "cap": 1, "credential": "/etc/factory/codex-auth.json" }
   },
-  "models": { "default": "claude-sonnet-5-5", "retry": "codex/gpt-5.5@max" },
+  "models": {
+    "effort": "high",
+    "default": "claude-sonnet-5-5",
+    "retry": "codex/gpt-5.5@max"
+  },
   "timeLimitMinutes": 240,
   "usage": { "drainThreshold": 90 },
   "pollSeconds": 300,

@@ -17,6 +17,7 @@ function claudeCode(t: import("node:test").TestContext, ports = fakePorts()) {
   writeFileSync(credential, "sk-ant-oat01-first\n");
   const adapter = createRegistry(
     { "claude-code": { credential } },
+    { effort: "high" },
     ports.ports,
   ).providers.get("claude-code")!;
   return { adapter, credential, runs: ports.runs };
@@ -162,6 +163,7 @@ test("a renewed Claude usage login is reread independently of the launch token",
   });
   const adapter = createRegistry(
     { "claude-code": { credential, usageCredential } },
+    { effort: "high" },
     ports.ports,
   ).providers.get("claude-code")!;
   const login = (accessToken: string) =>
@@ -208,6 +210,7 @@ test("unusable Claude usage logins fail safely without a request or launch-token
   });
   const adapter = createRegistry(
     { "claude-code": { credential, usageCredential } },
+    { effort: "high" },
     ports.ports,
   ).providers.get("claude-code")!;
   for (const content of [

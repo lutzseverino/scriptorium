@@ -1,7 +1,7 @@
 {
   "repositories": ["acme/widgets", "ACME/Widgets", "widgets"],
   "providers": { "claude-code": { "cap": -1, "credential": "claude-token" } },
-  "models": { "default": "claude-sonnet-5-5", "retry": 5 },
+  "models": { "effort": "high", "default": "claude-sonnet-5-5", "retry": 5 },
   "timeLimitMinutes": 0,
   "usage": {
     "drainThreshold": 120,

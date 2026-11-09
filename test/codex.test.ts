@@ -15,6 +15,7 @@ function codex(t: TestContext, executable = "/nonexistent/codex") {
   const { ports, runs } = fakePorts({ codexExecutable: executable });
   const adapter = createRegistry(
     { codex: { credential } },
+    { effort: "high" },
     ports,
   ).providers.get("codex")!;
   return { adapter, credential, runs, root };

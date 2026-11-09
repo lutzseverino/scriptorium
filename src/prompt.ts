@@ -1,7 +1,7 @@
 // Pure rendering of a continuation and facts already read by the host.
 import type { Continuation } from "./factory.ts";
 import { handBackLimit } from "./run-ending.ts";
-import { completionSignal } from "./providers.ts";
+import { completionSignal, type ModelFacts } from "./providers.ts";
 import type { repositoryHold } from "./repository-holds.ts";
 
 export type PromptFacts = {
@@ -14,6 +14,7 @@ export type PromptFacts = {
   resultInstructions?: string;
   reviewTarget?: number;
   filingRun?: string;
+  models?: ModelFacts;
 };
 
 export function prompt(continuation: Continuation, facts: PromptFacts): string {
@@ -30,6 +31,7 @@ export function prompt(continuation: Continuation, facts: PromptFacts): string {
     "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
     `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded. The signal is loop control; GitHub outcomes and your run result still determine delivery.`,
     ...(facts.resultInstructions ? [facts.resultInstructions] : []),
+    ...(facts.models ? [`Host models: ${JSON.stringify(facts.models)}`] : []),
     ...(facts.reviewTarget
       ? [
           `Review target: PR #${facts.reviewTarget}. Resolve its linked issue contract; when it has no linked issue, use the PR body as the Spec source.`,
