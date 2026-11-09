@@ -189,36 +189,6 @@ export function createUsage(ports: UsagePorts) {
     }
   }
 
-  // A provider's usage hold after this pass. A fresh reading at or above a
-  // threshold starts one, or keeps the one in force with that reading, and a
-  // fresh reading below every threshold ends it. Without a fresh reading, the
-  // hold lasts until its deadline, or until the thresholds no longer hold its
-  // reading. The hold's start and deadline never move while it lasts.
-  function nextHold(
-    previous: UsageHold | null,
-    reading: Usage | null,
-    now: Date,
-  ): UsageHold | null {
-    const current =
-      previous !== null &&
-      now.getTime() < Date.parse(previous.until) &&
-      reached(previous.used, ports.thresholds) !== null
-        ? previous
-        : null;
-    if (reading === null) return current;
-    if (reached(reading.used, ports.thresholds) === null) return null;
-    return {
-      ...reading,
-      since: current?.since ?? reading.at,
-      until:
-        current?.until ??
-        pauseDeadline(
-          reading.reset ?? null,
-          new Date(reading.at),
-        ).toISOString(),
-    };
-  }
-
   // Each provider's usage for this pass's snapshot: its reading while fresh,
   // otherwise null.
   async function read(): Promise<Record<string, Usage | null>> {
@@ -239,10 +209,11 @@ export function createUsage(ports: UsagePorts) {
       )
         await attempt(provider, entry);
       usage[provider] = fresh(entry.reading, ports.now());
-      holds[provider] = entry.hold = nextHold(
+      holds[provider] = entry.hold = usageHoldAfter(
         entry.hold,
         usage[provider],
         ports.now(),
+        ports.thresholds,
       );
     }
     state = current;
@@ -386,3 +357,33 @@ function validFailure(value: unknown): UsageFailure | null {
     ? (value as UsageFailure)
     : null;
 }
+
+// A provider's usage hold after this pass. A fresh reading at or above a
+// threshold starts one, or keeps the one in force with that reading, and a
+// fresh reading below every threshold ends it. Without a fresh reading, the
+// hold lasts until its deadline, or until the thresholds no longer hold its
+// reading. The hold's start and deadline never move while it lasts.
+export function usageHoldAfter(
+  previous: UsageHold | null,
+  reading: Usage | null,
+  now: Date,
+  thresholds: Pick<Settings, "drainThreshold" | "pauseThreshold">,
+): UsageHold | null {
+  const current =
+    previous !== null &&
+    now.getTime() < Date.parse(previous.until) &&
+    reached(previous.used, thresholds) !== null
+      ? previous
+      : null;
+  if (reading === null) return current;
+  if (reached(reading.used, thresholds) === null) return null;
+  return {
+    ...reading,
+    since: current?.since ?? reading.at,
+    until:
+      current?.until ??
+      pauseDeadline(reading.reset ?? null, new Date(reading.at)).toISOString(),
+  };
+}
+
+export { validReading as usageReading, validHold as usageHold };

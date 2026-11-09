@@ -487,10 +487,37 @@ function policy(repository: Repository): Policy {
 // Caps count running sandboxes across every repository; a claim whose pull
 // request awaits merge, or an ended run, takes no slot.
 function runningCounts(snapshot: Snapshot): Map<string, number> {
-  const running = new Map<string, number>();
-  for (const run of snapshot.runs.filter((run) => run.ended === null))
-    running.set(run.provider, (running.get(run.provider) ?? 0) + 1);
-  return running;
+  return new Map(
+    [...providerRunCounts(snapshot.runs)].map(([provider, counts]) => [
+      provider,
+      counts.running,
+    ]),
+  );
+}
+
+// Shared by admission and operational status. Retained ended work, including
+// interrupted runs and claims awaiting merge, occupies no sandbox slot.
+export function providerRunCounts(
+  runs: readonly Pick<Run, "provider" | "ended">[],
+): Map<string, { running: number; paused: number; retained: number }> {
+  const counts = new Map<
+    string,
+    { running: number; paused: number; retained: number }
+  >();
+  for (const run of runs) {
+    const entry = counts.get(run.provider) ?? {
+      running: 0,
+      paused: 0,
+      retained: 0,
+    };
+    if (run.ended === null) entry.running++;
+    else {
+      entry.retained++;
+      if ("paused" in run.ended) entry.paused++;
+    }
+    counts.set(run.provider, entry);
+  }
+  return counts;
 }
 
 // A running run over the time limit is stopped, and so is one whose provider's

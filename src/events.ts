@@ -37,6 +37,11 @@ export type ProviderStatus = {
   thresholds: UsagePolicy & { effectiveDrainThreshold: number | null };
   running: number;
   paused: number;
+  // Added by hosts using the admission lifecycle counting boundary.
+  counting?: "non-ended-runs";
+  cap?: number;
+  free?: number;
+  retained?: number;
   claimsHeld: boolean;
   pauseAtThreshold: boolean;
   drained: boolean;
@@ -55,6 +60,7 @@ export function providerStatus(
   policy: UsagePolicy,
   running: number,
   paused: number,
+  capacity?: { cap: number; retained: number },
 ): ProviderStatus {
   const safeTime = (at: string) => new Date(at).toISOString();
   const safeReading = (usage: Usage): Usage => ({
@@ -111,6 +117,12 @@ export function providerStatus(
     },
     running,
     paused,
+    ...(capacity && {
+      counting: "non-ended-runs" as const,
+      cap: capacity.cap,
+      free: Math.max(0, capacity.cap - running),
+      retained: capacity.retained,
+    }),
     claimsHeld,
     pauseAtThreshold,
     drained: claimsHeld && running === 0,

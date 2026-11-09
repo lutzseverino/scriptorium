@@ -195,22 +195,11 @@ export function createOwner(ports: OwnerPorts) {
     const reserve = entry.reserve;
     if (reserve === null) return;
     const now = ports.now();
-    const { drainThreshold } = ports.policy;
     // A reserve granted before its provider reported a reset waits for the
     // first one it reports.
     if (reserve.until === null && reading?.reset !== undefined)
       reserve.until = future(reading.reset, now);
-    const ended =
-      resumeProblem(ports.providers, ports.policy, {
-        provider,
-        drainThreshold: reserve.drainThreshold,
-      }) !== null
-        ? "the host configuration no longer allows it"
-        : reading !== null && reading.used < drainThreshold!
-          ? `usage ${reading.used}% is below the configured ${drainThreshold}% drain threshold`
-          : reserve.until !== null && now.getTime() >= Date.parse(reserve.until)
-            ? `the reset at ${reserve.until} passed`
-            : null;
+    const ended = reserveExpiry(provider, reserve, ports.policy, reading, now);
     if (ended === null) return;
     entry.reserve = null;
     ports.report(
@@ -415,3 +404,26 @@ function validReserve(value: unknown): ReserveRaise | null {
       }
     : null;
 }
+
+// Inspecting a reserve uses the same expiry rules as a host pass, without
+// editing the reserve or applying any queued resume request.
+export function reserveExpiry(
+  provider: string,
+  reserve: ReserveRaise,
+  policy: UsagePolicy,
+  reading: Usage | null,
+  now: Date,
+): string | null {
+  return resumeProblem([provider], policy, {
+    provider,
+    drainThreshold: reserve.drainThreshold,
+  }) !== null
+    ? "the host configuration no longer allows it"
+    : reading !== null && reading.used < policy.drainThreshold!
+      ? `usage ${reading.used}% is below the configured ${policy.drainThreshold}% drain threshold`
+      : reserve.until !== null && now.getTime() >= Date.parse(reserve.until)
+        ? `the reset at ${reserve.until} passed`
+        : null;
+}
+
+export { validHold as ownerHold, validReserve as ownerReserve };

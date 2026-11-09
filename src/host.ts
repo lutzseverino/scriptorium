@@ -45,6 +45,7 @@ import {
 import {
   decideFactory,
   pullRequestIdentity,
+  providerRunCounts,
   type Claim,
   type Continuation,
   type Decision,
@@ -270,6 +271,12 @@ export function createHost(
 
   function providerStatuses() {
     const controls = owner.controls();
+    const counts = providerRunCounts(
+      runs.map((run) => ({
+        provider: run.provider,
+        ended: run.exited ? run.ended : null,
+      })),
+    );
     return Object.keys(configuration.providers).map((provider) =>
       providerStatus(
         provider,
@@ -278,15 +285,15 @@ export function createHost(
         providerHolds[provider] ?? null,
         controls[provider] ?? null,
         configuration.usage,
-        runs.filter(
-          (run) =>
-            run.provider === provider &&
-            (!run.exited || (run.ended && "interrupted" in run.ended)),
-        ).length,
-        runs.filter(
-          (run) =>
-            run.provider === provider && (run.pausing || pausedEnding(run)),
-        ).length,
+        counts.get(provider)?.running ?? 0,
+        (counts.get(provider)?.paused ?? 0) +
+          runs.filter(
+            (run) => run.provider === provider && !run.exited && run.pausing,
+          ).length,
+        {
+          cap: configuration.providers[provider]!.cap,
+          retained: counts.get(provider)?.retained ?? 0,
+        },
       ),
     );
   }
