@@ -486,39 +486,44 @@ function policy(repository: Repository): Policy {
   };
 }
 
-// Caps count running sandboxes across every repository; a claim whose pull
-// request awaits merge, or an ended run, takes no slot.
 export type RunKindCounts = Record<RunKindName, number>;
 
 export function emptyRunKindCounts(): RunKindCounts {
   return { implement: 0, triage: 0, review: 0 };
 }
 
-type RunningCounts = ReturnType<typeof runningCounts>;
+type RunningCounts = {
+  providers: Map<string, number>;
+  host: RunKindCounts;
+  repositories: Map<string, RunKindCounts>;
+};
 
-// This projection is also the admission pass's mutable accounting. Missing
-// kinds are v2 implement work; only a non-ended sandbox occupies capacity.
-export function runningCounts(runs: readonly Run[]) {
-  const host = emptyRunKindCounts();
-  const repositories = new Map<string, RunKindCounts>();
-  for (const run of runs) {
-    if (run.ended !== null) continue;
-    const kinds = repositories.get(run.repository) ?? emptyRunKindCounts();
-    const kind = run.continuation.runKind ?? "implement";
-    host[kind]++;
-    kinds[kind]++;
-    repositories.set(run.repository, kinds);
-  }
-  return {
-    providers: new Map(
-      [...providerRunCounts(runs)].map(([provider, counts]) => [
-        provider,
-        counts.running,
-      ]),
-    ),
-    host,
-    repositories,
+// Both the initial snapshot and this pass's admissions use the same mutation.
+function countRunning(
+  counts: RunningCounts,
+  run: Pick<Run, "repository" | "provider" | "continuation">,
+): void {
+  counts.providers.set(
+    run.provider,
+    (counts.providers.get(run.provider) ?? 0) + 1,
+  );
+  const kind = run.continuation.runKind ?? "implement";
+  counts.host[kind]++;
+  const kinds = counts.repositories.get(run.repository) ?? emptyRunKindCounts();
+  kinds[kind]++;
+  counts.repositories.set(run.repository, kinds);
+}
+
+// Shared by admission and operational status. Missing kinds are v2 implement
+// work; only a non-ended sandbox occupies capacity, never a retained claim.
+export function runningCounts(runs: readonly Run[]): RunningCounts {
+  const counts: RunningCounts = {
+    providers: new Map(),
+    host: emptyRunKindCounts(),
+    repositories: new Map(),
   };
+  for (const run of runs) if (run.ended === null) countRunning(counts, run);
+  return counts;
 }
 
 // Shared by admission and operational status. Retained ended work, including
@@ -1143,16 +1148,11 @@ function admit(
   }
   if (reason) return skipped(next, reason, repositoryHeld?.hold);
   const { model, selection, diversity } = choice;
-  running.providers.set(
-    model.provider,
-    (running.providers.get(model.provider) ?? 0) + 1,
-  );
-  const kind = next.launch.runKind ?? "implement";
-  running.host[kind]++;
-  const kinds =
-    running.repositories.get(repository.name) ?? emptyRunKindCounts();
-  kinds[kind]++;
-  running.repositories.set(repository.name, kinds);
+  countRunning(running, {
+    repository: repository.name,
+    provider: model.provider,
+    continuation: next.launch,
+  });
   return [
     ...(next.claim ? [{ kind: "claim" as const, ...at }] : []),
     ...(next.unpause ? [{ kind: "unpause" as const, ...at }] : []),
