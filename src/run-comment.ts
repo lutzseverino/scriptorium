@@ -20,20 +20,20 @@ import { reference } from "./readiness.ts";
 const phases = ["triage", "implement", "review", "merge"] as const;
 export type Phase = (typeof phases)[number];
 
-// Each phase state, and the pass's status while its latest write leaves a
-// phase in it.
-const statuses = {
-  running: "in progress",
-  done: "in progress",
-  paused: "paused",
-  stopped: "waiting for an answer",
-  "awaiting merge": "awaiting merge",
-  merged: "merged",
-  failed: "failed",
+// Each phase state: the pass's status while its latest write leaves a phase
+// in it, and whether a later phase's start finishes it.
+const states = {
+  running: { status: "in progress", unfinished: true },
+  done: { status: "in progress" },
+  paused: { status: "paused", unfinished: true },
+  stopped: { status: "waiting for an answer", unfinished: true },
+  "awaiting merge": { status: "awaiting merge" },
+  merged: { status: "merged" },
+  failed: { status: "failed" },
 };
 
 export type PhaseFacts = {
-  state?: keyof typeof statuses;
+  state?: keyof typeof states;
   reason?: string;
   reset?: string | null;
   provider?: string;
@@ -130,8 +130,6 @@ export function isFactoryComment(comment: Comment): boolean {
   );
 }
 
-const unfinished = ["running", "paused", "stopped"];
-
 // The one writer of an issue's run, action and close comments, worded by the
 // repository's comment templates.
 export function issueComments(
@@ -150,7 +148,7 @@ export function issueComments(
         (name === "review" && configuration.runKinds?.review),
     );
     return renderComment("run", templates?.run, {
-      status: statuses[state.phases[phase]?.state ?? "running"],
+      status: states[state.phases[phase]?.state ?? "running"].status,
       ...Object.fromEntries(
         shown.map((name) => {
           const facts = state.phases[name];
@@ -190,7 +188,7 @@ export function issueComments(
       if (update.facts.state === "running")
         for (const name of phases.slice(0, phases.indexOf(update.phase))) {
           const facts = state.phases[name];
-          if (facts?.state && unfinished.includes(facts.state))
+          if (facts?.state && "unfinished" in states[facts.state])
             state.phases[name] = {
               ...facts,
               state: "done",
