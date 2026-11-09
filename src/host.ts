@@ -46,6 +46,7 @@ import {
   decideFactory,
   pullRequestIdentity,
   type Claim,
+  type Continuation,
   type Decision,
   type Issue,
   type Pause,
@@ -738,14 +739,13 @@ export function createHost(
           ...readdirSync(path)
             .filter((file) => /^issue-\d+-attempt-\d+\.json$/.test(file))
             .flatMap((file) => {
-              const run: Run = JSON.parse(
-                readFileSync(join(path, file), "utf8"),
-              );
+              const run: Partial<Run> & Pick<Continuation, "target"> =
+                JSON.parse(readFileSync(join(path, file), "utf8"));
+              // Settled legacy records are not migrated by startup.
+              const target = run.continuation?.target ?? run.target;
               return [
                 ...(run.ownedPullRequests ?? []),
-                ...(run.continuation.target
-                  ? [run.continuation.target.number]
-                  : []),
+                ...(target ? [target.number] : []),
               ];
             }),
         ]

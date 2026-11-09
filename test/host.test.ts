@@ -9029,3 +9029,52 @@ test("needs-input resume excludes every preserved owned PR from prompt hold fact
   );
   assert.deepEqual(recordOf(run.state, 4, 1).ownedPullRequests, [40, 41]);
 });
+
+test("settled legacy records retain PR ownership without blocking startup", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const pr = {
+    ...publishedPR(bare, "grill/legacy"),
+    number: 42,
+    author: { login: "owner", bot: false },
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["state:ready"] },
+        {
+          number: 42,
+          isPullRequest: true,
+          labels: [],
+          branchPullRequests: [pr],
+        },
+        {
+          number: 43,
+          isPullRequest: true,
+          labels: [],
+          branchPullRequests: [{ ...pr, number: 43 }],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  write(run.state, {
+    "repositories/acme/widgets/runs/issue-9-attempt-1.json": JSON.stringify({
+      settled: true,
+      attempt: 1,
+      target: pr,
+      ownedPullRequests: [43],
+    }),
+  });
+  run.github.drafts.add(42);
+  run.github.drafts.add(43);
+  await run.tick();
+  assert.equal(
+    run.status().repositories[0].state,
+    "running",
+    run.reports.join("\n"),
+  );
+  assert.deepEqual(
+    run.launched.map(({ options }) => invocation(options.prompt)),
+    ["/implement #4"],
+  );
+});
