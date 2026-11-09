@@ -677,7 +677,8 @@ phase (Triage, Implement, Review and Merge) with its state and its latest
 run's provider, model, effort, attempt, review round and result link, a pause
 or failure on the line of the phase it happened in, and the latest run
 result's body in a `<details>` block. Triage shows once it ran in the pass,
-and Review once the repository turns review on. A phase that starts finishes
+and Review once the repository turns review on. A phase that starts, and a
+merge, finishes
 an earlier phase left running, paused or stopped. A failure after its pull
 request closed or merged without closing the issue is the merge's.
 

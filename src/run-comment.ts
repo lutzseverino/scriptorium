@@ -184,8 +184,8 @@ export function issueComments(
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };
-      // A phase that starts finishes the earlier phases it continues from.
-      if (update.facts.state === "running")
+      // A phase that starts, or a merge, finishes the earlier phases.
+      if (update.facts.state === "running" || update.facts.state === "merged")
         for (const name of phases.slice(0, phases.indexOf(update.phase))) {
           const facts = state.phases[name];
           if (facts?.state && "unfinished" in states[facts.state])

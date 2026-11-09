@@ -123,7 +123,8 @@ test("a pass through every phase leaves one run comment, edited in place, and ac
   assert.doesNotMatch(body, /paused|usage limit/);
   assert.match(
     body,
-    /- \[ \] Review: running · `claude-code\/gpt-5\.5@high`, attempt 1, round 1\n/,
+    // The merge finishes the review it ended.
+    /- \[x\] Review: done · `claude-code\/gpt-5\.5@high`, attempt 1, round 1\n/,
   );
   assert.match(body, /- \[x\] Merge: merged\n/);
   // The latest result survives later edits that carry none.

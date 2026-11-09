@@ -1209,6 +1209,14 @@ export function createHost(
     );
   }
 
+  // What an ended run or a claim observed of the issue's pull requests.
+  function endedFacts(decision: Decision, pass: Pass) {
+    const run = find(decision);
+    return run?.ended && "pullRequest" in run.ended
+      ? run.ended
+      : pass.read?.claims.find((claim) => claim.issue === decision.issue);
+  }
+
   // Writes the open issue's run comment and an action to tell once. A
   // progress write is best-effort. A final write, a continuation or an
   // action is required and rejects, so its decision retries on a later pass.
@@ -1275,10 +1283,7 @@ export function createHost(
       case "fail": {
         // A pull request that closed or merged fails the merge itself.
         const run = find(decision);
-        const ended =
-          run?.ended && "pullRequest" in run.ended
-            ? run.ended
-            : pass.read?.claims.find((claim) => claim.issue === decision.issue);
+        const ended = endedFacts(decision, pass);
         await tell(
           pass,
           issue,
@@ -1327,6 +1332,13 @@ export function createHost(
           issue &&
           stopLabels(labels).find((label) => issue.labels.includes(label));
         const previous = find(decision);
+        // A merged pull request that closed its issue ends the pass.
+        if (!issue && endedFacts(decision, pass)?.pullRequest === "merged")
+          await platform.comments.write(decision.issue, {
+            phase: "merge",
+            facts: { state: "merged" },
+            final: true,
+          });
         if (stop) {
           const since = previous?.pullRequestSince ?? issue.continuation?.since;
           const observation = await platform.pullRequestObservation(
@@ -1733,6 +1745,7 @@ function runFacts(run: Run) {
   };
 }
 
+// The state a run result's outcome leaves its phase in.
 const outcomeStates = {
   done: "done",
   stop: "stopped",

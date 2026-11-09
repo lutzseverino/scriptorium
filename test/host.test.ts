@@ -8113,19 +8113,21 @@ test("a full pass leaves one run comment from triage to merge, and asks a person
   await run.drain();
   await restarted.tick();
   assert.equal(invocation(run.launched[2].options.prompt), "/review #42");
-  // The review merges the PR, which closes the issue.
+  // The review merges the PR, whose closing reference closes the issue on
+  // the platform before the factory observes it.
   const merged = { ...pr, state: "merged" as const };
   issue.branchPullRequests = [merged];
   issue.pullRequests = [merged];
+  issue.state = "CLOSED";
   run.github.drafts.delete(42);
   run.launched[2].finish();
   await run.drain();
   await restarted.tick();
-  assert.equal(issue.state, "CLOSED");
+  assert.deepEqual(issue.labels, ["state:ready"]);
   assert.equal(runComments(issue).length, 1);
   assert.match(
     runComment(issue),
-    /^\*\*Factory run: merged\*\*\n\n- \[x\] Triage: done · .*\n- \[x\] Implement: done · .*\n- \[x\] Review: done · .*, round 1 · \[result\]\([^)]+\)\n- \[x\] Merge: merged\n/,
+    /^\*\*Factory run: merged\*\*\n\n- \[x\] Triage: done · .*\n- \[x\] Implement: done · .*\n- \[x\] Review: done · .*, round 1\n- \[x\] Merge: merged\n/,
   );
   assert.equal(actions(issue).length, 1);
 });
