@@ -360,14 +360,11 @@ relaunches wait for a successful read. Other repositories continue normally.
 Omitting the key leaves behavior unchanged and keeps the configuration's version.
 
 This holds merges only. Pickup, retries, interrupted and paused relaunches,
-and needs-input resumes still proceed under their usual gates. Every run's
-prompt names the label and directs the agent to check for another open labelled
-PR before any merge. While held, it finishes implementation, validation and
-review, leaves its PR open, and ends its run. The prompt alone cannot enforce
-a release PR opened mid-run: installed babysit's merge check from
-[Repo Canon #742](https://github.com/lutzseverino/repo-canon/issues/742) supplies
-that guard and returns its release-hold exit without merging. That companion
-change is required for the mid-run guard; this host change does not install it.
+and needs-input resumes still proceed under their usual gates. A launch prompt
+carries the host's observed hold facts, such as `release-hold: active: #80`,
+or `release-hold: unreadable`. Every PR the run owns is excluded. The configured
+skill and installed repository rules decide how to handle those facts and
+check for holds opened mid-run; the prompt prescribes no merge policy.
 
 A run remembers a hold observed during its execution across passes and
 restarts, even if the hold clears before settlement. An unreadable hold at
@@ -440,14 +437,10 @@ once a successful read finds no labelled issue or PR. Removing the label, or
 closing what carries it, resumes pickup and merging on the next pass. Omitting
 the key leaves behavior unchanged and keeps the configuration's version.
 
-Every run's prompt names the label and directs the agent to check for open
-issues and PRs carrying it, other than its own PR, before any merge. While the
-label is set, it finishes implementation, validation and review, leaves its PR
-open, and ends its run without merging. The prompt alone cannot stop a merge
-already under way: installed babysit's merge check from
-[Repo Canon #789](https://github.com/lutzseverino/repo-canon/issues/789)
-supplies the mid-run guard. That companion change is required for the mid-run
-guard; this host change does not install it.
+Launch prompts carry shared hold facts, such as `factory-hold: active: #9`
+or `factory-hold: unreadable`, when applicable. The configured skill and
+installed repository rules own hold handling during a run and at merge time.
+The host's launch-time facts cannot enforce a hold opened mid-run.
 
 A run that observes the hold while it runs records it as it records a
 release hold: it remembers the labelled items across passes and restarts, even

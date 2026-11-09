@@ -119,7 +119,7 @@ function run(ending: Partial<RunEnding>, details: Partial<Run> = {}) {
       provider: "provider",
       model: "default",
       effort: "high",
-      attempt: 1 as const,
+      continuation: { attempt: 1 as const },
       startedAt: "2026-10-09T11:00:00Z",
       log: "/srv/factory/issue-4-attempt-1.log",
       ...details,
@@ -202,17 +202,29 @@ test("a review's draft PR hands back until its rounds fail", () => {
     pullRequest: "open" as const,
     openPullRequest: { ...pr, draft: true as const },
   };
-  assert.deepEqual(settle(run(draft, { runKind: "review", handBacks: 1 })), [
-    { kind: "keep", ...at, quiet: true },
-  ]);
-  assert.deepEqual(settle(run(draft, { runKind: "review", handBacks: 2 })), [
-    {
-      kind: "fail",
-      ...at,
-      failure: "its review rounds did not converge after 2 hand-backs",
-      log: "/srv/factory/issue-4-attempt-1.log",
-    },
-  ]);
+  assert.deepEqual(
+    settle(
+      run(draft, {
+        continuation: { attempt: 1, runKind: "review", handBacks: 1 },
+      }),
+    ),
+    [{ kind: "keep", ...at, quiet: true }],
+  );
+  assert.deepEqual(
+    settle(
+      run(draft, {
+        continuation: { attempt: 1, runKind: "review", handBacks: 2 },
+      }),
+    ),
+    [
+      {
+        kind: "fail",
+        ...at,
+        failure: "its review rounds did not converge after 2 hand-backs",
+        log: "/srv/factory/issue-4-attempt-1.log",
+      },
+    ],
+  );
 });
 
 test("only a failed first implement attempt retries, on an available retry model", () => {
@@ -222,8 +234,8 @@ test("only a failed first implement attempt retries, on an available retry model
     failure: "the run ended without an open pull request",
   });
   for (const [ended, state] of [
-    [run({}, { attempt: 2 }), snapshot()],
-    [run({}, { runKind: "review" }), snapshot()],
+    [run({}, { continuation: { attempt: 2 } }), snapshot()],
+    [run({}, { continuation: { attempt: 1, runKind: "review" } }), snapshot()],
     [failed, snapshot("provider/unavailable")],
   ] as const)
     assert.equal(
@@ -237,7 +249,12 @@ test("only a failed first implement attempt retries, on an available retry model
     failure: "no factory run or open pull request holds its claim",
   });
   assert.deepEqual(settle({ claim: { issue: 4, pullRequest: "closed" } }), {
-    run: { repository: widgets, issue: 4, attempt: 1, log: null },
+    run: {
+      repository: widgets,
+      issue: 4,
+      continuation: { attempt: 1 },
+      log: null,
+    },
     failure: "its pull request closed without merging",
   });
   // A run that ended by itself names its closed pull request too.
@@ -254,7 +271,7 @@ test("only a failed first implement attempt retries, on an available retry model
 });
 
 test("a triage run ends once its issue leaves the triage state", () => {
-  const triage = run({}, { runKind: "triage" });
+  const triage = run({}, { continuation: { attempt: 1, runKind: "triage" } });
   assert.deepEqual(settle(triage, repository([issue([labels.ready])])), [
     { kind: "release", ...at },
   ]);
@@ -335,7 +352,7 @@ test("an ending reads the platform and its branch once, accumulating owned PRs",
   // attempt returns it.
   const consumed = {
     issue: 4,
-    mergeRelaunch: pr,
+    continuation: { mergeRelaunch: pr },
     mergeRelaunchHeads: [`42:${pr.headCommit}`],
   };
   assert.equal(
@@ -454,7 +471,7 @@ test("a run's result comes first, and its platform and branch facts are the fall
       run(
         {},
         {
-          runKind: "triage",
+          continuation: { attempt: 1, runKind: "triage" },
           result: { outcome: "done", state: labels.ready, body: "Brief." },
         },
       ),
@@ -463,7 +480,13 @@ test("a run's result comes first, and its platform and branch facts are the fall
     [{ kind: "release", ...at }],
   );
   assert.deepEqual(
-    settle(run({}, { runKind: "triage", result: invalid }), still),
+    settle(
+      run(
+        {},
+        { continuation: { attempt: 1, runKind: "triage" }, result: invalid },
+      ),
+      still,
+    ),
     [{ kind: "fail", ...at, failure: "its run result is not JSON", log }],
   );
 });

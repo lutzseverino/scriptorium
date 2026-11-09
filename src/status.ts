@@ -47,14 +47,16 @@ export function hostStatus(
       ...(paused === null
         ? { state: "running" as const }
         : { state: "paused" as const, reason: paused }),
-      ...(runs.some((run) => run.repository === name && run.mergeRelaunch) && {
+      ...(runs.some(
+        (run) => run.repository === name && run.continuation.mergeRelaunch,
+      ) && {
         mergeRelaunches: runs.flatMap((run) =>
-          run.repository === name && run.mergeRelaunch
+          run.repository === name && run.continuation.mergeRelaunch
             ? [
                 {
                   issue: run.issue,
-                  pullRequest: run.mergeRelaunch.number,
-                  headCommit: run.mergeRelaunch.headCommit,
+                  pullRequest: run.continuation.mergeRelaunch.number,
+                  headCommit: run.continuation.mergeRelaunch.headCommit,
                 },
               ]
             : [],

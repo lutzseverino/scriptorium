@@ -8,6 +8,7 @@ import {
   type Issue,
   type Repository,
   type Run,
+  type Continuation,
   type Settings,
   type Snapshot,
   type Usage,
@@ -148,18 +149,24 @@ function log(issueNumber: number, repositoryName = widgets) {
   return `/srv/factory/repositories/${repositoryName}/logs/issue-${issueNumber}-attempt-1.log`;
 }
 
-function run(issueNumber: number, details: Partial<Run> = {}): Run {
+function run(
+  issueNumber: number,
+  details: Partial<Omit<Run, "continuation">> & {
+    continuation?: Partial<Continuation>;
+  } = {},
+): Run {
+  const { continuation, ...rest } = details;
   return {
     repository: widgets,
     issue: issueNumber,
     provider: "claude-code",
     model: "claude-sonnet-5-5",
     effort: "high",
-    attempt: 1,
+    continuation: { attempt: 1, ...continuation },
     startedAt: "2026-10-09T11:00:00Z",
     log: log(issueNumber, details.repository),
     ended: null,
-    ...details,
+    ...rest,
   };
 }
 
@@ -204,7 +211,7 @@ test("a ready issue runs directly on the host's default model", () => {
       provider: "claude-code",
       model: "claude-sonnet-5-5",
       effort: "high",
-      attempt: 1,
+      continuation: { attempt: 1 },
     },
   ]);
 });
@@ -514,7 +521,14 @@ test("a finished parent waits for its local and cross-repository blockers to clo
 test("closing a parent takes precedence over settling its earlier run or claim", () => {
   for (const state of [
     { runs: [run(3, { ended: none })] },
-    { runs: [run(3, { attempt: 2, ended: { ...none, timedOut: true } })] },
+    {
+      runs: [
+        run(3, {
+          continuation: { attempt: 2 },
+          ended: { ...none, timedOut: true },
+        }),
+      ],
+    },
     { runs: [run(3)] },
     { claims: [{ issue: 3, pullRequest: "none" as const }] },
   ])
@@ -1083,7 +1097,7 @@ test("the same issue number in two repositories is two issues", () => {
     ],
   );
   const [retry] = decisions;
-  assert.equal(retry.kind === "launch" && retry.attempt, 2);
+  assert.equal(retry.kind === "launch" && retry.continuation.attempt, 2);
 });
 
 test("a paused repository claims and launches nothing while its runs keep settling", () => {
@@ -1154,7 +1168,7 @@ test("a paused repository claims and launches nothing while its runs keep settli
       provider: "claude-code",
       model: "claude-sonnet-5-5",
       effort: "high",
-      attempt: 1,
+      continuation: { attempt: 1 },
     },
   ]);
 });
@@ -1193,7 +1207,7 @@ for (const attempt of [1, 2] as const)
             issues: [issue(4, [...claimed, "factory:needs-input"])],
             runs: [
               run(4, {
-                attempt,
+                continuation: { attempt },
                 ended: {
                   timedOut,
                   pullRequest,
@@ -1230,7 +1244,10 @@ test("an ended run's open pull request keeps its claim unless it needs input", (
             ),
           ],
           runs: [
-            run(4, { attempt, ended: { ...ending, pullRequest: "open" } }),
+            run(4, {
+              continuation: { attempt },
+              ended: { ...ending, pullRequest: "open" },
+            }),
           ],
         });
         // Without a run result, the observed reason says why it ended.
@@ -1282,10 +1299,12 @@ test("a failed first run retries once on the host's retry model, keeping its cla
         provider: "claude-code",
         model: "claude-opus-5-5",
         effort: "xhigh",
-        attempt: 2,
-        retry: {
-          failure: "the run ended without an open pull request",
-          log: log(4),
+        continuation: {
+          attempt: 2,
+          retry: {
+            failure: "the run ended without an open pull request",
+            log: log(4),
+          },
         },
       },
     ],
@@ -1310,7 +1329,7 @@ test("a retry waits for its provider's gate", () => {
 test("a run that ends without an open pull request fails once retried or unretryable", () => {
   const retried = decide({
     issues: [issue(4, claimed)],
-    runs: [run(4, { attempt: 2, ended: none })],
+    runs: [run(4, { continuation: { attempt: 2 }, ended: none })],
   });
   assert.deepEqual(retried[0], {
     kind: "fail",
@@ -1329,7 +1348,12 @@ test("a run that ends without an open pull request fails once retried or unretry
 test("a retried run that exceeded the time limit fails without an open pull request", () => {
   const [decision] = decide({
     issues: [issue(4, claimed)],
-    runs: [run(4, { attempt: 2, ended: { ...none, timedOut: true } })],
+    runs: [
+      run(4, {
+        continuation: { attempt: 2 },
+        ended: { ...none, timedOut: true },
+      }),
+    ],
   });
   assert.deepEqual(decision, {
     kind: "fail",
@@ -1419,8 +1443,10 @@ test("an orphaned claim without an interrupted record retries its failed first a
       provider: "claude-code",
       model: "claude-opus-5-5",
       effort: "xhigh",
-      attempt: 2,
-      retry: { failure: "its pull request closed without merging", log: "" },
+      continuation: {
+        attempt: 2,
+        retry: { failure: "its pull request closed without merging", log: "" },
+      },
     },
     {
       kind: "launch",
@@ -1429,10 +1455,12 @@ test("an orphaned claim without an interrupted record retries its failed first a
       provider: "claude-code",
       model: "claude-opus-5-5",
       effort: "xhigh",
-      attempt: 2,
-      retry: {
-        failure: "no factory run or open pull request holds its claim",
-        log: "",
+      continuation: {
+        attempt: 2,
+        retry: {
+          failure: "no factory run or open pull request holds its claim",
+          log: "",
+        },
       },
     },
   ]);
@@ -1471,7 +1499,10 @@ test("a retry takes its turn in oldest-first order", () => {
     settings: { caps: { "claude-code": 1 } },
   });
   assert.deepEqual(
-    launches(decisions).map(({ issue, attempt }) => ({ issue, attempt })),
+    launches(decisions).map(({ issue, continuation: { attempt } }) => ({
+      issue,
+      attempt,
+    })),
     [{ issue: 2, attempt: 1 }],
   );
   assert.equal(
@@ -1576,8 +1607,8 @@ test("an interrupted run relaunches as the same attempt on its branch without a 
           provider: "codex",
           model: "gpt-5.5",
           effort: "low",
-          attempt: 2,
-          retry,
+          continuation: { attempt: 2, retry },
+
           ended: interrupted,
         }),
         run(5, { ended: interrupted }),
@@ -1591,9 +1622,7 @@ test("an interrupted run relaunches as the same attempt on its branch without a 
         provider: "codex",
         model: "gpt-5.5",
         effort: "low",
-        attempt: 2,
-        retry,
-        relaunch: true,
+        continuation: { attempt: 2, retry, relaunch: true },
       },
       {
         kind: "launch",
@@ -1602,8 +1631,7 @@ test("an interrupted run relaunches as the same attempt on its branch without a 
         provider: "claude-code",
         model: "claude-sonnet-5-5",
         effort: "high",
-        attempt: 1,
-        relaunch: true,
+        continuation: { attempt: 1, relaunch: true },
       },
     ],
   );
@@ -1620,11 +1648,13 @@ test("an interrupted run continues whatever would now hold its pickup", () => {
     runs: [4, 5, 7].map((number) => run(number, { ended: interrupted })),
   });
   assert.deepEqual(
-    launches(decisions).map(({ issue, attempt, relaunch }) => ({
-      issue,
-      attempt,
-      relaunch,
-    })),
+    launches(decisions).map(
+      ({ issue, continuation: { attempt, relaunch } }) => ({
+        issue,
+        attempt,
+        relaunch,
+      }),
+    ),
     [4, 5, 7].map((issue) => ({ issue, attempt: 1, relaunch: true })),
   );
 });
@@ -1681,7 +1711,7 @@ test("an interrupted run releases its claim once its issue closed or needs input
       issues: [issue(5, [...claimed, "factory:needs-input"])],
       runs: [
         run(4, { ended: interrupted }),
-        run(5, { attempt: 2, ended: interrupted }),
+        run(5, { continuation: { attempt: 2 }, ended: interrupted }),
       ],
     }).filter(({ kind }) => kind !== "skip"),
     [
@@ -1755,7 +1785,7 @@ test("a run that ended on its provider's usage limit pauses its issue once, with
     decide({
       issues: [issue(2), issue(4, claimed), issue(5, claimed)],
       runs: [
-        run(4, { attempt: 2, retry, ended: pausing }),
+        run(4, { continuation: { attempt: 2, retry }, ended: pausing }),
         run(5, {
           ended: { paused: { ...limit, reset: null } },
         }),
@@ -1771,7 +1801,7 @@ test("a run that ended on its provider's usage limit pauses its issue once, with
         provider: "claude-code",
         model: "claude-sonnet-5-5",
         effort: "high",
-        attempt: 1,
+        continuation: { attempt: 1 },
       },
       { kind: "pause", ...at(4), pause: limit },
       { kind: "pause", ...at(5), pause: { ...limit, reset: null } },
@@ -1795,8 +1825,7 @@ test("a paused run resumes as the same attempt only once its provider's usage re
           provider: "codex",
           model: "gpt-5.5",
           effort: "low",
-          attempt: 2,
-          retry,
+          continuation: { attempt: 2, retry },
           ended: { paused: { ...limit, reset } },
         }),
       ],
@@ -1823,9 +1852,7 @@ test("a paused run resumes as the same attempt only once its provider's usage re
       provider: "codex",
       model: "gpt-5.5",
       effort: "low",
-      attempt: 2,
-      retry,
-      relaunch: true,
+      continuation: { attempt: 2, retry, relaunch: true },
     },
   ]);
 });
@@ -2011,10 +2038,12 @@ test("a paused-labelled claim no run holds settles as an orphaned claim under th
       provider: "claude-code",
       model: "claude-opus-5-5",
       effort: "xhigh",
-      attempt: 2,
-      retry: {
-        failure: "no factory run or open pull request holds its claim",
-        log: "",
+      continuation: {
+        attempt: 2,
+        retry: {
+          failure: "no factory run or open pull request holds its claim",
+          log: "",
+        },
       },
     },
   ]);
@@ -2044,7 +2073,7 @@ test("unpushable changes fail either attempt without a retry", () => {
         issues: [issue(4, claimed)],
         runs: [
           run(4, {
-            attempt,
+            continuation: { attempt },
             ended: { ...none, unpushedChanges: [".github/workflows/ci.yml"] },
           }),
         ],
@@ -2127,7 +2156,7 @@ test("each repository uses its own labels and model label prefix", () => {
       provider: "codex",
       model: "gpt-5.5",
       effort: "high",
-      attempt: 1,
+      continuation: { attempt: 1 },
     },
   ]);
   assert.equal(
@@ -2228,7 +2257,12 @@ test("an orphaned claim with unpushable commits fails without retry", () => {
 test("an orphaned second attempt fails without a third attempt", () => {
   const decisions = decide({
     issues: [issue(4, claimed)],
-    runs: [run(4, { attempt: 2, ended: { ...none, orphaned: true } })],
+    runs: [
+      run(4, {
+        continuation: { attempt: 2 },
+        ended: { ...none, orphaned: true },
+      }),
+    ],
   });
   assert.deepEqual(decisions[0], {
     kind: "fail",
@@ -2259,7 +2293,7 @@ test("after needs input is removed pickup starts a fresh attempt 1", () => {
       provider: "claude-code",
       model: "claude-sonnet-5-5",
       effort: "high",
-      attempt: 1,
+      continuation: { attempt: 1 },
     },
   ]);
 });
@@ -2292,7 +2326,7 @@ test("a failed first attempt waits for an unreadable readiness role, including i
       assert.deepEqual(launches(decisions), []);
       assert.match(skipOf(decisions, 4)!, /^retry waits: .*readiness waits:/);
       authorizing.ready.actor = owner;
-      assert.equal(launches(decide(observed))[0].attempt, 2);
+      assert.equal(launches(decide(observed))[0].continuation.attempt, 2);
     }
 });
 
@@ -2559,7 +2593,7 @@ test("without a drain threshold the pause threshold alone stops claims and runs,
     usage: { "claude-code": 94 },
     settings: pauseOnly,
   });
-  assert.equal(launches(resumed)[0]?.relaunch, true);
+  assert.equal(launches(resumed)[0]?.continuation.relaunch, true);
 });
 
 test("a usage hold keeps a high reading in force while usage is unknown, until its deadline", () => {
@@ -2768,7 +2802,7 @@ test("a merge relaunch retains its attempt and model and uses a cap slot at the 
     provider: "codex",
     model: "gpt-5.5",
     effort: "medium",
-    attempt: 2,
+    continuation: { attempt: 2 },
     ended: { timedOut: false, pullRequest: "open", mergeCandidate },
   });
   const input = {
@@ -2793,9 +2827,11 @@ test("a merge relaunch retains its attempt and model and uses a cap slot at the 
       provider: "codex",
       model: "gpt-5.5",
       effort: "medium",
-      attempt: 2,
-      relaunch: true,
-      mergeRelaunch: mergeCandidate,
+      continuation: {
+        attempt: 2,
+        relaunch: true,
+        mergeRelaunch: mergeCandidate,
+      },
     },
   ]);
   assert.deepEqual(launches(decide({ ...input, usage: { codex: 95 } })), []);
@@ -2836,7 +2872,7 @@ test("merge delivery respects skip and failed labels and unresolved models after
   };
   for (const ending of ["ended", "interrupted", "paused"]) {
     const previous = run(4, {
-      mergeRelaunch,
+      continuation: { mergeRelaunch },
       ended:
         ending === "paused"
           ? {
@@ -2900,7 +2936,7 @@ test("needs-input resumption and failed-label retry obey the existing pickup gat
       : [];
     const eligible = issue(4);
     assert.equal(
-      launches(decide({ issues: [eligible], claims }))[0]?.attempt,
+      launches(decide({ issues: [eligible], claims }))[0]?.continuation.attempt,
       1,
     );
     for (const held of [
@@ -2985,14 +3021,14 @@ test("a failed needs-input continuation retains its PR context on the automatic 
     issues: [issue(4, claimed)],
     runs: [
       run(4, {
-        inputResume,
+        continuation: { inputResume },
         ended: { timedOut: false, pullRequest: "closed" },
       }),
     ],
   });
   const retry = launches(decisions)[0];
-  assert.equal(retry?.attempt, 2);
-  assert.deepEqual(retry?.inputResume, inputResume);
+  assert.equal(retry?.continuation.attempt, 2);
+  assert.deepEqual(retry?.continuation.inputResume, inputResume);
 });
 
 test("actionable skips carry stable keys while blockers and transient roles stay log-only", () => {
@@ -3339,7 +3375,12 @@ test("a release hold permits pickup, retries, interrupted and paused relaunches 
     {},
     { runs: [run(4, { ended: none })], labels: claimed },
     {
-      runs: [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
+      runs: [
+        run(4, {
+          ended: { interrupted: true },
+          continuation: { mergeRelaunch: target },
+        }),
+      ],
       labels: claimed,
     },
     {
@@ -3407,7 +3448,12 @@ test("a factory hold stops pickup, retries, interrupted and paused relaunches, n
     { runs: [run(4, { ended: none })], labels: claimed },
     { runs: [run(4, { ended: { interrupted: true } })], labels: claimed },
     {
-      runs: [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
+      runs: [
+        run(4, {
+          ended: { interrupted: true },
+          continuation: { mergeRelaunch: target },
+        }),
+      ],
       labels: claimed,
     },
     {
@@ -3483,7 +3529,12 @@ test("a merge relaunch whose target PR alone carries the factory hold launches",
   ] as const)
     for (const runs of [
       [] as Run[],
-      [run(4, { ended: { interrupted: true }, mergeRelaunch: target })],
+      [
+        run(4, {
+          ended: { interrupted: true },
+          continuation: { mergeRelaunch: target },
+        }),
+      ],
     ]) {
       const repo = holdingRepository(widgets, [issue(4, claimed), issue(6)], {
         factoryHold: hold === null ? null : [...hold],
@@ -3589,7 +3640,10 @@ test("owned PRs never create repository holds for their run", () => {
       ],
     });
     assert.deepEqual(holdsOf(decisions, 4), []);
-    assert.equal(launches(decisions)[0]?.mergeRelaunch?.number, number);
+    assert.equal(
+      launches(decisions)[0]?.continuation.mergeRelaunch?.number,
+      number,
+    );
   }
 });
 
@@ -3663,17 +3717,22 @@ for (const ended of [
           holdObserved: [41],
           ownedPullRequests: [40, 41],
           ended,
-          mergeRelaunch: {
-            number: 40,
-            headCommit: "a".repeat(40),
-            baseBranch: "main",
-            createdAt: now,
+          continuation: {
+            mergeRelaunch: {
+              number: 40,
+              headCommit: "a".repeat(40),
+              baseBranch: "main",
+              createdAt: now,
+            },
           },
         }),
       ],
     });
     assert.deepEqual(holdsOf(decisions, 4), []);
-    assert.equal(launches(decisions)[0]?.mergeRelaunch?.number, 40);
+    assert.equal(
+      launches(decisions)[0]?.continuation.mergeRelaunch?.number,
+      40,
+    );
   });
 
 test("each continuation validates its model label once and reconciles independent holds", () => {

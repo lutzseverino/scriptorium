@@ -882,17 +882,13 @@ assessed again: each advance of the default branch can earn another relaunch
 when a head produced by previous recovery falls behind. The bound is per PR
 head, not one recovery for the entire PR.
 
-The agent brings the same PR onto the current base, revalidates, pushes, waits
-for current-head checks and reviews, then merges through the repository's
-installed babysit under existing merge authorization. It preserves dirty work,
-reviews and handoff context. The recovery-state prompt's restriction applies
-to restoring local state; the subsequent merge delivery is the task. Where
-installed babysit supports branch-update recovery, follow it, including stale-base
-exit `4`. Where it does not, the existing delivery-push instructions require
-fetching origin, resolving its default branch, inspecting outgoing history and
-diff, rebasing or replaying only the issue's changes, and revalidating.
-Never merge the default branch into the issue branch or use GitHub update-branch.
-Babysit's other merge gates always apply.
+The merge-relaunch prompt identifies the same PR, head and current base, and
+preserves dirty work, reviews and handoff context. The configured skill and
+installed repository rules decide delivery, checks, review and merge
+conditions. The prompt retains the delivery-push mechanism: fetch origin,
+resolve its default branch, inspect outgoing history and diff, rebase or replay
+only the issue's changes, and revalidate. Never merge the default branch into
+the issue branch. Recovery-state instructions apply to restoring local state.
 
 Repo Canon v0.19.1 has no branch-update recovery or final freshness guard: its
 ruleset does not require strict check freshness. A default-branch advance
@@ -919,11 +915,11 @@ external reviewer on its app-authored PRs. An owner can still manually request
 Codex review. Runs use only their supplied credentials; they never switch to
 the owner's account to trigger one.
 
-The host adds factory-run context to every launch prompt, including retries
-and recovered runs, and directs the agent to the repository's app-author
-review policy. The host remains independent of reviewer names and repository
-review configuration. Each consuming repository keeps its policy explicit in
-its configured `prompt` and agent guidance and implements it in its own
+The host adds unattended-execution, completion, supplied-credential and work
+preservation context to every launch prompt, including retries and recovered
+runs. It supplies observed holds as facts. It neither reads the repository's
+external-review policy nor adds review or merge policy to the prompt. The
+configured skill and installed repository guidance own that policy and its
 request and wait workflow.
 
 In this repository, `.github/factory-review-policy.json` contains version `1`

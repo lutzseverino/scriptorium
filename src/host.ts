@@ -20,7 +20,7 @@ import {
   type ConnectOptions,
   type ConnectionWithLinkAdditions,
 } from "@lutzseverino/postern";
-import { updateClone, readRecovery, type Recovery, type Git } from "./clone.ts";
+import { updateClone, readRecovery, type Git } from "./clone.ts";
 import {
   factoryConfigurationPath,
   launchArguments,
@@ -46,6 +46,7 @@ import {
   decideFactory,
   pullRequestIdentity,
   type Claim,
+  type Continuation,
   type Decision,
   type Issue,
   type Pause,
@@ -54,14 +55,16 @@ import {
   type Settings,
   type Snapshot,
 } from "./factory.ts";
-import { repositoryHold, observeHolds } from "./repository-holds.ts";
+import {
+  ownedPullRequests,
+  repositoryHold,
+  observeHolds,
+} from "./repository-holds.ts";
 import {
   relationshipSections,
   repositoryPlatform,
   runBranch,
   type RepositoryPlatform,
-  type MergeRelaunch,
-  type InputResume,
 } from "./platform.ts";
 import {
   githubTokens,
@@ -74,15 +77,9 @@ import {
 import type { HostConfiguration } from "./host-configuration.ts";
 import { ImageStorageHold, type ImageStorageStatus } from "./image-storage.ts";
 import type { Retention } from "./image-retention.ts";
-import {
-  completionSignal,
-  type LaunchRequest,
-  type LaunchResult,
-  type Registry,
-} from "./providers.ts";
+import type { LaunchRequest, LaunchResult, Registry } from "./providers.ts";
 import type { UsageWindow } from "./providers/usage.ts";
 import {
-  handBackLimit,
   mergeHead,
   observeEnding,
   observeOwnership,
@@ -100,6 +97,7 @@ import { createOwner } from "./owner.ts";
 import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
 import { followRunLog, readLogEnd } from "./run-log.ts";
+import { prompt } from "./prompt.ts";
 import { hostStatus, writeStatus } from "./status.ts";
 import { createUsage } from "./usage.ts";
 import type { Action, Phase, RunUpdate } from "./run-comment.ts";
@@ -151,7 +149,6 @@ type HostRun = Run & {
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
   launchResult?: LaunchResult;
-  recovery?: Recovery;
   // Keeps repository conventions available after restart if its config is invalid.
   configuration: FactoryConfiguration;
   base: string;
@@ -190,7 +187,6 @@ type Pass = {
   image: string | null;
   read: Repository | null;
   configuration: FactoryConfiguration | null;
-  hasReviewPolicy: boolean;
   // The repository's model policy from the same revision, null without one.
   modelPolicy: ModelPolicy | null;
   releaseHold?: number[] | null;
@@ -320,7 +316,6 @@ export function createHost(
       image: null,
       read: null,
       configuration: conventions.get(name) ?? null,
-      hasReviewPolicy: false,
       modelPolicy: null,
     };
     const pause = (reason: string) => (pass.paused = redactor.redact(reason));
@@ -340,16 +335,6 @@ export function createHost(
         ports.remoteUrl(name),
         configuration.gitIdentity,
       );
-      pass.hasReviewPolicy =
-        (
-          await git(clone, [
-            "ls-tree",
-            "--name-only",
-            "HEAD",
-            "--",
-            ".github/factory-review-policy.json",
-          ])
-        ).trim() === ".github/factory-review-policy.json";
       try {
         pass.configuration = readFactoryConfiguration(
           join(clone, factoryConfigurationPath),
@@ -460,7 +445,7 @@ export function createHost(
             run.issue,
             run.pullRequestSince,
             false,
-            run.target?.number,
+            run.continuation.target?.number,
           );
           run.ownedPullRequests = [
             ...new Set([
@@ -510,7 +495,7 @@ export function createHost(
         const ended = {
           ...run,
           since: run.pullRequestSince,
-          review: run.runKind === "review",
+          review: run.continuation.runKind === "review",
         };
         // An interrupted or paused run launches again; only its owned PRs
         // accumulate.
@@ -534,7 +519,8 @@ export function createHost(
             {
               ...run,
               id: run.provenance?.id ?? run.startedAt,
-              kind: run.runKind ?? "implement",
+              kind: run.continuation.runKind ?? "implement",
+              attempt: run.continuation.attempt,
             },
             run.configuration,
           );
@@ -689,7 +675,9 @@ export function createHost(
       const ending = await observeEnding(reads, issue, {
         issue: number,
         since: inputResume?.since,
-        target: inputResume?.review?.target ?? issue?.pullRequest?.target,
+        continuation: {
+          target: inputResume?.review?.target ?? issue?.pullRequest?.target,
+        },
       });
       const claim: Claim = {
         issue: number,
@@ -750,12 +738,13 @@ export function createHost(
           ...readdirSync(path)
             .filter((file) => /^issue-\d+-attempt-\d+\.json$/.test(file))
             .flatMap((file) => {
-              const run: Run = JSON.parse(
-                readFileSync(join(path, file), "utf8"),
-              );
+              const run: Partial<Run> & Pick<Continuation, "target"> =
+                JSON.parse(readFileSync(join(path, file), "utf8"));
+              // Settled legacy records are not migrated by startup.
+              const target = run.continuation?.target ?? run.target;
               return [
                 ...(run.ownedPullRequests ?? []),
-                ...(run.target ? [run.target.number] : []),
+                ...(target ? [target.number] : []),
               ];
             }),
         ]
@@ -770,7 +759,7 @@ export function createHost(
     mkdirSync(runsDirectory, { recursive: true });
     const path = join(
       runsDirectory,
-      `issue-${run.issue}-attempt-${run.attempt}.json`,
+      `issue-${run.issue}-attempt-${run.continuation.attempt}.json`,
     );
     writeFileSync(`${path}.partial`, `${JSON.stringify(recorded, null, 2)}\n`);
     renameSync(`${path}.partial`, path);
@@ -782,7 +771,7 @@ export function createHost(
         ...new Set([
           ...(run.provenance.ownedPullRequests ?? []),
           ...(run.ownedPullRequests ?? []),
-          ...(run.target ? [run.target.number] : []),
+          ...(run.continuation.target ? [run.continuation.target.number] : []),
         ]),
       ];
       writeFileSync(
@@ -821,6 +810,26 @@ export function createHost(
         const holdSettled =
           recorded.releaseHoldSettled ||
           (recorded.ended && "pullRequest" in recorded.ended);
+        if (!recorded.continuation) {
+          recorded.continuation = {};
+          for (const field of [
+            "attempt",
+            "retry",
+            "inputResume",
+            "mergeRelaunch",
+            "runKind",
+            "target",
+            "handBacks",
+            "implementedBy",
+            "relaunch",
+            "recovery",
+            "trigger",
+          ]) {
+            if (recorded[field] !== undefined)
+              recorded.continuation[field] = recorded[field];
+            delete recorded[field];
+          }
+        }
         const restored: HostRun = {
           ...recorded,
           ownedPullRequests:
@@ -908,7 +917,7 @@ export function createHost(
         token = await sandboxToken(
           run.repository,
           run.configuration,
-          run.runKind ?? "implement",
+          run.continuation.runKind ?? "implement",
         );
       } catch (error) {
         report(`${name}'s token was not refreshed: ${error}`);
@@ -927,14 +936,14 @@ export function createHost(
   }
 
   async function launch(decision: Decision & { kind: "launch" }, pass: Pass) {
-    const { repository, issue } = decision;
-    const kind = decision.runKind ?? "implement";
+    const { repository, issue, continuation } = decision;
+    const kind = continuation.runKind ?? "implement";
     // The decision core checked the arguments' placeholders for this launch.
     const invocationArguments = launchArguments(
       pass.configuration!,
       kind,
       issue,
-      (decision.target ?? decision.mergeRelaunch)?.number,
+      (continuation.target ?? continuation.mergeRelaunch)?.number,
     ) as string;
     const paths = directory(repository);
     // Run start mints the sandbox's token for its run kind alone.
@@ -944,10 +953,10 @@ export function createHost(
     const previous = find(decision);
     const mergeRelaunchHeads = [...(previous?.mergeRelaunchHeads ?? [])];
     if (
-      decision.mergeRelaunch &&
-      !mergeRelaunchHeads.includes(mergeHead(decision.mergeRelaunch))
+      continuation.mergeRelaunch &&
+      !mergeRelaunchHeads.includes(mergeHead(continuation.mergeRelaunch))
     )
-      mergeRelaunchHeads.push(mergeHead(decision.mergeRelaunch));
+      mergeRelaunchHeads.push(mergeHead(continuation.mergeRelaunch));
     const recovery = await readRecovery(git, paths.clone, runBranch(issue));
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
@@ -955,7 +964,7 @@ export function createHost(
     // their own logs beside implement's.
     const log = join(
       paths.logs,
-      `issue-${issue}-${decision.runKind ? `${decision.runKind}-` : ""}attempt-${decision.attempt}.log`,
+      `issue-${issue}-${continuation.runKind ? `${continuation.runKind}-` : ""}attempt-${continuation.attempt}.log`,
     );
     await mkdir(paths.sandboxes, { recursive: true, mode: 0o700 });
     const sandbox = await mkdtemp(join(paths.sandboxes, `issue-${issue}-`));
@@ -989,7 +998,7 @@ export function createHost(
       // unidentifiable credential require a person's trusted label.
     }
     const provenance: Provenance =
-      decision.relaunch && previous?.provenance
+      continuation.relaunch && previous?.provenance
         ? previous.provenance
         : {
             id: randomUUID(),
@@ -997,42 +1006,34 @@ export function createHost(
             at: startedAt,
             account,
             trusted: true,
-            ...(decision.trigger && { trigger: decision.trigger }),
+            ...(decision.continuation.trigger && {
+              trigger: decision.continuation.trigger,
+            }),
           };
     const run: HostRun = {
       provenance,
-      ...(decision.trigger && { trigger: decision.trigger }),
       configuration: pass.configuration!,
       repository,
       base,
       image: pass.image!,
       issue,
-      ...(decision.runKind && { runKind: decision.runKind }),
+      continuation: { ...continuation, ...(recovery && { recovery }) },
       provider: decision.provider,
       model: decision.model,
       effort: decision.effort,
       selection: decision.selection,
       ...(decision.diversity && { diversity: decision.diversity }),
-      ...(decision.target && { target: decision.target }),
-      ...(decision.handBacks !== undefined && {
-        handBacks: decision.handBacks,
-      }),
-      ...(decision.implementedBy !== undefined && {
-        implementedBy: decision.implementedBy,
-      }),
-      attempt: decision.attempt,
-      ...(decision.retry && { retry: decision.retry }),
-      ...(decision.inputResume && { inputResume: decision.inputResume }),
-      ...(decision.mergeRelaunch && { mergeRelaunch: decision.mergeRelaunch }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
       holdObserved: observeHolds(holdObserved, pass),
-      ownedPullRequests: previous?.ownedPullRequests,
+      ownedPullRequests:
+        previous?.ownedPullRequests ??
+        continuation.inputResume?.pullRequests.map(({ number }) => number),
       startedAt,
       pullRequestSince:
         previous?.pullRequestSince ??
-        decision.inputResume?.since ??
-        decision.inputResume?.pullRequests[0]?.createdAt ??
-        decision.mergeRelaunch?.createdAt ??
+        continuation.inputResume?.since ??
+        continuation.inputResume?.pullRequests[0]?.createdAt ??
+        continuation.mergeRelaunch?.createdAt ??
         startedAt,
       log,
       ended: null,
@@ -1046,7 +1047,6 @@ export function createHost(
       pausing: null,
       interrupted: false,
       settled: false,
-      recovery,
     };
     try {
       record(run);
@@ -1067,30 +1067,37 @@ export function createHost(
         name: `${repository}#${issue}`,
         cwd: paths.clone,
         image: pass.image!,
-        prompt:
-          prompt(
-            registry.providers
-              .get(run.provider)!
-              .renderInvocation(
-                runKind(pass.configuration!, kind)!.skill,
-                invocationArguments,
+        prompt: prompt(run.continuation, {
+          invocation: registry.providers
+            .get(run.provider)!
+            .renderInvocation(
+              runKind(pass.configuration!, kind)!.skill,
+              invocationArguments,
+            ),
+          retryTail: run.continuation.retry
+            ? await retryLogTail(run.continuation.retry.log)
+            : "",
+          holds: ["release", "factory"].flatMap((scope) => {
+            const held = repositoryHold(
+              scope as "release" | "factory",
+              pass,
+              ownedPullRequests(
+                run,
+                run.continuation.target ?? run.continuation.mergeRelaunch,
               ),
-            pass.hasReviewPolicy,
-            resultGuidance(pass.configuration!, kind),
-            decision.retry,
-            recovery,
-            decision.mergeRelaunch,
-            decision.inputResume,
-            pass.configuration!.labels.releaseHold,
-            pass.configuration!.labels.hold,
-            decision.runKind === undefined && decision.target
-              ? { target: decision.target, handBacks: decision.handBacks ?? 1 }
+            );
+            return held ? [held] : [];
+          }),
+          resultPath: `${sandboxResultDirectory}/${resultFile}`,
+          resultInstructions: resultGuidance(pass.configuration!, kind),
+          reviewTarget:
+            kind === "review"
+              ? (continuation.target ?? continuation.mergeRelaunch)?.number
               : undefined,
-          ) +
-          (decision.runKind === "review"
-            ? `\nReview target: PR #${decision.target?.number ?? decision.mergeRelaunch?.number}. Resolve its linked issue contract; when it has no linked issue, use the PR body as the Spec source.`
-            : "") +
-          `\nFactory filing run: ${provenance.id}. Cite findings filed by this run with this exact line in the issue body: <!-- scriptorium:filing-run {"run":"${provenance.id}"} -->`,
+          filingRun: provenance.id,
+          credentialLimits:
+            "Use only the supplied credentials; never discover or switch identities.",
+        }),
         branch: runBranch(issue),
         log: raw,
         idleTimeoutSeconds: settings.timeLimitMinutes * 60,
@@ -1126,7 +1133,13 @@ export function createHost(
           return;
         }
         try {
-          run.recovery = await readRecovery(git, paths.clone, runBranch(issue));
+          const recovery = await readRecovery(
+            git,
+            paths.clone,
+            runBranch(issue),
+          );
+          if (recovery) run.continuation.recovery = recovery;
+          else delete run.continuation.recovery;
         } catch (error) {
           report(
             `recovery inspection for ${repository}#${issue} failed; retain the clone and inspect its run branch before retry: ${error}`,
@@ -1134,7 +1147,7 @@ export function createHost(
         }
         if (!run.launchResult?.completionSignal) {
           report(
-            `${repository}#${issue} exited without completion signal; GitHub still decides delivery. Recovery state: ${JSON.stringify(run.recovery ?? { branch: runBranch(issue) })}; launch metadata: ${JSON.stringify(run.launchResult ?? null)}. Retain this clone and revalidate recovered work before publication.`,
+            `${repository}#${issue} exited without completion signal; GitHub still decides delivery. Recovery state: ${JSON.stringify(run.continuation.recovery ?? { branch: runBranch(issue) })}; launch metadata: ${JSON.stringify(run.launchResult ?? null)}. Retain this clone and revalidate recovered work before publication.`,
           );
         }
         // A run the stop signal recorded has its record and directory settled.
@@ -1345,7 +1358,8 @@ export function createHost(
             decision.issue,
             since,
             false,
-            previous?.target?.number ?? issue.pullRequest?.target.number,
+            previous?.continuation.target?.number ??
+              issue.pullRequest?.target.number,
           );
           // A review stopped with its PR ready to merge resumes as review,
           // and once its gate is cleared when it stopped at one.
@@ -1354,7 +1368,7 @@ export function createHost(
               ? previous.ended
               : undefined;
           const ready =
-            previous?.runKind === "review" &&
+            previous?.continuation.runKind === "review" &&
             ended?.openPullRequest &&
             !ended.openPullRequest.draft
               ? ended.openPullRequest
@@ -1363,10 +1377,10 @@ export function createHost(
           const review = ready
             ? {
                 target: pullRequestIdentity(ready),
-                ...(previous!.implementedBy !== undefined && {
-                  implementedBy: previous!.implementedBy,
+                ...(previous!.continuation.implementedBy !== undefined && {
+                  implementedBy: previous!.continuation.implementedBy,
                 }),
-                handBacks: previous!.handBacks ?? 0,
+                handBacks: previous!.continuation.handBacks ?? 0,
                 gated:
                   gates.some((label) => issue.labels.includes(label)) ||
                   pass.gated === null ||
@@ -1478,17 +1492,8 @@ export function createHost(
           provider: run.provider,
           model: run.model,
           effort: run.effort,
-          attempt: run.attempt,
-          ...(run.retry && { retry: run.retry }),
-          ...(run.inputResume && { inputResume: run.inputResume }),
-          ...(run.mergeRelaunch && { mergeRelaunch: run.mergeRelaunch }),
-          ...(run.runKind && { runKind: run.runKind }),
+          continuation: run.continuation,
           ...(run.selection && { selection: run.selection }),
-          ...(run.target && { target: run.target }),
-          ...(run.handBacks !== undefined && { handBacks: run.handBacks }),
-          ...(run.implementedBy !== undefined && {
-            implementedBy: run.implementedBy,
-          }),
           holdObserved: run.holdObserved,
           ownedPullRequests: run.ownedPullRequests,
           ...(run.result && { result: run.result }),
@@ -1623,82 +1628,6 @@ export function createHost(
   return { tick, interrupt, drain, refreshTokens, report };
 }
 
-export function prompt(
-  start: string,
-  hasReviewPolicy: boolean,
-  result: string,
-  retry?: { failure: string; log: string },
-  recovery?: Recovery,
-  mergeRelaunch?: MergeRelaunch,
-  inputResume?: InputResume,
-  releaseHoldLabel?: string,
-  holdLabel?: string,
-  handBack?: { target: MergeRelaunch; handBacks: number },
-): string {
-  const guidance = [
-    "Unattended execution:",
-    `This is a factory run.${hasReviewPolicy ? " Apply the repository-owned app-author review policy before requesting or waiting for external review of this run's own PRs, including after fixes, rebases, retries and resumed runs." : ""} Keep required checks, internal reviews, merge authorization and handling of findings that arrive enforced. Use only the supplied credentials; never discover or switch identities to trigger a review.`,
-    "Before every delivery push, fetch origin and resolve its remote default branch again (for example, git fetch --prune origin, then git remote set-head origin --auto). Inspect the outgoing commits, including per-parent patches for merges (git log --stat --patch -m origin/HEAD..HEAD), and the change against that refreshed base (git diff origin/HEAD...HEAD). Keep both history and diff limited to the issue's work. A clean final diff can conceal reverted workflow edits or unrelated rewritten commits. When an update is needed, safely rebase or replay only the issue's own changes onto the current base. Never merge the default branch into the issue branch. Intentional workflow edits must remain visible; never discard them to bypass permissions. Revalidate a reconstructed change before publication.",
-    "Preserve committed, staged, unstaged and untracked work and existing PR, review and handoff context before changing history. Continuing a branch does not require retaining unrelated history or override an owner's explicit request to reconstruct the issue's changes on the current base. If ownership is uncertain or reconstruction has conflicts, preserve the work and hand off under the repository's owner-question rules. After any permission refusal, stop with an explicit owner handoff: no second push, credential discovery or identity switch. Do not assume broader App permissions are necessary; ask the owner how to proceed.",
-    "There is no interactive notification or resume loop. Keep commands in the foreground and wait for validation to finish; inspect its final exit status before PR delivery. Do not yield while work is pending; detaching shell commands with &, nohup, disown or similar is not a substitute. A timeout is a failure to resolve, never evidence of a pass. Use bounded foreground command timeouts within the run's time limit.",
-    `Emit ${completionSignal} only after the requested delivery or explicit owner handoff is actually recorded, in your run result for a stop. The signal is loop control; GitHub outcomes and your run result still determine delivery.`,
-    result,
-    ...(releaseHoldLabel === undefined
-      ? []
-      : [
-          `Release hold: before any merge, check for open PRs carrying the label ${JSON.stringify(releaseHoldLabel)}, other than your own PR. While any exists, do not merge: finish implementation, validation and review, leave your PR open and end the run. The factory resumes merging after the hold ends. Installed babysit's merge check (repo-canon #742) supplies the mid-run guard and its release-hold exit; the prompt alone cannot prevent a release PR opened mid-run from racing a merge.`,
-        ]),
-    ...(holdLabel === undefined
-      ? []
-      : [
-          `Factory hold: before any merge, check for open issues and PRs carrying the label ${JSON.stringify(holdLabel)}, other than your own PR. While any exists, do not merge: finish implementation, validation and review, leave your PR open and end the run. The factory resumes merging after the hold ends. Installed babysit's merge check (repo-canon #789) supplies the mid-run guard and its hold exit; the prompt alone cannot stop a merge already under way.`,
-        ]),
-    ...(mergeRelaunch
-      ? [
-          `Merge relaunch: bring PR #${mergeRelaunch.number}, relaunched for head ${mergeRelaunch.headCommit}, onto the current default branch (${mergeRelaunch.baseBranch}); revalidate it; push; wait for current-head checks and reviews; then merge it through the repository's installed babysit under the existing merge authorization. Preserve this same PR, its reviews and handoff context and all dirty work. Where installed babysit supports branch-update recovery, follow it, including stale-base exit 4. Otherwise use the delivery-push instructions above to rebase or replay only this issue's changes and revalidate; babysit's other merge gates still apply. Conflicts, failed validation or checks, uncertain ownership and permission refusals require preserving work and a reasoned owner handoff without merging. Never use GitHub update-branch or merge the default branch into the issue branch.`,
-          "The recovery-state restriction below applies only to restoring local state. After that restoration, this merge-relaunch delivery is authorized subject to the repository's existing merge rules.",
-        ]
-      : []),
-    ...(handBack
-      ? [
-          `Review hand-back: the latest review of PR #${handBack.target.number} handed the work back (hand-back ${handBack.handBacks} of at most ${handBackLimit}). Continue this same PR from its branch and that review's findings; never open a replacement PR.`,
-        ]
-      : []),
-    ...(inputResume
-      ? [
-          `Needs-input resume: continue ${inputResume.pullRequests.length ? inputResume.pullRequests.map((pr) => `PR #${pr.number} (${pr.state}, branch ${pr.headBranch})`).join(", ") : "the preserved issue work"}. Preserve the same PR, its reviews, owner answers and handoff context, and bring only this issue's work onto the current default branch under the delivery instructions above. Reopen an existing closed-unmerged PR when needed. Never open a replacement PR. If PR ownership or identity is uncertain, preserve work and record an owner handoff. Readiness, usage and merge authorization still apply. The recovery-state restriction below applies only to restoring local state; after restoration this continuation and delivery are authorized under the repository's merge rules.`,
-        ]
-      : []),
-    ...(recovery
-      ? [
-          `Recovery state: ${JSON.stringify(recovery)}. Continue from this preserved branch and worktree, including committed, staged, unstaged and untracked changes, applying the delivery and reconstruction instructions above. Revalidate recovered work before publication. Recovery itself must not push, open a PR, merge, close the issue or grant readiness.`,
-        ]
-      : []),
-  ].join("\n");
-  if (!retry) return `${start}\n\n${guidance}`;
-  let tail = "";
-  try {
-    const log = readFileSync(retry.log, "utf8");
-    const lines = log.split("\n");
-    const terminated = lines.at(-1) === "";
-    if (terminated) lines.pop();
-    tail = lines.slice(-200).join("\n") + (log && terminated ? "\n" : "");
-    const bytes = Buffer.from(tail);
-    let begin = Math.max(0, bytes.length - 16 * 1024);
-    // Keep valid UTF-8 when the byte cap lands inside a character.
-    while (begin < bytes.length && (bytes[begin] & 0xc0) === 0x80) begin++;
-    tail = bytes.subarray(begin).toString("utf8");
-  } catch {
-    // A missing or unreadable first-attempt log does not prevent a retry.
-  }
-  return [
-    start,
-    `First attempt failure: ${retry.failure}`,
-    ...(tail ? [`First attempt log tail:\n${tail}`] : []),
-    guidance,
-  ].join("\n\n");
-}
-
 // How a run ended, when it paused.
 function pausedEnding(run: Pick<Run, "ended">): { paused: Pause } | null {
   return run.ended && "paused" in run.ended ? run.ended : null;
@@ -1727,8 +1656,10 @@ function recoveredPause(recorded: {
 }
 
 // The run comment's phase a run works in: a merge relaunch merges.
-function phaseOf(run: Pick<Run, "runKind" | "mergeRelaunch">): Phase {
-  return run.mergeRelaunch ? "merge" : (run.runKind ?? "implement");
+function phaseOf(run: Pick<Run, "continuation">): Phase {
+  return run.continuation.mergeRelaunch
+    ? "merge"
+    : (run.continuation.runKind ?? "implement");
 }
 
 // A run's facts on its phase's line; review rounds count its hand-backs.
@@ -1737,10 +1668,11 @@ function runFacts(run: Run) {
     provider: run.provider,
     model: run.model,
     effort: run.effort,
-    attempt: run.attempt,
+    attempt: run.continuation.attempt,
     round:
-      run.runKind === "review" || run.handBacks !== undefined
-        ? (run.handBacks ?? 0) + 1
+      run.continuation.runKind === "review" ||
+      run.continuation.handBacks !== undefined
+        ? (run.continuation.handBacks ?? 0) + 1
         : undefined,
   };
 }
@@ -1751,3 +1683,22 @@ const outcomeStates = {
   stop: "stopped",
   failed: "failed",
 } as const;
+
+async function retryLogTail(path: string): Promise<string> {
+  let tail = "";
+  try {
+    const log = await readFile(path, "utf8");
+    const lines = log.split("\n");
+    const terminated = lines.at(-1) === "";
+    if (terminated) lines.pop();
+    tail = lines.slice(-200).join("\n") + (log && terminated ? "\n" : "");
+    const bytes = Buffer.from(tail);
+    let begin = Math.max(0, bytes.length - 16 * 1024);
+    // Keep valid UTF-8 when the byte cap lands inside a character.
+    while (begin < bytes.length && (bytes[begin] & 0xc0) === 0x80) begin++;
+    tail = bytes.subarray(begin).toString("utf8");
+  } catch {
+    // A missing or unreadable first-attempt log does not prevent a retry.
+  }
+  return tail;
+}
