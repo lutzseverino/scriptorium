@@ -3815,3 +3815,158 @@ test("a deferred merge candidate retains its holds while a needs-input claim res
   assert.deepEqual(launches(decisions), []);
   assert.deepEqual(holdsOf(decisions, 4), [holdKeys.model]);
 });
+
+test("implement admission accounts across providers and repositories in the same pass", () => {
+  const repositories = [
+    repository(widgets, [issue(1)]),
+    repository(gadgets, [
+      issue(2, ["ready-for-agent", "model:codex/gpt-work"]),
+    ]),
+    repository("acme/third", [issue(3)]),
+  ];
+  const settings = { implement: { total: 2, perRepository: 1 } };
+  const decisions = decide({ repositories, settings });
+  assert.deepEqual(launched(decisions), [`${widgets}#1`, `${gadgets}#2`]);
+  assert.match(skipOf(decisions, 3, "acme/third")!, /host.*implement.*2/);
+  const sameRepository = decide({
+    issues: [issue(1), issue(2, ["ready-for-agent", "model:codex/gpt-work"])],
+    settings: { implement: { perRepository: 1 } },
+  });
+  assert.deepEqual(launched(sameRepository), [`${widgets}#1`]);
+  assert.match(skipOf(sameRepository, 2)!, /repository.*implement.*1/);
+  assert.equal(launches(decide({ repositories })).length, 3);
+});
+
+test("implement slots count non-ended sandboxes, including paused ones, and release ended work", () => {
+  const settings = { implement: { total: 1, perRepository: 1 } };
+  const paused = {
+    cause: "usage limit",
+    reset: null,
+    at: now,
+    until: "2026-10-10T12:00:00Z",
+  } as const;
+  const active = run(1);
+  assert.equal(
+    launches(
+      decide({
+        issues: [issue(1, [...claimed, "factory:paused"]), issue(2)],
+        runs: [active],
+        settings,
+      }),
+    ).length,
+    0,
+  );
+  for (const ended of [
+    none,
+    { interrupted: true },
+    { paused },
+    { timedOut: false, pullRequest: "open" },
+  ] as const) {
+    assert.deepEqual(
+      launched(
+        decide({
+          issues: [issue(2)],
+          runs: [run(1, { ended })],
+          settings,
+          claims: [{ issue: 3, pullRequest: "open" }],
+        }),
+      ),
+      [`${widgets}#2`],
+    );
+  }
+  for (const implement of [{ total: 0 }, { perRepository: 0 }])
+    assert.equal(
+      launches(decide({ issues: [issue(2)], settings: { implement } })).length,
+      0,
+    );
+});
+
+test("every implement continuation reacquires host and repository capacity", () => {
+  const target = {
+    number: 40,
+    headCommit: "a".repeat(40),
+    baseBranch: "main",
+    createdAt: now,
+  };
+  const scenarios: {
+    name: string;
+    runs?: Run[];
+    claims?: Claim[];
+    labels?: string[];
+  }[] = [
+    { name: "initial v2" },
+    { name: "retry", runs: [run(4, { ended: none })], labels: claimed },
+    {
+      name: "interruption",
+      runs: [run(4, { ended: { interrupted: true } })],
+      labels: claimed,
+    },
+    {
+      name: "resume",
+      runs: [
+        run(4, {
+          ended: {
+            paused: { cause: "usage limit", reset: null, at: now, until: now },
+          },
+        }),
+      ],
+      labels: ["factory:paused"],
+    },
+    {
+      name: "released stop",
+      claims: [
+        { issue: 4, pullRequest: "open", inputResume: { pullRequests: [] } },
+      ],
+    },
+    {
+      name: "merge delivery",
+      claims: [{ issue: 4, pullRequest: "open", mergeCandidate: target }],
+      labels: claimed,
+    },
+    {
+      name: "interrupted merge",
+      runs: [
+        run(4, {
+          ended: { interrupted: true },
+          continuation: { mergeRelaunch: target },
+        }),
+      ],
+      labels: claimed,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const input = {
+      issues: [issue(4, scenario.labels)],
+      claims: scenario.claims,
+      runs: scenario.runs,
+    };
+    assert.equal(launches(decide(input)).length, 1, scenario.name);
+    for (const implement of [{ total: 1 }, { perRepository: 1 }]) {
+      const busy = {
+        ...input,
+        runs: [
+          ...(scenario.runs ?? []),
+          run(9, { provider: "codex", model: "gpt-work" }),
+        ],
+        settings: { implement },
+      };
+      assert.equal(
+        launches(decide(busy)).length,
+        0,
+        `${scenario.name} ${JSON.stringify(implement)}`,
+      );
+      assert.match(skipOf(decide(busy), 4)!, /implement cap/);
+    }
+    // Retained ended work no longer owns the slot: the continuation can resume.
+    assert.equal(
+      launches(
+        decide({
+          ...input,
+          settings: { implement: { total: 1, perRepository: 1 } },
+        }),
+      ).length,
+      1,
+      scenario.name,
+    );
+  }
+});

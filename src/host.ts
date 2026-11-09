@@ -241,6 +241,7 @@ export function createHost(
         cap,
       ]),
     ),
+    implement: configuration.implement,
     drainThreshold: configuration.usage.drainThreshold,
     pauseThreshold: configuration.usage.pauseThreshold,
     timeLimitMinutes: configuration.timeLimitMinutes,
@@ -1583,7 +1584,8 @@ export function createHost(
                 redactor.redact(JSON.stringify(imageStorage)),
               ) as ImageStorageStatus)
             : undefined,
-          runs.filter((run) => !run.exited),
+          runs.map((run) => ({ ...run, ended: run.exited ? run.ended : null })),
+          configuration.implement,
         ),
       );
     } catch (error) {

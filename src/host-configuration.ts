@@ -16,6 +16,7 @@ export type HostConfiguration = {
   // Each repository the factory serves, as `<owner>/<name>`.
   repositories: string[];
   providers: Record<string, ProviderSettings & { cap: number }>;
+  implement?: ImplementLimits;
   // The default models for an implement attempt and its retry, and optional
   // defaults for triage and review runs, which otherwise take `default`.
   models: ModelSettings & {
@@ -40,6 +41,9 @@ export type HostConfiguration = {
   imageRetention: ImageRetention;
   imageStorage?: ImageStoragePolicy;
 };
+
+// Optional sandbox admission limits across providers; omission adds no limit.
+export type ImplementLimits = { total?: number; perRepository?: number };
 
 // How many obsolete sandbox image pairs the host keeps beyond every
 // repository's current pair and the pairs containers use, and how old the
@@ -233,10 +237,7 @@ function hostConfigurationProblems(value: unknown): string[] {
         (entry, path, problems, name) =>
           object(
             {
-              cap: number(
-                (cap) => Number.isSafeInteger(cap) && cap >= 0,
-                "is not a whole number of agents",
-              ),
+              cap: sandboxCap,
               credential: text(isAbsolute, "is not an absolute path"),
               ...(name === "claude-code" && {
                 usageCredential: text(isAbsolute, "is not an absolute path"),
@@ -249,6 +250,10 @@ function hostConfigurationProblems(value: unknown): string[] {
             ? null
             : `has no adapter; choose ${adapterNames.join(" or ")}`,
       ),
+      implement: object({ total: sandboxCap, perRepository: sandboxCap }, [
+        "total",
+        "perRepository",
+      ]),
       models: object(
         {
           effort: text(),
@@ -364,6 +369,7 @@ function hostConfigurationProblems(value: unknown): string[] {
       ),
     },
     [
+      "implement",
       "imageBuilder",
       "imageRetention",
       "imageStorage",
@@ -415,6 +421,11 @@ function authorizedRoles(platform: PlatformName): Check {
     { unique: (role) => role, nonEmpty: true },
   );
 }
+
+const sandboxCap = number(
+  (cap) => Number.isSafeInteger(cap) && cap >= 0,
+  "is not a whole number of agents",
+);
 
 const bytes = number(
   (value) => Number.isSafeInteger(value) && value > 0,

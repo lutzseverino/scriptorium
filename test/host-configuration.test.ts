@@ -611,3 +611,55 @@ test("optional triage and review defaults resolve within the host's capabilities
     assert.throws(() => read(path), problem);
   }
 });
+
+test("implement limits are optional independent nonnegative safe integers", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const limits of [
+    undefined,
+    {},
+    { total: 0 },
+    { perRepository: 0 },
+    { total: 2, perRepository: 1 },
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, ...(limits && { implement: limits }) }),
+    );
+    assert.deepEqual(read(path).configuration.implement, limits);
+  }
+  for (const field of ["total", "perRepository"]) {
+    for (const value of [
+      -1,
+      0.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      "2",
+      null,
+      true,
+      [],
+      {},
+    ]) {
+      writeFileSync(
+        path,
+        JSON.stringify({ ...base, implement: { [field]: value } }),
+      );
+      assert.match(
+        refused(path).join("\n"),
+        new RegExp(`implement\\.${field}:`),
+      );
+    }
+    // JSON parses overflow as Infinity, which must still be refused.
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, implement: { [field]: "overflow" } }).replace(
+        '"overflow"',
+        "1e400",
+      ),
+    );
+    assert.match(refused(path).join("\n"), new RegExp(`implement\\.${field}:`));
+  }
+  for (const implement of [null, [], 2, { unknown: 1 }]) {
+    writeFileSync(path, JSON.stringify({ ...base, implement }));
+    assert.match(refused(path).join("\n"), /implement(?:\.unknown)?:/);
+  }
+});

@@ -9,6 +9,8 @@ import {
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { status, type StatusPorts } from "../src/status-command.ts";
+import { hostStatus } from "../src/status.ts";
+import type { Run } from "../src/factory.ts";
 import { providerStatus } from "../src/events.ts";
 import { UsageReadError } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
@@ -596,3 +598,156 @@ test("unreadable policy records and incomplete owner entries never erase last-ob
     assert.equal(readFileSync(join(state, "owner.json"), "utf8"), owner);
   }
 });
+
+test("text and JSON project the host's shared implement counts with current limits and honest provenance", async (t) => {
+  const { path, state } = fixture(t);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  config.repositories = ["acme/widgets", "acme/gadgets", "acme/empty"];
+  const runs: Run[] = [
+    {
+      repository: "acme/widgets",
+      issue: 1,
+      provider: "codex",
+      model: "gpt-work",
+      effort: "high",
+      continuation: { attempt: 1 },
+      startedAt: now.toISOString(),
+      log: "/tmp/log",
+      ended: null,
+    },
+  ];
+  runs.push({
+    ...runs[0],
+    repository: "acme/gadgets",
+    issue: 2,
+    provider: "claude-code",
+  });
+  runs.push({
+    ...runs[0],
+    issue: 3,
+    continuation: { attempt: 1, runKind: "review" },
+  });
+  runs.push({
+    ...runs[0],
+    issue: 4,
+    ended: {
+      paused: {
+        cause: "usage limit",
+        reset: null,
+        at: now.toISOString(),
+        until: now.toISOString(),
+      },
+    },
+  });
+  const snapshot = hostStatus(
+    now.toISOString(),
+    config.repositories.map((name: string) => ({ name, paused: null })),
+    [],
+    [],
+    undefined,
+    runs,
+  );
+  mkdirSync(state);
+  writeFileSync(join(state, "status.json"), JSON.stringify(snapshot));
+  const before = readFileSync(join(state, "status.json"), "utf8");
+  for (const implement of [
+    undefined,
+    { total: 2, perRepository: 1 },
+    { total: 5, perRepository: 3 },
+    { total: 0 },
+  ]) {
+    writeFileSync(path, JSON.stringify({ ...config, implement }));
+    const result = await command([path, "--json"]);
+    const { capacity } = JSON.parse(result.output[0]);
+    assert.equal(capacity.observation.state, "last-observed");
+    assert.equal(capacity.observation.at, now.toISOString());
+    assert.deepEqual(capacity.host.runKinds, {
+      implement: 2,
+      triage: 0,
+      review: 1,
+    });
+    assert.deepEqual(capacity.host.implement, {
+      limit: implement?.total ?? null,
+      running: 2,
+      free: implement ? Math.max(0, implement.total - 2) : null,
+    });
+    assert.equal(capacity.repositories[0].implement.running, 1);
+    assert.equal(capacity.repositories[2].implement.running, 0);
+    assert.equal(
+      capacity.repositories[0].implement.free,
+      implement?.perRepository === undefined
+        ? null
+        : implement.perRepository - 1,
+    );
+    const text = await command([path]);
+    assert.match(text.output[0], /host: implement limit=.*running=2/);
+    assert.match(text.output[0], /acme\/widgets: implement limit=.*running=1/);
+    assert.ok(
+      text.output[0].includes(
+        `capacity observation=${JSON.stringify(capacity.observation)}`,
+      ),
+    );
+    assert.equal(readFileSync(join(state, "status.json"), "utf8"), before);
+  }
+  // Neither live usage nor a pending transaction can establish work capacity.
+  writeFileSync(
+    join(state, "events-state.json"),
+    JSON.stringify({ version: 1, pending: {} }),
+  );
+  const pending = JSON.parse(
+    (
+      await command([path, "--json", "--live-usage"], {
+        readUsage: async () => ({ used: 1, reset: null }),
+      })
+    ).output[0],
+  );
+  assert.equal(pending.capacity.host.implement.running, null);
+  assert.equal(pending.capacity.host.implement.free, null);
+  assert.equal(pending.capacity.observation.state, "unavailable");
+});
+
+for (const fault of [
+  "missing",
+  "legacy",
+  "future",
+  "inconsistent",
+  "duplicate",
+  "unreadable",
+  "new repository",
+])
+  test(`implement capacity is unavailable for ${fault} observations`, async (t) => {
+    const { path, state } = fixture(t);
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    config.implement = { total: 2, perRepository: 1 };
+    config.repositories = ["acme/widgets"];
+    writeFileSync(path, JSON.stringify(config));
+    mkdirSync(state);
+    const snapshot = hostStatus(
+      now.toISOString(),
+      [{ name: "acme/widgets", paused: null }],
+      [],
+    );
+    if (fault === "future")
+      snapshot.capacity.observedAt = "2100-01-01T00:00:00Z";
+    if (fault === "inconsistent") snapshot.capacity.host.runKinds.implement = 1;
+    if (fault === "duplicate")
+      snapshot.capacity.repositories.push(snapshot.capacity.repositories[0]);
+    if (fault === "new repository") snapshot.capacity.repositories = [];
+    if (fault === "unreadable") mkdirSync(join(state, "status.json"));
+    else if (fault !== "missing")
+      writeFileSync(
+        join(state, "status.json"),
+        JSON.stringify(fault === "legacy" ? {} : snapshot),
+      );
+    const capacity = JSON.parse(
+      (await command([path, "--json"])).output[0],
+    ).capacity;
+    assert.equal(capacity.observation.state, "unavailable");
+    for (const counts of [capacity.host, ...capacity.repositories]) {
+      assert.equal(counts.runKinds, null);
+      assert.equal(counts.implement.running, null);
+      assert.equal(counts.implement.free, null);
+    }
+    assert.equal(capacity.host.implement.limit, 2);
+    assert.equal(capacity.repositories[0].implement.limit, 1);
+  });

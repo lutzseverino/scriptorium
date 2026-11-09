@@ -3,7 +3,14 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ImageStorageStatus } from "./image-storage.ts";
-import type { Decision, Run } from "./factory.ts";
+import {
+  runningCounts,
+  emptyRunKindCounts,
+  type Decision,
+  type Run,
+  type RunKindCounts,
+} from "./factory.ts";
+import type { ImplementLimits } from "./host-configuration.ts";
 import type { ProviderStatus } from "./events.ts";
 
 export type RepositoryStatus = {
@@ -21,10 +28,38 @@ export type RepositoryStatus = {
   }[];
 };
 
+export type CapacityCounts = {
+  runKinds: RunKindCounts;
+  implement: { limit: number | null; running: number; free: number | null };
+};
+
+export type Capacity = {
+  observedAt: string;
+  counting: "non-ended-runs";
+  host: CapacityCounts;
+  repositories: (CapacityCounts & { repository: string })[];
+};
+
+export function capacityCounts(
+  runKinds: RunKindCounts,
+  limit: number | undefined,
+): CapacityCounts {
+  return {
+    runKinds,
+    implement: {
+      limit: limit ?? null,
+      running: runKinds.implement,
+      free:
+        limit === undefined ? null : Math.max(0, limit - runKinds.implement),
+    },
+  };
+}
+
 export type Status = {
   updatedAt: string;
   repositories: RepositoryStatus[];
   providers: ProviderStatus[];
+  capacity: Capacity;
   imageStorage?: ImageStorageStatus;
 };
 
@@ -37,10 +72,28 @@ export function hostStatus(
   providers: ProviderStatus[] = [],
   imageStorage?: ImageStorageStatus,
   runs: Run[] = [],
+  limits?: ImplementLimits,
 ): Status {
+  const counts = runningCounts(runs);
+  const names = new Set([
+    ...repositories.map(({ name }) => name),
+    ...counts.repositories.keys(),
+  ]);
   return {
     updatedAt,
     providers,
+    capacity: {
+      observedAt: updatedAt,
+      counting: "non-ended-runs",
+      host: capacityCounts(counts.host, limits?.total),
+      repositories: [...names].map((repository) => ({
+        repository,
+        ...capacityCounts(
+          counts.repositories.get(repository) ?? emptyRunKindCounts(),
+          limits?.perRepository,
+        ),
+      })),
+    },
     ...(imageStorage && { imageStorage }),
     repositories: repositories.map(({ name, paused }) => ({
       repository: name,
@@ -48,10 +101,15 @@ export function hostStatus(
         ? { state: "running" as const }
         : { state: "paused" as const, reason: paused }),
       ...(runs.some(
-        (run) => run.repository === name && run.continuation.mergeRelaunch,
+        (run) =>
+          run.repository === name &&
+          run.ended === null &&
+          run.continuation.mergeRelaunch,
       ) && {
         mergeRelaunches: runs.flatMap((run) =>
-          run.repository === name && run.continuation.mergeRelaunch
+          run.repository === name &&
+          run.ended === null &&
+          run.continuation.mergeRelaunch
             ? [
                 {
                   issue: run.issue,

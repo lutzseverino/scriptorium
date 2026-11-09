@@ -64,7 +64,7 @@ host configuration itself.
 ## Host configuration
 
 The host configuration is one JSON file. Every field is required except
-`providers.claude-code.usageCredential`, `imageBuilder`, `imageRetention`, `imageStorage` and
+`providers.claude-code.usageCredential`, `implement`, `imageBuilder`, `imageRetention`, `imageStorage` and
 the fields whose default the table below gives. Unknown fields are refused,
 and nothing comes from environment variables.
 
@@ -117,6 +117,8 @@ and nothing comes from environment variables.
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `repositories`                          | A non-empty list of distinct `<owner>/<name>` GitHub repositories the factory serves.                                                                                                                                                                |
 | `providers.<name>`                      | One entry per provider the host runs, named `claude-code` or `codex`. Only these providers are in the registry.                                                                                                                                      |
+| `implement.total`                       | Optional whole nonnegative safe integer limiting simultaneous implement sandboxes across all repositories and providers. Zero admits no implement; omitted means no host-total implement restriction.                                                |
+| `implement.perRepository`               | Optional whole nonnegative safe integer limiting simultaneous implement sandboxes in each repository across providers. Zero admits no implement; omitted means no per-repository implement restriction.                                              |
 | `providers.<name>.cap`                  | The whole number of sandboxes that provider may run at once across every repository.                                                                                                                                                                 |
 | `providers.<name>.credential`           | The absolute path of the launch credential: the Claude Code setup-token file, or the Codex login (`auth.json`). Claude also uses it for usage reads when `usageCredential` is omitted.                                                               |
 | `providers.claude-code.usageCredential` | Optional absolute path of a host-renewed Claude interactive-login copy, used only for usage reads. A configured but unusable copy never falls back to the launch token. See [Claude usage login](#claude-usage-login).                               |
@@ -1552,6 +1554,53 @@ Queued resume requests remain unapplied. Codex's existing usage adapter may
 make its temporary private credential copy and remove it after reading; the
 configured credential and factory records remain unchanged.
 
+### Implement capacity
+
+The optional host configuration object `implement` accepts `total` and
+`perRepository` independently. No numeric defaults are installed. Every implement
+sandbox must fit its provider cap and each configured implement limit, including
+initial attempts, retries, resumption, interruption recovery, review hand-backs
+and merge delivery that runs implement. Admissions consume slots immediately
+within the same pass, preserving the existing queue priority and other gates.
+Triage and review consume provider slots but no implement slots.
+
+All dimensions count the same non-ended factory-managed sandboxes. A paused
+sandbox still stopping counts until it ends; retained ended or paused records
+and claims awaiting merge take no slot. A later launch reacquires capacity.
+These caps neither end running work nor change usage or owner holds.
+
+The `capacity` field in status JSON extends the existing version 1 projection:
+
+- `counting: "non-ended-runs"` identifies the shared admission boundary.
+- `observation` has the same provenance shape as provider observations. Counts
+  come from `status.json.capacity.observedAt` and are always `last-observed`;
+  missing, legacy, unreadable, future or inconsistent snapshots and pending
+  operational transactions make them `unavailable`. A live usage read does not
+  establish work counts. The event checkpoint has no capacity fallback.
+- `host` and each entry of `repositories` contain `runKinds` (non-ended
+  `implement`, `triage` and `review` counts) and `implement` with `limit`,
+  `running` and `free`. Repository entries also name `repository`.
+- Limits come from the validated configuration read by the command. A `null`
+  limit means unset, with `free: null`; with a limit, free is
+  `max(0, limit - running)`. Zero free means exhausted. Unavailable observations
+  have `runKinds: null`, `running: null` and `free: null`, retaining the configured
+  limit. Text renders unset limits explicitly and observed unrestricted slots
+  as `unlimited`.
+
+The host's atomic status file carries the same capacity shape with concrete
+counts and its original `observedAt`, before the command adds provenance.
+Provider holds and usage facts remain independent of these free-slot counts.
+This mechanism accounts only for factory-managed sandbox admission. Independent
+hand launches cooperate with observations; there is no registration interface,
+shared booking service or serialization across launchers. Numeric free capacity
+is no reservation or launch grant.
+
+Homeserver's chosen values (one implement per repository, two per host) belong
+to the separate [homelab configuration rollout](https://github.com/lutzseverino/homelab/issues/367)
+and its [granted live acceptance](https://github.com/lutzseverino/homelab/issues/368),
+using the released configuration interface. This generic source change installs
+neither those values nor that deployment; guidance rollout remains separate.
+
 ### Observation provenance
 
 There is no liveness or operational-observation timeout. Reading a file cannot
@@ -1641,9 +1690,8 @@ permission. The status base and this model extension ship together in v4.0.0.
 Hand launchers read this single projection for both budget and model facts.
 
 Consumers should check `version`, inspect provenance and unavailable values,
-and allow additive fields. Host/repository/run-kind caps
-([#137](https://github.com/lutzseverino/scriptorium/issues/137)) extend through
-the same count projection. This command does not read orchestration threads or
+and allow additive fields. Implement capacity and run-kind counts use the same
+admission projection. This command does not read orchestration threads or
 implement the downstream records view.
 
 Exit status is `0` for an observation (including unavailable facts), `1` for
