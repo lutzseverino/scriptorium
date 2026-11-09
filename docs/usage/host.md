@@ -80,8 +80,16 @@ and nothing comes from environment variables.
     "codex": { "cap": 1, "credential": "/etc/factory/codex-auth.json" }
   },
   "models": {
+    "effort": "high",
     "default": "claude-sonnet-5-5",
-    "retry": "claude-opus-5-5@xhigh"
+    "retry": "claude-opus-5-5@xhigh",
+    "metadata": {
+      "claude-sonnet-5-5": { "guidance": "Routine implementation and triage" },
+      "codex/gpt-5.5": {
+        "guidance": "Complex implementation",
+        "effort": "xhigh"
+      }
+    }
   },
   "timeLimitMinutes": 240,
   "usage": {
@@ -117,6 +125,8 @@ and nothing comes from environment variables.
 | `models.review`                         | Optional default model for review runs. Without it, review takes `models.default`. Only an explicit value is a review's [provider diversity](#provider-diversity) alternative.                                                                       |
 | `models.allowed`                        | Optional non-empty list of unique model names, without efforts. Every entry must resolve through a configured provider. Default and retry must be listed; provider and model are compared, ignoring effort. Without it, no membership check applies. |
 | `models.retry`                          | The model a failed first implement attempt retries on, unless the repository's model policy prefers another.                                                                                                                                         |
+| `models.effort`                         | Required nonempty host-wide reasoning effort. Each provider validates it wherever it is effective. There is no implicit adapter default.                                                                                                             |
+| `models.metadata`                       | Optional object keyed by model identity, with nonempty `guidance` and/or an `effort` override per entry. Metadata must stay within configured providers and `models.allowed`.                                                                        |
 | `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                                                          |
 | `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                                                    |
 | `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                                                     |
@@ -154,6 +164,22 @@ back to another model. Pickup and retry launch nothing until the label is
 fixed or the operator lists that model. Interrupted, paused and merge
 relaunches also wait if their recorded model has been removed from the list.
 Omitting the list preserves unrestricted model selection.
+
+### Host migration to v4.0.0
+
+Supply `models.effort` explicitly before promoting a v4.0.0 candidate. To
+retain a host's previous `high` effort, set `"effort": "high"` in `models`;
+there is no inferred old-host effort or host schema version compatibility
+layer. Validate the matching candidate configuration with the candidate's
+read-only status command before promotion:
+
+```sh
+node src/main.ts status /path/to/candidate-host.json --json
+```
+
+This host migration is separate from the repository configuration v2/v3
+[compatibility contract](factory-configuration.md). Existing recorded runs
+keep their model and effort when resumed; capability restrictions still apply.
 
 Host configurations from before `platforms` set
 `"readiness": { "authorizedRoles": [...] }` and
@@ -384,6 +410,31 @@ an issue's model label choose within those capabilities and never grant one.
 Nothing model-specific is built into the factory; model identities are
 configuration.
 
+After choosing a model, the registry resolves effort in order: explicit
+`@<effort>` on a label or host selection (or `effort` on a repository policy
+selection), the chosen model's `models.metadata` override, then
+`models.effort`. This applies to every run kind, fallback and diversity
+alternative. The provider's accepted effort list still applies, including to
+later explicit selections. A valid per-model override shadows the host effort
+on that model. Metadata never selects a model, adds a provider, changes
+`models.allowed` or grants a capability.
+
+Metadata uses the resolver's canonical `<provider>/<model>` identity. Bare
+and qualified aliases are deduplicated; conflicting metadata is refused.
+Keys cannot contain `@<effort>`. The exposed catalog is the finite union of
+metadata, default/retry/per-kind selections and `allowed` identities, sorted
+by canonical identity. An unrestricted provider does not enumerate every
+possible model. Guidance is optional, including on a configured default.
+
+Model guidance is the host owner's short statement of which work a model in
+the host's catalog suits, from which every launcher chooses a model by fit,
+the cheaper one where several fit. A model without guidance is used only when
+named for a launch or as a configured default. Triage receives validated
+catalog, guidance, effort and default facts through the shared run prompt;
+Repo Canon owns the judgment rule. Factory review and implement retry remain
+deterministic under repository policy, host defaults and existing provider
+diversity. Per-issue factory review-model selection remains deferred.
+
 Each launch resolves its model in this order, and records the model and where
 it came from (`selection` in its run record: `issue-label`, `policy`,
 `host-default`, `fallback`, `diversity` or `recorded`):
@@ -431,7 +482,7 @@ Repo Canon checks the file's schema and ships no values.
 `version`, `fallback` and `runKinds` are required; every kind and attempt is
 optional and falls back to the host default. A selection is exactly
 `{ "provider", "model", "effort"? }` or exactly `{ "source": "issue-label" }`;
-an omitted effort is the provider's default. Unknown fields, mixed
+an omitted effort takes the model override, then host effort. Unknown fields, mixed
 selections and empty or untrimmed strings are invalid.
 
 `fallback` says what a launch does when its chosen model is valid but
@@ -1482,7 +1533,8 @@ node src/main.ts status /etc/factory/host.json --json
 node src/main.ts status /etc/factory/host.json --json --live-usage
 ```
 
-Text and JSON expose the same provider facts, in configuration order. The
+Text and JSON expose the same provider facts, in configuration order, and the
+same normalized model facts from the validated host configuration. The
 configuration is validated before any usage read. By default the command reads
 local observations only. `--live-usage` also attempts the configured providers'
 existing usage reads, honoring persisted read backoff. A failed read or an
@@ -1572,11 +1624,24 @@ unavailable or changed observations. Repository readiness, per-run pause
 recovery and every other launch gate still apply even when `free` is positive
 and an observed usage gate is clear.
 
+The top-level `models` field (rendered as `models=<JSON>` in text) contains:
+
+- `effort`: the required host-wide effort.
+- `defaults`: normalized `default`, `retry`, `triage` and `review` selections,
+  each with `provider`, `model` and resolved `effort`. Omitted per-kind defaults
+  inherit the full `default` selection, including explicit effort.
+- `catalog`: one entry per canonical `identity`, with `provider`, `model`,
+  optional `guidance`, optional `effort` override and `effectiveEffort` for a
+  selection omitting effort. A default selection's explicit effort can differ
+  from its catalog entry's effective effort.
+
+Model facts come from the configuration validated for this command, rather
+than the daemon's last pass; they do not assert daemon liveness or grant launch
+permission. The status base and this model extension ship together in v4.0.0.
+Hand launchers read this single projection for both budget and model facts.
+
 Consumers should check `version`, inspect provenance and unavailable values,
-and allow additive fields. This is the base status surface that the model
-catalog work ([#135](https://github.com/lutzseverino/scriptorium/issues/135))
-extends with catalog/default/retry/effort/guidance before its v4 release, and
-that host/repository/run-kind caps
+and allow additive fields. Host/repository/run-kind caps
 ([#137](https://github.com/lutzseverino/scriptorium/issues/137)) extend through
 the same count projection. This command does not read orchestration threads or
 implement the downstream records view.

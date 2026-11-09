@@ -54,6 +54,7 @@ for (const { exit, timeout } of [
       const ports = fakePorts();
       const adapter = createRegistry(
         { "claude-code": { credential } },
+        { effort: "high" },
         ports.ports,
       ).providers.get("claude-code")!;
       await adapter.launch({ ...request, idleTimeoutSeconds: 60 });

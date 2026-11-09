@@ -8,7 +8,11 @@
     },
     "cursor": { "cap": 1, "credential": "/etc/factory/cursor" }
   },
-  "models": { "default": "claude-sonnet-5-5", "retry": "claude-opus-5-5" },
+  "models": {
+    "effort": "high",
+    "default": "claude-sonnet-5-5",
+    "retry": "claude-opus-5-5"
+  },
   "timeLimitMinutes": 240,
   "usage": { "drainThreshold": 90, "reserve": 5 },
   "pollSeconds": 300,

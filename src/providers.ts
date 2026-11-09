@@ -49,10 +49,8 @@ export type ProviderAdapter = {
   readonly name: string;
   // The host file holding the provider's launch credential.
   readonly credential: string;
-  // The reasoning efforts the agent CLI accepts, and the one a model without
-  // `@<effort>` runs at.
+  // The reasoning efforts the agent CLI accepts. Values come from the host.
   readonly efforts: readonly string[];
-  readonly defaultEffort: string;
   // A bare model slug with one of these prefixes runs on this provider.
   readonly vendorPrefixes: readonly string[];
   // Renders a skill invocation in this agent CLI's syntax.
@@ -106,8 +104,33 @@ export type ProviderSettings = { credential: string; usageCredential?: string };
 
 export type Model = { provider: string; model: string; effort: string };
 
+export type ModelMetadata = { guidance?: string; effort?: string };
+export type ModelSettings = {
+  effort: string;
+  default?: string;
+  retry?: string;
+  triage?: string;
+  review?: string;
+  allowed?: readonly string[];
+  metadata?: Record<string, ModelMetadata>;
+};
+
+// The finite configured catalog, not a provider's discoverable model inventory.
+// Defaults include their selection's explicit effort, if any; catalog effort
+// is what a selection omitting @effort would use.
+export type ModelFacts = {
+  effort: string;
+  defaults: Partial<Record<"default" | "retry" | "triage" | "review", Model>>;
+  catalog: (Omit<Model, "effort"> &
+    ModelMetadata & {
+      identity: string;
+      effectiveEffort: string;
+    })[];
+};
+
 export type Registry = {
   readonly providers: ReadonlyMap<string, ProviderAdapter>;
+  readonly modelFacts: ModelFacts;
   // A host configuration model: `<slug>` or `<provider>/<slug>`, optionally
   // followed by `@<effort>`.
   resolveModel(value: string): Model | { error: string };
@@ -117,8 +140,8 @@ export type Registry = {
 
 export function createRegistry(
   configured: Record<string, ProviderSettings>,
+  settings: ModelSettings,
   ports: ProviderPorts = defaultPorts,
-  allowed?: readonly string[],
 ): Registry {
   const unknown = Object.keys(configured).filter(
     (name) => !Object.hasOwn(adapters, name),
@@ -142,7 +165,10 @@ export function createRegistry(
   );
   const configuredNames = [...providers.keys()];
 
-  function resolve(hint: string, value: string): Model | { error: string } {
+  function route(
+    hint: string,
+    value: string,
+  ): Omit<Model, "effort"> | { error: string } {
     const at = value.lastIndexOf("@");
     const name = at === -1 ? value : value.slice(0, at);
     const slash = name.indexOf("/");
@@ -168,37 +194,129 @@ export function createRegistry(
         error: `provider ${provider} is not configured on this host; ${choose(configuredNames)}`,
       };
     if (model === "") return { error: `model ${name} names no model` };
-    const effort = at === -1 ? adapter.defaultEffort : value.slice(at + 1);
-    if (!adapter.efforts.includes(effort))
-      return {
-        error: `effort ${JSON.stringify(effort)} is not one ${provider} accepts: ${adapter.efforts.join(", ")}`,
-      };
-    return { provider, model, effort };
+    return { provider, model };
   }
 
-  const listed = allowed?.map((value) => {
-    const model = resolve("", value);
-    if ("error" in model) throw new Error(model.error);
-    return `${model.provider}/${model.model}`;
+  const identityOf = (model: Omit<Model, "effort">) =>
+    `${model.provider}/${model.model}`;
+  const problems: string[] = [];
+  const catalog = new Map<string, Omit<Model, "effort">>();
+  const listed = settings.allowed && new Set<string>();
+  settings.allowed?.forEach((value, index) => {
+    const path = `models.allowed[${index}]`;
+    const model = route("", value);
+    if (value.includes("@"))
+      problems.push(`${path}: must not specify an effort`);
+    else if ("error" in model) problems.push(`${path}: ${model.error}`);
+    else {
+      const identity = identityOf(model);
+      if (listed!.has(identity)) problems.push(`${path}: repeats ${identity}`);
+      listed!.add(identity);
+      catalog.set(identity, model);
+    }
   });
-  function permitted(hint: string, value: string): Model | { error: string } {
-    const model = resolve(hint, value);
+  function permitted(
+    hint: string,
+    value: string,
+  ): Omit<Model, "effort"> | { error: string } {
+    const model = route(hint, value);
     if ("error" in model) return model;
-    const identity = `${model.provider}/${model.model}`;
-    return listed && !listed.includes(identity)
+    const identity = identityOf(model);
+    return listed && !listed.has(identity)
       ? {
           error: `model ${identity} is not in models.allowed; ask the host operator to update the list or choose a listed model`,
         }
       : model;
   }
 
+  const metadata = new Map<string, ModelMetadata>();
+  for (const [value, entry] of Object.entries(settings.metadata ?? {})) {
+    const path = `models.metadata.${value}`;
+    const model = permitted("", value);
+    if (value.includes("@"))
+      problems.push(`${path}: must not specify an effort in the identity`);
+    else if ("error" in model) problems.push(`${path}: ${model.error}`);
+    else {
+      const identity = identityOf(model);
+      const previous = metadata.get(identity);
+      if (
+        previous &&
+        (previous.effort !== entry.effort ||
+          previous.guidance !== entry.guidance)
+      )
+        problems.push(`${path}: conflicts with metadata for ${identity}`);
+      else {
+        metadata.set(identity, entry);
+        catalog.set(identity, model);
+      }
+      if (entry.effort !== undefined) {
+        const error = effortProblem(model.provider, entry.effort);
+        if (error) problems.push(`${path}.effort: ${error}`);
+      }
+    }
+  }
+
+  function effortProblem(provider: string, effort: string): string | null {
+    const efforts = providers.get(provider)!.efforts;
+    return efforts.includes(effort)
+      ? null
+      : `effort ${JSON.stringify(effort)} is not one ${provider} accepts: ${efforts.join(", ")}`;
+  }
+
+  function resolve(hint: string, value: string): Model | { error: string } {
+    const model = permitted(hint, value);
+    if ("error" in model) return model;
+    const at = value.lastIndexOf("@");
+    const effort =
+      at === -1
+        ? (metadata.get(identityOf(model))?.effort ?? settings.effort)
+        : value.slice(at + 1);
+    const error = effortProblem(model.provider, effort);
+    return error ? { error } : { ...model, effort };
+  }
+
+  const defaults: ModelFacts["defaults"] = {};
+  for (const field of ["default", "retry", "triage", "review"] as const) {
+    const value = settings[field];
+    if (value === undefined) continue;
+    const model = permitted("", value);
+    if (!("error" in model)) catalog.set(identityOf(model), model);
+    const resolved = resolve("", value);
+    if ("error" in resolved)
+      problems.push(`models.${field}: ${resolved.error}`);
+    else defaults[field] = resolved;
+  }
+  if (defaults.default) {
+    if (settings.triage === undefined) defaults.triage = defaults.default;
+    if (settings.review === undefined) defaults.review = defaults.default;
+  }
+  const entries = [...catalog]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([identity, model]) => {
+      const entry = metadata.get(identity);
+      const effectiveEffort = entry?.effort ?? settings.effort;
+      const error = effortProblem(model.provider, effectiveEffort);
+      if (error && entry?.effort === undefined)
+        problems.push(`models.effort (effective for ${identity}): ${error}`);
+      return { identity, ...model, ...entry, effectiveEffort };
+    });
+  // Even a provider with no named catalog models needs an effective host
+  // effort. Future selections are validated again at resolution time.
+  for (const provider of configuredNames) {
+    if (entries.some((entry) => entry.provider === provider)) continue;
+    const error = effortProblem(provider, settings.effort);
+    if (error) problems.push(`models.effort (provider ${provider}): ${error}`);
+  }
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+
   return {
     providers,
-    resolveModel: (value) => permitted("", value),
+    modelFacts: { effort: settings.effort, defaults, catalog: entries },
+    resolveModel: (value) => resolve("", value),
     resolveModelLabel(prefix, label) {
       if (!label.startsWith(prefix))
         return { error: `label ${label} is not under the prefix ${prefix}` };
-      return permitted(prefix, label.slice(prefix.length));
+      return resolve(prefix, label.slice(prefix.length));
     },
   };
 }

@@ -42,6 +42,67 @@ async function command(args: string[], extra: Partial<StatusPorts> = {}) {
   return { code, output, errors };
 }
 
+test("text and JSON status share the normalized catalog, guidance, effort and defaults", async (t) => {
+  const { path, state } = fixture(t);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  config.models = {
+    effort: "medium",
+    default: "claude-work@high",
+    retry: "gpt-work",
+    review: "codex/gpt-work@xhigh",
+    allowed: ["claude-work", "gpt-work", "gpt-unnamed"],
+    metadata: {
+      "gpt-work": { guidance: "Routine work", effort: "low" },
+      "codex/gpt-work": { guidance: "Routine work", effort: "low" },
+    },
+  };
+  writeFileSync(path, JSON.stringify(config));
+  const json = await command([path, "--json"]);
+  assert.equal(json.code, 0, json.errors.join("\n"));
+  const budget = JSON.parse(json.output[0]);
+  assert.deepEqual(budget.models, {
+    effort: "medium",
+    defaults: {
+      default: {
+        provider: "claude-code",
+        model: "claude-work",
+        effort: "high",
+      },
+      retry: { provider: "codex", model: "gpt-work", effort: "low" },
+      triage: { provider: "claude-code", model: "claude-work", effort: "high" },
+      review: { provider: "codex", model: "gpt-work", effort: "xhigh" },
+    },
+    catalog: [
+      {
+        identity: "claude-code/claude-work",
+        provider: "claude-code",
+        model: "claude-work",
+        effectiveEffort: "medium",
+      },
+      {
+        identity: "codex/gpt-unnamed",
+        provider: "codex",
+        model: "gpt-unnamed",
+        effectiveEffort: "medium",
+      },
+      {
+        identity: "codex/gpt-work",
+        provider: "codex",
+        model: "gpt-work",
+        guidance: "Routine work",
+        effort: "low",
+        effectiveEffort: "low",
+      },
+    ],
+  });
+  const text = await command([path]);
+  assert.equal(text.code, 0);
+  assert.ok(text.output[0].includes(`models=${JSON.stringify(budget.models)}`));
+  assert.equal(budget.providers[0].cap, 2);
+  assert.equal(budget.providers[0].running, null);
+  assert.equal(existsSync(state), false);
+});
+
 test("status reports missing work as unavailable, never zero, without creating state", async (t) => {
   const { path, state } = fixture(t);
   const result = await command([path, "--json"]);

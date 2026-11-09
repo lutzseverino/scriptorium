@@ -30,7 +30,6 @@ export function codexAdapter(
     name: "codex",
     credential,
     efforts,
-    defaultEffort: "high",
     vendorPrefixes: ["gpt-"],
     renderInvocation: (skill, args) => `$${skill}${args ? ` ${args}` : ""}`,
     // The login is mounted read-only as it stands at this launch; the rest of

@@ -361,6 +361,7 @@ test("fallback deadlines count from receipt and a replaced credential recovers a
     const reports: string[] = [];
     const adapter = createRegistry(
       { "claude-code": { credential } },
+      { effort: "high" },
       fakePorts({
         fetch: async (_url, init) => {
           tokens.push(new Headers(init?.headers).get("authorization") ?? "");
@@ -435,6 +436,7 @@ test("a configured Claude usage login retains cache/backoff across replacement a
     const tokens: string[] = [];
     const adapter = createRegistry(
       readHostConfiguration(hostPath, assert.fail).providers,
+      { effort: "high" },
       fakePorts({
         fetch: async (_url, init) => {
           tokens.push(new Headers(init?.headers).get("authorization")!);
@@ -507,6 +509,7 @@ test("missing, expired and malformed usage copies and empty windows stay unknown
         usageCredential,
       },
     },
+    { effort: "high" },
     fakePorts({
       fetch: async () => {
         requests++;
@@ -622,6 +625,7 @@ test("Claude Code's refusals reach the process log with the provider and status,
   ] as const) {
     const adapter = createRegistry(
       { "claude-code": { credential } },
+      { effort: "high" },
       fakePorts({
         fetch: async () =>
           new Response('{"error":"sk-ant-oat01-secret body"}', {

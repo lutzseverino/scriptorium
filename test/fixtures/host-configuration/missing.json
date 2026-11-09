@@ -1,7 +1,7 @@
 {
   "repositories": ["acme/widgets"],
   "providers": { "claude-code": { "credential": "/etc/factory/claude-token" } },
-  "models": { "default": "claude-sonnet-5-5" },
+  "models": { "effort": "high", "default": "claude-sonnet-5-5" },
   "timeLimitMinutes": 240,
   "usage": { "pauseThreshold": 95 },
   "readiness": {},

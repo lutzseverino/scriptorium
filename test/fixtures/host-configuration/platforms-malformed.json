@@ -5,6 +5,7 @@
     "codex": { "cap": 1, "credential": "/etc/factory/codex-auth.json" }
   },
   "models": {
+    "effort": "high",
     "default": "claude-sonnet-5-5",
     "retry": "claude-opus-5-5@xhigh"
   },
