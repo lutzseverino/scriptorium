@@ -8683,7 +8683,7 @@ test("a triage run's result posts its brief in the factory's frame and applies i
     remotes: {
       "acme/widgets": remote(t, {
         ...kindsFiles,
-        ".factory/config.json": JSON.stringify(resultConventions),
+        ".scriptorium/config.json": JSON.stringify(resultConventions),
       }),
     },
   });
