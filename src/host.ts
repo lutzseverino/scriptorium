@@ -65,7 +65,6 @@ import {
   repositoryPlatform,
   runBranch,
   type RepositoryPlatform,
-  type InputResume,
 } from "./platform.ts";
 import {
   githubTokens,

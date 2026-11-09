@@ -8387,7 +8387,7 @@ test("an independent review's answered stop resumes review on its PR after its l
   await restarted.tick();
   assert.equal(run.launched.length, 2, run.reports.join("\n"));
   assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
-  assert.equal(recordOf(run.state, 42, 1).target.number, 42);
+  assert.equal(recordOf(run.state, 42, 1).continuation.target.number, 42);
   assert.equal(runComments(item).length, 1);
   assert.equal(actions(item).length, 1);
 });
