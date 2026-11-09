@@ -5678,7 +5678,12 @@ for (const state of ["live", "ended", "awaiting merge", "paused", "restarted"])
       const comments = [...issue.comments];
       await active.tick();
       assert.deepEqual(issue.labels, ["ready-for-agent"]);
-      assert.deepEqual(issue.comments, comments);
+      // A merged PR an ended run observed ends the pass on its run comment;
+      // nothing new is posted.
+      if (closure === "merged" && !["live", "paused"].includes(state)) {
+        assert.equal(issue.comments.length, comments.length);
+        assert.match(runComment(issue), /^\*\*Factory run: merged\*\*\n/);
+      } else assert.deepEqual(issue.comments, comments);
       if (state === "live") {
         run.launched[0].finish();
         await settled();
