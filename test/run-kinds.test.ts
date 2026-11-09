@@ -379,13 +379,16 @@ test("a person's triage label starts a claimed triage run on the host's triage d
       {
         kind: "launch",
         ...at,
-        continuation: { runKind: "triage", attempt: 1 },
+        continuation: {
+          runKind: "triage",
+          attempt: 1,
+          trigger: {
+            id: "label:2026-10-04T00:00:00Z",
+            at: "2026-10-04T00:00:00Z",
+          },
+        },
         provider: "provider-a",
         model: "model-triage",
-        trigger: {
-          id: "label:2026-10-04T00:00:00Z",
-          at: "2026-10-04T00:00:00Z",
-        },
         effort: "medium",
         selection: "host-default",
       },

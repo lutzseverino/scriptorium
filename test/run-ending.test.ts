@@ -352,7 +352,7 @@ test("an ending reads the platform and its branch once, accumulating owned PRs",
   // attempt returns it.
   const consumed = {
     issue: 4,
-    mergeRelaunch: pr,
+    continuation: { mergeRelaunch: pr },
     mergeRelaunchHeads: [`42:${pr.headCommit}`],
   };
   assert.equal(

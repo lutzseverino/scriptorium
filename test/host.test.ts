@@ -2370,7 +2370,7 @@ test("review policy files do not add policy to prompts through retries and recov
     remotes: {
       "acme/widgets": remote(t, {
         ...factoryFiles,
-        // Presence controls the prompt; babysit owns declaration validation.
+        // The renderer ignores policy; the delivery skill validates it.
         ".github/factory-review-policy.json": "invalid JSON\n",
       }),
       "acme/gadgets": remote(t, factoryFiles),
@@ -2407,7 +2407,8 @@ test("review policy files do not add policy to prompts through retries and recov
     const guidance = (text: string) =>
       text
         .split("\n\nUnattended execution:\n")[1]
-        .split("\nRecovery state:")[0];
+        .split("\nRecovery state:")[0]
+        .split("\nFactory filing run:")[0];
     assert.equal(guidance(withPolicy), guidance(withoutPolicy));
     if (offset > 0) {
       assert.match(withPolicy, /First attempt failure:/);
