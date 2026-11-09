@@ -353,6 +353,48 @@ test("usage backoff is honored and a reserve ends under the host's existing rule
   assert.equal(readFileSync(join(state, "owner.json"), "utf8"), original);
 });
 
+test("a damaged cached reading cannot discard or extend a valid usage hold", async (t) => {
+  const { path, state } = fixture(t);
+  mkdirSync(state);
+  const hold = {
+    used: 96,
+    at: "2026-11-08T11:30:00.000Z",
+    since: "2026-11-08T11:30:00.000Z",
+    until: "2026-11-08T13:00:00.000Z",
+  };
+  const original = JSON.stringify({
+    "claude-code": {
+      reading: { used: 96, at: "bad timestamp" },
+      hold,
+      nextRead: null,
+      failure: null,
+    },
+  });
+  writeFileSync(join(state, "usage.json"), original);
+  for (const mode of ["offline", "failed", "no-window", "high"]) {
+    const live = mode !== "offline";
+    const result = await command(
+      [path, "--json", ...(live ? ["--live-usage"] : [])],
+      {
+        readUsage: async () => {
+          if (mode === "failed") throw new Error("private response");
+          return mode === "high"
+            ? { used: 96, reset: "2026-11-08T15:00:00.000Z" }
+            : null;
+        },
+      },
+    );
+    const provider = JSON.parse(result.output[0]).providers[0];
+    assert.equal(provider.usageHold.since, hold.since, mode);
+    assert.equal(provider.usageHold.until, hold.until, mode);
+    assert.equal(provider.claimsHeld, true, mode);
+    assert.equal(provider.pauseAtThreshold, true, mode);
+    assert.equal(provider.pausedRecoveryUsageHeld, true, mode);
+    assert.equal(provider.usage.state, mode === "high" ? "known" : "unknown");
+    assert.equal(readFileSync(join(state, "usage.json"), "utf8"), original);
+  }
+});
+
 for (const damaged of [
   "unreadable",
   "negative",

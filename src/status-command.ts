@@ -341,8 +341,9 @@ export async function readBudget(
               usageObservation,
               "cached usage expired",
             );
+          // The hold is independent evidence even if its cached reading is damaged.
           const hold = usageHoldAfter(
-            usageKnown ? cachedHold : null,
+            pending ? null : cachedHold,
             reading,
             projectionTime,
             configuration.usage,
@@ -423,9 +424,10 @@ export async function readBudget(
             paused,
             retained,
             claimsHeld,
-            pausedRecoveryUsageHeld: usageObserved
-              ? continuation.claimsHeld
-              : null,
+            pausedRecoveryUsageHeld:
+              continuation.claimsHeld || usageObserved
+                ? continuation.claimsHeld
+                : null,
             launchPermission: "not-established",
             thresholds: {
               ...projected.thresholds,
@@ -433,7 +435,10 @@ export async function readBudget(
                 ? projected.thresholds.effectiveDrainThreshold
                 : null,
             },
-            pauseAtThreshold: usageObserved ? projected.pauseAtThreshold : null,
+            pauseAtThreshold:
+              projected.pauseAtThreshold || usageObserved
+                ? projected.pauseAtThreshold
+                : null,
             drained:
               claimsHeld === true && running !== null
                 ? running === 0
