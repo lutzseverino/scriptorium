@@ -14,7 +14,8 @@
     "lint": "oxlint --deny-warnings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "validate": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
+    "validate": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "release:check": "node scripts/check-release-artifact.ts"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "0.12.0",
@@ -23,9 +24,10 @@
   "devDependencies": {
     "@standard-schema/spec": "1.1.0",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
+    "ajv": "8.20.0",
     "oxlint": "1.89.0",
-    "prettier": "3.9.10"
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
   },
   "packageManager": "pnpm@11.28.8"
 }

@@ -79,6 +79,13 @@ retention against a fake Docker daemon that fails on a forced removal or any
 host-wide prune, covering ownership, shared and current pairs, container
 references, inventory failures and removal races.
 
+`test/configuration-schema.test.ts` resolves the candidate release's schema and
+same-tag configuration and sandbox-image docs against the local tree, using
+Ajv to validate v2/v3 fixtures and invalid contracts. The host parser remains
+authoritative for label uniqueness and comment-template semantics. After
+publication, run `pnpm release:check <tag-pinned-schema-URL>` as the
+[release procedure](release.md) directs to verify public resolution.
+
 The fast `test/agent-layer.test.ts` guard executes the install commands with
 spies, without Docker or network access, for both architectures. It rejects
 missing or malformed pins and extraction or installation before verification.

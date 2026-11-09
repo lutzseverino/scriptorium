@@ -42,7 +42,7 @@ keeps its own service definition and credential files.
 
 - Serves many repositories from one process, with one oldest-first queue.
 - Accepts readiness only from a person holding a role the host authorizes.
-- Builds each toolchain image from the repository's `.factory/Dockerfile`.
+- Builds each toolchain image from the repository's `.scriptorium/Dockerfile`.
 - Removes its own obsolete images after it builds, and its old build cache when a host opts in.
 - Caps each provider's concurrent sandboxes and stops its new claims at high usage.
 - Pauses a provider's runs near or at its usage limit and resumes them unattended.
@@ -67,7 +67,7 @@ request is open.
 
 The operator owns the [host configuration](docs/usage/host.md#host-configuration).
 Each repository owns its [factory configuration](docs/usage/factory-configuration.md),
-`.factory/config.json`, and its toolchain image, `.factory/Dockerfile`, under
+`.scriptorium/config.json`, and its toolchain image, `.scriptorium/Dockerfile`, under
 the [sandbox image contract](docs/usage/sandbox-image.md).
 
 ## Documentation

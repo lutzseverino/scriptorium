@@ -410,7 +410,7 @@ For version 3 factory configurations, the optional repository-owned
 `.github/factory-model-policy.json` holds the repository's preferences.
 Version 2 ignores this file and keeps its issue-label selection and host defaults.
 The factory reads it from the same default-branch
-revision as `.factory/config.json`, never from a run's pull request. Without
+revision as `.scriptorium/config.json`, never from a run's pull request. Without
 the file, every launch takes the host's defaults, including `models.retry`.
 A present file that is unreadable, not JSON or invalid pauses the repository
 with its correction, as invalid configuration does; it never reads as absence.
@@ -458,8 +458,11 @@ host's models for another provider and never waits for diversity alone.
 ## Repository conventions
 
 Each repository names its labels, model label prefix and prompt in
-`.factory/config.json`, read from its default branch on every pass. The
-[factory configuration schema](factory-configuration.md) documents those
+`.scriptorium/config.json`, read from its default branch on every pass.
+Scriptorium v4.0.0 reads repository inputs only from `.scriptorium/`,
+with no legacy-directory transition; move both `config.json` and `Dockerfile`
+there before upgrading the host. The v2/v3 configuration window is unchanged.
+The [factory configuration schema](factory-configuration.md) documents those
 required fields and the repository's ownership of readiness. The factory
 knows no repository convention by default.
 
@@ -751,7 +754,7 @@ fresh attempt on the issue's branch.
 
 Sandbox images live in the host's Docker daemon, tagged as the
 [sandbox image contract](sandbox-image.md) describes. The repository's
-`.factory/Dockerfile` is read from the clone on every pass.
+`.scriptorium/Dockerfile` is read from the clone on every pass.
 
 ## Run outcomes
 
@@ -1272,7 +1275,7 @@ Each repository's sandbox image is a pair: the agent image
 `factory-sandbox:<hash>` and its toolchain image
 `factory-sandbox:<hash>-toolchain`, named by the
 [image tag](sandbox-image.md#image-tags-and-compatibility). A changed
-`.factory/Dockerfile` or agent layer builds a new pair and leaves the old one
+`.scriptorium/Dockerfile` or agent layer builds a new pair and leaves the old one
 obsolete. After each pass the factory removes its own obsolete pairs beyond
 `imageRetention.obsoletePairs`, keeping the newest. A host that opts into the
 [factory builder](#the-factory-builder) also has that builder's cache pruned
@@ -1281,7 +1284,7 @@ once it is at least `imageRetention.cacheMinimumAgeHours` old.
 The factory keeps, whatever the allowance:
 
 - every repository's current pair, which repositories with the same
-  `.factory/Dockerfile` share;
+  `.scriptorium/Dockerfile` share;
 - a pair the image of a run that has not exited belongs to, even if its
   sandbox container does not exist yet;
 - a pair whose image any container on the host uses, running or stopped,
@@ -1291,7 +1294,7 @@ The allowance counts these kept obsolete pairs too, so when they reach it the
 factory keeps them and no other obsolete pair: the host can hold more obsolete
 pairs than `imageRetention.obsoletePairs` for as long as they are in use. A
 pass removes nothing while any repository has no current image, because its
-`.factory/config.json` or `.factory/Dockerfile` is unavailable, its image did
+`.scriptorium/config.json` or `.scriptorium/Dockerfile` is unavailable, its image did
 not build or it could not be read; that repository may still need any old
 pair. The process log says once that retention waits and for which
 repositories, and retention resumes on the first pass that prepares every
@@ -1336,7 +1339,7 @@ own Buildx builder, `factory-sandbox`, which its first build creates with the
 `docker-container` driver from the pinned `moby/buildkit` image. That needs
 Docker's Buildx plugin. The builder's cache holds only the factory's builds,
 so the factory prunes it by age after each pass and, when configured, toward its byte-size target. Base images in a
-`.factory/Dockerfile` are pulled by that builder, with the host user's Docker
+`.scriptorium/Dockerfile` are pulled by that builder, with the host user's Docker
 login but without the daemon's registry mirrors, so a base image that exists
 only in the local daemon does not build there. While its cache lasts, the
 builder holds a second copy of the layers it built besides the images it loads
@@ -1452,8 +1455,8 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 
 - its token command fails;
 - its clone does not update;
-- its `.factory/config.json` is missing or invalid;
-- it has no `.factory/Dockerfile`, its sandbox image does not build, or storage admission holds a new build;
+- its `.scriptorium/config.json` is missing or invalid;
+- it has no `.scriptorium/Dockerfile`, its sandbox image does not build, or storage admission holds a new build;
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
 - its platform reads fail;
@@ -1517,11 +1520,11 @@ each provider's `observedAt` identifies that observation.
     {
       "repository": "acme/gadgets",
       "state": "paused",
-      "reason": "it has no .factory/Dockerfile",
+      "reason": "it has no .scriptorium/Dockerfile",
       "held": [
         {
           "issue": 2,
-          "reason": "acme/gadgets is paused: it has no .factory/Dockerfile"
+          "reason": "acme/gadgets is paused: it has no .scriptorium/Dockerfile"
         }
       ]
     }

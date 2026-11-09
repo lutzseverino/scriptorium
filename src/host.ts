@@ -140,7 +140,7 @@ export type HostPorts = {
 };
 
 // The repository's sandbox Dockerfile, fixed by the factory.
-export const dockerfilePath = ".factory/Dockerfile";
+export const dockerfilePath = ".scriptorium/Dockerfile";
 
 type HostRun = Run & {
   provenance?: Provenance;
@@ -366,7 +366,7 @@ export function createHost(
           pause(
             error instanceof ImageStorageHold
               ? error.message
-              : `its sandbox image did not build: ${error}`,
+              : `its sandbox image did not build from ${dockerfilePath}: ${error}`,
           );
         }
     } catch (error) {

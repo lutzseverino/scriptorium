@@ -1108,7 +1108,7 @@ test("a paused repository claims and launches nothing while its runs keep settli
           gadgets,
           [issue(1), issue(2, claimed), issue(3, claimed), issue(5, claimed)],
           {
-            paused: "it has no .factory/Dockerfile",
+            paused: "it has no .scriptorium/Dockerfile",
             claims: [{ issue: 6, pullRequest: "merged" }],
           },
         ),
@@ -1140,14 +1140,14 @@ test("a paused repository claims and launches nothing while its runs keep settli
     {
       kind: "skip",
       ...at(1, gadgets),
-      reason: "acme/gadgets is paused: it has no .factory/Dockerfile",
+      reason: "acme/gadgets is paused: it has no .scriptorium/Dockerfile",
       hold: holdKeys.configuration,
     },
     {
       kind: "skip",
       ...at(2, gadgets),
       reason:
-        "retry waits: acme/gadgets is paused: it has no .factory/Dockerfile",
+        "retry waits: acme/gadgets is paused: it has no .scriptorium/Dockerfile",
       hold: holdKeys.configuration,
     },
     {
@@ -1674,7 +1674,7 @@ test("an interrupted run takes its issue's turn and waits for its gate and its r
     snapshot({
       repositories: [
         repository(widgets, [issue(4, claimed)], {
-          paused: "it has no .factory/Dockerfile",
+          paused: "it has no .scriptorium/Dockerfile",
         }),
       ],
       runs: [run(4, { ended: interrupted })],
@@ -1686,7 +1686,7 @@ test("an interrupted run takes its issue's turn and waits for its gate and its r
       kind: "skip",
       ...at(4),
       reason:
-        "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
+        "relaunch waits: acme/widgets is paused: it has no .scriptorium/Dockerfile",
       hold: holdKeys.configuration,
     },
   ]);
@@ -1952,7 +1952,7 @@ test("a paused run also waits for its provider's cap and its repository", () => 
     snapshot({
       repositories: [
         repository(widgets, [issue(4, pausedLabels)], {
-          paused: "it has no .factory/Dockerfile",
+          paused: "it has no .scriptorium/Dockerfile",
         }),
       ],
       runs: [run(4, { ended: pausedRun })],
@@ -1965,7 +1965,7 @@ test("a paused run also waits for its provider's cap and its repository", () => 
       kind: "skip",
       ...at(4),
       reason:
-        "relaunch waits: acme/widgets is paused: it has no .factory/Dockerfile",
+        "relaunch waits: acme/widgets is paused: it has no .scriptorium/Dockerfile",
       hold: holdKeys.configuration,
     },
   ]);

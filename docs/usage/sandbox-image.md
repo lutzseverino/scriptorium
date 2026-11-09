@@ -1,6 +1,8 @@
 # Sandbox image contract
 
-Each repository supplies `.factory/Dockerfile`. It builds the repository's
+Each repository supplies `.scriptorium/Dockerfile`. Scriptorium v4.0.0 reads
+only this path, with no legacy-directory fallback; move the repository's
+Dockerfile here when upgrading. It builds the repository's
 toolchain image from a Debian or Ubuntu base, with no build context:
 
 ```dockerfile
@@ -19,9 +21,9 @@ the host's UID and reuses a group holding its GID. Toolchain installation must t
 depend on those accounts or their homes. A toolchain Dockerfile may end with
 a non-root `USER`; the factory switches back to root for its layer.
 
-For a Node.js toolchain, use stable Node.js 24 or 26. This repository keeps
-`node:24-bookworm` as its default in `.factory/Dockerfile`; a repository
-whose toolchain needs no Node.js can keep a base without it.
+For a Node.js toolchain, use stable Node.js 24 or 26, for example
+`node:24-bookworm` in `.scriptorium/Dockerfile`. A repository whose toolchain
+needs no Node.js can keep a base without it.
 
 ## Factory agent layer
 
@@ -51,7 +53,7 @@ needs no admission. See [storage admission](host.md#image-build-storage-admissio
 for store mapping, thresholds and diagnostics.
 
 Neither builder gives either build a context. The host runner builds each
-repository's image from its `.factory/Dockerfile` on every pass.
+repository's image from its `.scriptorium/Dockerfile` on every pass.
 
 As root, the layer installs the tools below from pinned release binaries,
 plus their distribution-provided runtime dependencies. It requires no Node.js

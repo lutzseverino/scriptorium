@@ -42,7 +42,8 @@ major otherwise. Compatible capabilities receive a minor and compatible fixes
 receive a patch.
 
 Scriptorium v4.0.0 must include both version 3 run kinds (#115) and the N/N−1
-configuration reader (#124). Its supported configuration versions are 3 and 2;
+configuration reader (#124), plus the canonical `.scriptorium/` inputs and
+release-pinned schema (#125). Its supported configuration versions are 3 and 2;
 a version-3-only intermediate implementation is not the release contract.
 The rolling [compatibility window](../usage/factory-configuration.md#compatibility-window)
 lets a host upgrade precede repository adoption without a synchronized switch.
@@ -56,7 +57,7 @@ for compatible releases: use `feat` for a capability, `fix` for a fix, or
 `pnpm install --lockfile-only`, and carries the changes needed for the release.
 Nothing is committed for the release after it merges.
 
-When this repository's `.factory/config.json` sets `labels.releaseHold`, apply
+When this repository's `.scriptorium/config.json` sets `labels.releaseHold`, apply
 that label to the release PR when opening it and keep it until the PR merges
 or closes. Other factory PRs then defer merging until the release hold ends;
 see [release holds](../usage/factory-configuration.md).
@@ -123,6 +124,22 @@ gh release view "scriptorium-v$factory_version" --json tagName,isDraft,isPrerele
 gh api repos/lutzseverino/scriptorium/releases \
   --jq ".[] | select(.tag_name == \"scriptorium-v$factory_version\") | {tag_name, draft, prerelease}"
 ```
+
+Verify the public configuration schema after publication, from the released
+checkout with development dependencies installed:
+
+```sh
+pnpm release:check "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v$factory_version/schemas/factory-configuration.schema.json"
+```
+
+This resolves the tag-pinned schema URL, validates supported and invalid
+configuration fixtures, and resolves both same-tag documentation links in its
+description. A missing tag, schema or document fails the check; do not treat a
+pre-publication 404 as a pass. Before publication, `pnpm validate` checks the
+candidate artifact through the same URL namespace against the local tree.
+For releases after v4.0.0, update the schema's `$id`, description links and
+configuration examples to the shipping tag, together with the artifact test's
+candidate namespace.
 
 Release notes summarize factory changes and migration, with document links
 pinned to the new factory tag. Append the merge commit, release pull request,

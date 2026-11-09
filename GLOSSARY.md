@@ -130,7 +130,7 @@ _Avoid_: Vendor, worker
 
 **Sandbox image pair**:
 The agent image a repository's runs start from and the toolchain image it is
-built on, sharing one hash of the repository's `.factory/Dockerfile` and the
+built on, sharing one hash of the repository's `.scriptorium/Dockerfile` and the
 agent layer version. A pair is current while a served repository's hash names
 it, and obsolete otherwise.
 _Avoid_: Sandbox image version, image set

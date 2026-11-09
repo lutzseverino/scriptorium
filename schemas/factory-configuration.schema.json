@@ -1,0 +1,300 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
+  "title": "Scriptorium repository configuration",
+  "description": "Scriptorium v4.0.0 reads .scriptorium/config.json and .scriptorium/Dockerfile only. Configuration: https://github.com/lutzseverino/scriptorium/blob/scriptorium-v4.0.0/docs/usage/factory-configuration.md ; sandbox image: https://github.com/lutzseverino/scriptorium/blob/scriptorium-v4.0.0/docs/usage/sandbox-image.md . Supports configuration versions 2 and 3. This schema checks structure; the host also validates label uniqueness ignoring case and balanced, known comment-template names.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/version2"
+    },
+    {
+      "$ref": "#/definitions/version3"
+    }
+  ],
+  "definitions": {
+    "text": {
+      "type": "string",
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["marker", "author"],
+      "properties": {
+        "marker": {
+          "$ref": "#/definitions/text"
+        },
+        "author": {
+          "$ref": "#/definitions/text"
+        }
+      }
+    },
+    "comments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "run": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "close": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disclaimer": {
+          "$ref": "#/definitions/text"
+        },
+        "triageDisclaimer": {
+          "$ref": "#/definitions/text"
+        }
+      }
+    },
+    "version2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "labels",
+        "contractResult",
+        "modelLabelPrefix",
+        "skill",
+        "arguments"
+      ],
+      "properties": {
+        "$schema": {
+          "$ref": "#/definitions/text"
+        },
+        "version": {
+          "const": 2
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ready", "running", "failed", "paused", "needsInput"],
+          "properties": {
+            "ready": {
+              "$ref": "#/definitions/text"
+            },
+            "running": {
+              "$ref": "#/definitions/text"
+            },
+            "failed": {
+              "$ref": "#/definitions/text"
+            },
+            "paused": {
+              "$ref": "#/definitions/text"
+            },
+            "needsInput": {
+              "$ref": "#/definitions/text"
+            },
+            "skip": {
+              "$ref": "#/definitions/text"
+            },
+            "releaseHold": {
+              "$ref": "#/definitions/text"
+            },
+            "hold": {
+              "$ref": "#/definitions/text"
+            }
+          }
+        },
+        "contractResult": {
+          "$ref": "#/definitions/identity"
+        },
+        "modelLabelPrefix": {
+          "$ref": "#/definitions/text"
+        },
+        "comments": {
+          "$ref": "#/definitions/comments"
+        },
+        "skill": {
+          "$ref": "#/definitions/text"
+        },
+        "arguments": {
+          "type": "string"
+        }
+      }
+    },
+    "version3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "labels",
+        "contractResult",
+        "modelLabelPrefix",
+        "runKinds"
+      ],
+      "properties": {
+        "$schema": {
+          "$ref": "#/definitions/text"
+        },
+        "version": {
+          "const": 3
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ready", "running", "failed", "paused"],
+          "properties": {
+            "triage": {
+              "$ref": "#/definitions/text"
+            },
+            "reporter": {
+              "$ref": "#/definitions/text"
+            },
+            "grill": {
+              "$ref": "#/definitions/text"
+            },
+            "owner": {
+              "$ref": "#/definitions/text"
+            },
+            "ready": {
+              "$ref": "#/definitions/text"
+            },
+            "ownerReview": {
+              "$ref": "#/definitions/text"
+            },
+            "majorRelease": {
+              "$ref": "#/definitions/text"
+            },
+            "running": {
+              "$ref": "#/definitions/text"
+            },
+            "failed": {
+              "$ref": "#/definitions/text"
+            },
+            "paused": {
+              "$ref": "#/definitions/text"
+            },
+            "skip": {
+              "$ref": "#/definitions/text"
+            },
+            "releaseHold": {
+              "$ref": "#/definitions/text"
+            },
+            "hold": {
+              "$ref": "#/definitions/text"
+            },
+            "priorityHigh": {
+              "$ref": "#/definitions/text"
+            },
+            "priorityNormal": {
+              "$ref": "#/definitions/text"
+            },
+            "priorityLow": {
+              "$ref": "#/definitions/text"
+            }
+          }
+        },
+        "contractResult": {
+          "$ref": "#/definitions/identity"
+        },
+        "modelLabelPrefix": {
+          "$ref": "#/definitions/text"
+        },
+        "comments": {
+          "$ref": "#/definitions/comments"
+        },
+        "runKinds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["implement"],
+          "properties": {
+            "implement": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["skill", "arguments"],
+              "properties": {
+                "skill": {
+                  "$ref": "#/definitions/text"
+                },
+                "arguments": {
+                  "type": "string"
+                },
+                "resultLabels": {
+                  "$ref": "#/definitions/resultLabels"
+                }
+              }
+            },
+            "triage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["skill", "arguments"],
+              "properties": {
+                "skill": {
+                  "$ref": "#/definitions/text"
+                },
+                "arguments": {
+                  "type": "string",
+                  "not": {
+                    "pattern": "\\{pullRequest\\}"
+                  }
+                },
+                "resultLabels": {
+                  "$ref": "#/definitions/resultLabels"
+                }
+              }
+            },
+            "review": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["skill", "arguments"],
+              "properties": {
+                "skill": {
+                  "$ref": "#/definitions/text"
+                },
+                "arguments": {
+                  "type": "string"
+                },
+                "differentProvider": {
+                  "type": "boolean"
+                },
+                "resultLabels": {
+                  "$ref": "#/definitions/resultLabels"
+                }
+              }
+            }
+          }
+        },
+        "triageResult": {
+          "$ref": "#/definitions/identity"
+        }
+      },
+      "dependencies": {
+        "runKinds": {
+          "if": {
+            "properties": {
+              "runKinds": {
+                "required": ["triage"],
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "labels": {
+                "required": ["triage"],
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    "resultLabels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/text"
+      },
+      "uniqueItems": true
+    }
+  }
+}

@@ -17,6 +17,7 @@ export type RunKind = {
 };
 
 type Common = {
+  $schema?: string;
   labels: Labels;
   // Where the repository's issue-contract validator posts its result: the
   // marker of its state line and the account it posts as.
@@ -54,7 +55,7 @@ export type PlatformConventions = Pick<
   triageResult?: { marker: string; author: string };
 };
 
-export const factoryConfigurationPath = ".factory/config.json";
+export const factoryConfigurationPath = ".scriptorium/config.json";
 
 // The run kind's skill and arguments, or undefined when it is off.
 export function runKind(
@@ -155,9 +156,10 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
       ...(version === 3 ? ["runKinds"] : ["skill", "arguments"]),
     ],
     "",
-    ["comments", ...(version === 3 ? ["triageResult"] : [])],
+    ["$schema", "comments", ...(version === 3 ? ["triageResult"] : [])],
   );
   if (root) {
+    if (Object.hasOwn(root, "$schema")) text(root.$schema, "$schema");
     if (Object.hasOwn(root, "version") && root.version !== 2 && version !== 3)
       problems.push("version: must be 2 or 3");
     const roles = versionRoles(version);
