@@ -8,7 +8,8 @@ import {
 import { providerStatus, type ProviderStatus } from "./events.ts";
 import { fresh, usageReading, usageHold, usageHoldAfter } from "./usage.ts";
 import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
-import type { OwnerControl } from "./factory.ts";
+import type { OwnerControl, RunKindCounts } from "./factory.ts";
+import { capacityCounts } from "./status.ts";
 import { createRegistry, type ModelFacts } from "./providers.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 
@@ -51,10 +52,27 @@ type BudgetProvider = Omit<
   observations: { work: Observation; usage: Observation; owner: Observation };
 };
 
+type ObservedCapacityCounts = {
+  runKinds: RunKindCounts | null;
+  implement: {
+    limit: number | null;
+    running: number | null;
+    free: number | null;
+  };
+};
+
+type BudgetCapacity = {
+  counting: "non-ended-runs";
+  observation: Observation;
+  host: ObservedCapacityCounts;
+  repositories: (ObservedCapacityCounts & { repository: string })[];
+};
+
 export type LaunchBudget = {
   version: 1;
   observedAt: string;
   models: ModelFacts;
+  capacity: BudgetCapacity;
   providers: BudgetProvider[];
 };
 
@@ -162,6 +180,95 @@ function readObservation(
   }
 }
 
+// Only complete, timestamped observations can establish counts. Old status
+// files remain readable, with unavailable capacity rather than invented slots.
+function readCapacity(
+  configuration: HostConfiguration,
+  work: ReturnType<typeof readObservation>,
+  pending: boolean,
+  now: Date,
+): BudgetCapacity {
+  const capacity = object(work.data?.capacity);
+  const kinds = (value: unknown): RunKindCounts | null => {
+    const record = object(object(value)?.runKinds);
+    return record &&
+      count(record.implement) &&
+      count(record.triage) &&
+      count(record.review)
+      ? {
+          implement: record.implement,
+          triage: record.triage,
+          review: record.review,
+        }
+      : null;
+  };
+  const host = kinds(capacity?.host);
+  const repositories = new Map<string, RunKindCounts>();
+  const entries = capacity?.repositories;
+  let valid = Array.isArray(entries);
+  if (Array.isArray(entries))
+    for (const value of entries) {
+      const entry = object(value);
+      const counts = kinds(entry);
+      if (
+        !entry ||
+        typeof entry.repository !== "string" ||
+        !counts ||
+        repositories.has(entry.repository)
+      )
+        valid = false;
+      else repositories.set(entry.repository, counts);
+    }
+  const known =
+    !pending &&
+    valid &&
+    host !== null &&
+    configuration.repositories.every((repository) =>
+      repositories.has(repository),
+    ) &&
+    capacity?.counting === "non-ended-runs" &&
+    time(capacity.observedAt) &&
+    Date.parse(capacity.observedAt) <= now.getTime() &&
+    Object.entries(host).every(
+      ([kind, total]) =>
+        total ===
+        [...repositories.values()].reduce(
+          (sum, entry) => sum + entry[kind as keyof RunKindCounts],
+          0,
+        ),
+    );
+  const project = (
+    counts: RunKindCounts | null,
+    limit: number | undefined,
+  ): ObservedCapacityCounts =>
+    counts
+      ? capacityCounts(counts, limit)
+      : {
+          runKinds: null,
+          implement: { limit: limit ?? null, running: null, free: null },
+        };
+  return {
+    counting: "non-ended-runs",
+    observation: known
+      ? { ...work.observation, at: capacity.observedAt as string }
+      : unavailable(
+          "status.json",
+          pending
+            ? "pending operational transaction; host recovery required"
+            : (work.observation.problem ??
+                "missing, legacy or inconsistent capacity observation"),
+        ),
+    host: project(known ? host : null, configuration.implement?.total),
+    repositories: configuration.repositories.map((repository) => ({
+      repository,
+      ...project(
+        known ? (repositories.get(repository) ?? null) : null,
+        configuration.implement?.perRepository,
+      ),
+    })),
+  };
+}
+
 export async function readBudget(
   configuration: HostConfiguration,
   ports: Pick<StatusPorts, "now" | "readUsage">,
@@ -178,6 +285,12 @@ export async function readBudget(
   return {
     version: 1,
     observedAt,
+    capacity: readCapacity(
+      configuration,
+      workFile,
+      checkpoint.data?.pending !== undefined,
+      now,
+    ),
     models: createRegistry(configuration.providers, configuration.models)
       .modelFacts,
     providers: await Promise.all(
@@ -501,6 +614,17 @@ export function formatStatus(budget: LaunchBudget): string {
   return [
     `Observed ${budget.observedAt}; not a launch grant or reservation.`,
     `models=${JSON.stringify(budget.models)}`,
+    ...[
+      { name: "host", ...budget.capacity.host },
+      ...budget.capacity.repositories.map(({ repository, ...counts }) => ({
+        name: repository,
+        ...counts,
+      })),
+    ].map(
+      ({ name, implement, runKinds }) =>
+        `${name}: implement limit=${implement.limit === null ? "unset" : implement.limit} running=${value(implement.running)} free=${implement.limit === null && implement.running !== null ? "unlimited" : value(implement.free)} runKinds=${value(runKinds)}`,
+    ),
+    `capacity observation=${JSON.stringify(budget.capacity.observation)}`,
     ...budget.providers.flatMap((provider) => [
       `${provider.provider}: cap=${provider.cap} running=${value(provider.running)} free=${value(provider.free)} paused=${value(provider.paused)} retained=${value(provider.retained)}`,
       ...[

@@ -1,5 +1,6 @@
 // The factory's decision core: a pure function from a snapshot of the host's
 // repositories and runs to the decisions the host carries out.
+import type { ImplementLimits } from "./host-configuration.ts";
 import type { Recovery } from "./clone.ts";
 import {
   launchArguments,
@@ -190,6 +191,7 @@ export type Settings = {
   triageModel?: string;
   reviewModel?: string;
   caps: Record<string, number>;
+  implement?: ImplementLimits;
   // The usage percentages at or above which a provider claims no new issue,
   // and at or above which its running runs stop too, or null when off.
   drainThreshold: number | null;
@@ -297,7 +299,7 @@ export type Decision = { repository: string; issue: number } & (
 
 export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   const decisions: Decision[] = [];
-  const running = runningCounts(snapshot);
+  const running = runningCounts(snapshot.runs);
   const retries = new Map<string, Retry>();
   // Interrupted and paused runs, which launch again rather than settle.
   const held = new Map<string, Run>();
@@ -486,13 +488,37 @@ function policy(repository: Repository): Policy {
 
 // Caps count running sandboxes across every repository; a claim whose pull
 // request awaits merge, or an ended run, takes no slot.
-function runningCounts(snapshot: Snapshot): Map<string, number> {
-  return new Map(
-    [...providerRunCounts(snapshot.runs)].map(([provider, counts]) => [
-      provider,
-      counts.running,
-    ]),
-  );
+export type RunKindCounts = Record<RunKindName, number>;
+
+export function emptyRunKindCounts(): RunKindCounts {
+  return { implement: 0, triage: 0, review: 0 };
+}
+
+type RunningCounts = ReturnType<typeof runningCounts>;
+
+// This projection is also the admission pass's mutable accounting. Missing
+// kinds are v2 implement work; only a non-ended sandbox occupies capacity.
+export function runningCounts(runs: readonly Run[]) {
+  const host = emptyRunKindCounts();
+  const repositories = new Map<string, RunKindCounts>();
+  for (const run of runs) {
+    if (run.ended !== null) continue;
+    const kinds = repositories.get(run.repository) ?? emptyRunKindCounts();
+    const kind = run.continuation.runKind ?? "implement";
+    host[kind]++;
+    kinds[kind]++;
+    repositories.set(run.repository, kinds);
+  }
+  return {
+    providers: new Map(
+      [...providerRunCounts(runs)].map(([provider, counts]) => [
+        provider,
+        counts.running,
+      ]),
+    ),
+    host,
+    repositories,
+  };
 }
 
 // Shared by admission and operational status. Retained ended work, including
@@ -1035,7 +1061,7 @@ type Choice = { model: Model; selection: Selection; diversity?: "unavailable" };
 // and only when that default is available; otherwise the launch waits.
 function admit(
   next: Admission,
-  running: Map<string, number>,
+  running: RunningCounts,
   snapshot: Snapshot,
   models: Models,
 ): Decision[] {
@@ -1082,7 +1108,13 @@ function admit(
   if ("error" in choice) return skipped(next, choice.error, holdKeys.model);
   if (next.afterModel !== null) return next.afterModel;
   const available = (model: Model) =>
-    gate(model.provider, running, snapshot, rules.threshold);
+    gate(model.provider, running.providers, snapshot, rules.threshold) ??
+    implementGate(
+      next.launch,
+      repository.name,
+      running,
+      snapshot.settings.implement,
+    );
   if (next.diversity !== null)
     choice = diverse(
       choice,
@@ -1111,7 +1143,16 @@ function admit(
   }
   if (reason) return skipped(next, reason, repositoryHeld?.hold);
   const { model, selection, diversity } = choice;
-  running.set(model.provider, (running.get(model.provider) ?? 0) + 1);
+  running.providers.set(
+    model.provider,
+    (running.providers.get(model.provider) ?? 0) + 1,
+  );
+  const kind = next.launch.runKind ?? "implement";
+  running.host[kind]++;
+  const kinds =
+    running.repositories.get(repository.name) ?? emptyRunKindCounts();
+  kinds[kind]++;
+  running.repositories.set(repository.name, kinds);
   return [
     ...(next.claim ? [{ kind: "claim" as const, ...at }] : []),
     ...(next.unpause ? [{ kind: "unpause" as const, ...at }] : []),
@@ -1124,6 +1165,26 @@ function admit(
       continuation: next.launch,
     },
   ];
+}
+
+// Every implement continuation acquires both budgets at the same gate,
+// including retries, recovery, resumption and review hand-backs.
+function implementGate(
+  continuation: Continuation,
+  repository: string,
+  running: RunningCounts,
+  limits: ImplementLimits | undefined,
+): string | null {
+  if (continuation.runKind !== undefined) return null;
+  if (limits?.total !== undefined && running.host.implement >= limits.total)
+    return `the host already runs its implement cap of ${limits.total}`;
+  if (
+    limits?.perRepository !== undefined &&
+    (running.repositories.get(repository)?.implement ?? 0) >=
+      limits.perRepository
+  )
+    return `the repository already runs its implement cap of ${limits.perRepository}`;
+  return null;
 }
 
 // A stage's model: an implement attempt's issue label first, then the

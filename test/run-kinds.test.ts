@@ -1586,3 +1586,71 @@ test("removing review configuration makes its stale PR relaunch implement", () =
   assert.equal(launch.continuation.runKind, undefined);
   assert.deepEqual(launch.continuation.mergeRelaunch, pr);
 });
+
+test("triage and review bypass implement limits but retain provider, usage and repository gates", () => {
+  const inputs = [
+    { issues: [issue(4, [labels.triage])] },
+    { issues: [issue(4, claimed)], runs: [ended({}, true)] },
+  ];
+  const implement = { total: 0, perRepository: 0 };
+  for (const input of inputs) {
+    const launch = launchOf(decide({ ...input, settings: { implement } }));
+    assert.ok(launch?.continuation.runKind);
+    assert.equal(
+      launchOf(
+        decide({
+          ...input,
+          settings: { implement, caps: { "provider-a": 0 } },
+        }),
+      ),
+      undefined,
+    );
+    assert.equal(
+      launchOf(
+        decide({
+          ...input,
+          settings: { implement },
+          usage: { "provider-a": { used: 90, at: now } },
+        }),
+      ),
+      undefined,
+    );
+    assert.equal(
+      launchOf(
+        decide({
+          ...input,
+          settings: { implement },
+          details: { factoryHold: [99] },
+        }),
+      ),
+      undefined,
+    );
+  }
+  // An active triage or review occupies provider capacity, but no implement slot.
+  for (const runKind of ["triage", "review"] as const) {
+    const decisions = decide({
+      runs: [run({ issue: 9, continuation: { runKind } })],
+      settings: { implement: { total: 1, perRepository: 1 } },
+    });
+    assert.equal(launchOf(decisions)?.issue, 4);
+  }
+});
+
+test("a review hand-back reacquires implement capacity across providers", () => {
+  const previous = ended(
+    { continuation: { runKind: "review" }, provider: "provider-b" },
+    true,
+  );
+  const input = { issues: [issue(4, claimed)], runs: [previous] };
+  assert.equal(launchOf(decide(input))?.continuation.runKind, undefined);
+  assert.ok(launchOf(decide(input)));
+  for (const implement of [{ total: 1 }, { perRepository: 1 }]) {
+    const decisions = decide({
+      ...input,
+      runs: [previous, run({ issue: 9, provider: "provider-b" })],
+      settings: { implement },
+    });
+    assert.equal(launchOf(decisions), undefined);
+    assert.match(skipOf(decisions)!.reason, /implement cap/);
+  }
+});

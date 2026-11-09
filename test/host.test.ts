@@ -1615,7 +1615,11 @@ test("the status file lists each repository's state and its held issues", async 
     },
   });
   await run.tick();
-  const { providers: _providers, ...repositoryStatus } = run.status();
+  const {
+    providers: _providers,
+    capacity: _capacity,
+    ...repositoryStatus
+  } = run.status();
   assert.deepEqual(repositoryStatus, {
     updatedAt: "2026-10-09T12:00:00.000Z",
     repositories: [
@@ -5257,6 +5261,9 @@ test("at the pause threshold a provider's running sandboxes stop in every reposi
   assert.equal(provider.paused, 2);
   assert.equal(provider.retained, 2);
   assert.equal(provider.free, provider.cap);
+  assert.equal(run.status().capacity.host.implement.running, 1);
+  assert.equal(run.status().capacity.repositories[0].implement.running, 0);
+  assert.equal(run.status().capacity.repositories[1].implement.running, 1);
   assert.equal(provider.drained, true);
   const thresholdEvents = replay(run).filter(
     ({ type }) => type === "paused_at_threshold",
@@ -5350,6 +5357,12 @@ for (const ending of [
     // A later pass repeats the stop, which keeps the first pause.
     run.clock.now = new Date("2026-10-09T12:05:00Z");
     assert.equal((await run.tick())[0].kind, "stop");
+    assert.equal(run.status().capacity.host.implement.running, 1);
+    assert.deepEqual(run.status().capacity.host.runKinds, {
+      implement: 1,
+      triage: 0,
+      review: 0,
+    });
     const pausing = recordOf(run.state, 4, 1).pausing;
     assert.deepEqual(pausing, {
       cause: "pause threshold",
@@ -9264,3 +9277,60 @@ for (const fault of [
     assert.equal(run.launched.length, 0);
     assert.deepEqual(run.builds, fault === "image build" ? [toolchain] : []);
   });
+
+test("host implement limits span providers, persist counts and release ended slots", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 1 },
+        { number: 2, labels: ["ready-for-agent", "model:codex/gpt-work"] },
+      ],
+      "acme/gadgets": [
+        { number: 3, labels: ["ready-for-agent", "model:codex/gpt-work"] },
+      ],
+      "acme/third": [{ number: 4 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+      "acme/third": remote(t, factoryFiles),
+    },
+    configuration: { implement: { total: 2, perRepository: 1 } },
+    caps: { "claude-code": 3, codex: 3 },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 2, run.reports.join("\n"));
+  assert.deepEqual(run.status().capacity.host, {
+    runKinds: { implement: 2, triage: 0, review: 0 },
+    implement: { limit: 2, running: 2, free: 0 },
+  });
+  assert.deepEqual(
+    run
+      .status()
+      .capacity.repositories.map(
+        (entry: { implement: { running: number } }) => entry.implement.running,
+      ),
+    [1, 1, 0],
+  );
+  assert.match(
+    run.status().repositories[0].held[0].reason,
+    /repository.*implement/,
+  );
+  assert.match(run.status().repositories[2].held[0].reason, /host.*implement/);
+  // An ended implement awaiting merge retains its claim but frees capacity.
+  run.github.find("acme/widgets", 1).pullRequests.push("OPEN");
+  run.launched[0].finish();
+  await until(() => recordOf(run.state, 1, 1).exited);
+  await run.tick();
+  assert.equal(run.launched.length, 3);
+  assert.equal(run.status().capacity.host.implement.running, 2);
+  assert.equal(
+    run
+      .status()
+      .providers.reduce(
+        (sum: number, entry: { running: number }) => sum + entry.running,
+        0,
+      ),
+    2,
+  );
+});
