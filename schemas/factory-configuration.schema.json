@@ -218,11 +218,7 @@
                   "type": "string"
                 },
                 "resultLabels": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/text"
-                  },
-                  "uniqueItems": true
+                  "$ref": "#/definitions/resultLabels"
                 }
               }
             },
@@ -241,11 +237,7 @@
                   }
                 },
                 "resultLabels": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/text"
-                  },
-                  "uniqueItems": true
+                  "$ref": "#/definitions/resultLabels"
                 }
               }
             },
@@ -264,11 +256,7 @@
                   "type": "boolean"
                 },
                 "resultLabels": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/text"
-                  },
-                  "uniqueItems": true
+                  "$ref": "#/definitions/resultLabels"
                 }
               }
             }
@@ -300,6 +288,13 @@
           }
         }
       }
+    },
+    "resultLabels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/text"
+      },
+      "uniqueItems": true
     }
   }
 }
