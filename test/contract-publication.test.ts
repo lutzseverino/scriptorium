@@ -48,8 +48,13 @@ function setup(configuration = contractConfiguration) {
       host: "github.com",
       path: "acme/widgets",
     },
-    issueTracker: {},
-    access: { request: unused },
+    issueTracker: { capabilities: { bodyEditTime: true } },
+    access: {
+      request: unused,
+      async role() {
+        return "admin";
+      },
+    },
   } as unknown as ConnectionWithLinkAdditions);
   fixture.evaluate();
   const platform = () => repositoryPlatform(connection, configuration);
@@ -502,4 +507,110 @@ test("a recovered body intent rechecks protocol compatibility before its mutatio
     /supported well-formed v2 validator/,
   );
   assert.equal(s.fixture.writes.includes("body"), false);
+});
+
+for (const source of ["current", "superseded", "legacy", "prepared"] as const)
+  test(`invalidated ${source} evidence never becomes a report or continuation after restart`, async () => {
+    const s = setup();
+    if (source === "legacy" || source === "prepared")
+      s.fixture.controls.mode = "prepared";
+    await s.platform().postResult(4, post(), s.resume());
+    const evidence = s.fixture.comments[0];
+    if (source === "superseded") {
+      const record = s.fixture.record!;
+      s.fixture.record = {
+        ...record,
+        publication: {
+          ...record.publication!,
+          attestation: { ...record.publication!.attestation, id: "12345" },
+        },
+      };
+    }
+    if (source === "legacy") {
+      s.fixture.controls.mode = "body";
+      s.fixture.receipt.issues.push({
+        issue: "I_4",
+        number: 4,
+        legacy: {
+          revision: digest(evidence.body),
+          source: {
+            type: "comment",
+            id: String(evidence.id),
+            editedAt: evidence.updatedAt,
+          },
+          edit: s.fixture.edits[evidence.nodeId!],
+        },
+      });
+      s.fixture.record = {
+        issue: "I_4",
+        cutoff: s.fixture.mode.cutoff,
+        migrated: true,
+        retired: true,
+      };
+    }
+    evidence.body =
+      'Edited proof\n<!-- scriptorium:run {"phases":{"triage":{"state":"done"}},"resume":{"pullRequests":[]}} -->';
+    s.fixture.edits[evidence.nodeId!] = {
+      id: "HUMAN_EDIT",
+      editedAt: "2026-10-09T00:00:00Z",
+    };
+    s.fixture.evaluate();
+    assert.equal(s.fixture.result!.factoryTriage, null);
+    const bytes = evidence.body;
+    const restarted = s.platform();
+    assert.equal((await restarted.readIssues())[0].continuation, undefined);
+    await restarted.comments.write(4, {
+      phase: "implement",
+      facts: { state: "running" },
+    });
+    assert.equal(evidence.body, bytes);
+    assert.equal(s.fixture.comments.length, 2);
+  });
+
+test("unreadable evidence history neither edits proof nor supplies a continuation", async () => {
+  const s = setup();
+  await s.platform().postResult(4, post(), s.resume());
+  const evidence = s.fixture.comments[0];
+  evidence.body =
+    'Edited proof\n<!-- scriptorium:run {"phases":{"triage":{"state":"done"}},"resume":{"pullRequests":[]}} -->';
+  s.fixture.edits[evidence.nodeId!] = {
+    id: "HUMAN_EDIT",
+    editedAt: "2026-10-09T00:00:00Z",
+  };
+  const bytes = evidence.body;
+  s.fixture.controls.fail = "evidence-history";
+  assert.equal((await s.platform().readIssues())[0].continuation, undefined);
+  s.fixture.controls.fail = "evidence-history";
+  await assert.rejects(
+    s
+      .platform()
+      .comments.write(4, { phase: "implement", facts: { state: "running" } }),
+    /ledger history is unreadable/,
+  );
+  assert.equal(evidence.body, bytes);
+  assert.equal(s.fixture.comments.length, 1);
+});
+
+test("prepared evidence with unavailable creation history is held instead of adopted", async () => {
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  await s.platform().postResult(4, post(), s.resume());
+  const evidence = s.fixture.comments[0];
+  evidence.body =
+    'Edited proof\n<!-- scriptorium:run {"phases":{"triage":{"state":"done"}},"resume":{"pullRequests":[]}} -->';
+  s.fixture.edits[evidence.nodeId!] = {
+    id: "HUMAN_EDIT",
+    editedAt: "2026-10-09T00:00:00Z",
+  };
+  s.fixture.controls.originalHistory = false;
+  const bytes = evidence.body;
+  assert.equal((await s.platform().readIssues())[0].continuation, undefined);
+  await assert.rejects(
+    s
+      .platform()
+      .comments.write(4, { phase: "implement", facts: { state: "running" } }),
+    /Original report role cannot be verified/,
+  );
+  assert.equal(evidence.body, bytes);
+  assert.equal(s.fixture.comments.length, 1);
 });

@@ -108,6 +108,11 @@ function runState(comment: Comment): State | null {
   }
 }
 
+// The mutable report role, without exposing its encoded state to the platform.
+export function isRunComment(comment: Comment): boolean {
+  return runState(comment) !== null;
+}
+
 // The latest run comment of the issue's comments, with its state.
 function latestPass(comments: Comment[]) {
   return comments
@@ -123,10 +128,12 @@ function latestPass(comments: Comment[]) {
 export function passContinuation(
   comments: Comment[],
   configuration?: Pick<PlatformConventions, "contractResult">,
+  retainedEvidence?: Set<string>,
 ): InputResume | undefined {
   const evidence =
-    configuration &&
-    contractEvidenceIds(comments, configuration.contractResult);
+    retainedEvidence ??
+    (configuration &&
+      contractEvidenceIds(comments, configuration.contractResult));
   const pass = latestPass(
     evidence ? comments.filter((c) => !evidence.has(String(c.id))) : comments,
   );
@@ -138,7 +145,7 @@ export function passContinuation(
 export function isFactoryComment(comment: Comment): boolean {
   return (
     isHoldComment(comment.body) ||
-    runState(comment) !== null ||
+    isRunComment(comment) ||
     (comment.author?.bot === true && actionMarker.test(lastLine(comment)))
   );
 }
@@ -148,6 +155,7 @@ export function isFactoryComment(comment: Comment): boolean {
 export function issueComments(
   tracker: IssueTracker,
   configuration: PlatformConventions,
+  evidenceIds?: (issue: number, comments: Comment[]) => Promise<Set<string>>,
 ) {
   const templates = configuration.comments;
   // Implement and merge always show, review once it is on, and triage once
@@ -180,10 +188,9 @@ export function issueComments(
       action?: Action,
     ): Promise<void> {
       const comments = await tracker.comments(issue);
-      const evidence = contractEvidenceIds(
-        comments,
-        configuration.contractResult,
-      );
+      const evidence = evidenceIds
+        ? await evidenceIds(issue, comments)
+        : contractEvidenceIds(comments, configuration.contractResult);
       const latest = latestPass(
         comments.filter((comment) => !evidence.has(String(comment.id))),
       );

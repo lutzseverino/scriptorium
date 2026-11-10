@@ -90,6 +90,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
   };
   const mode: ContractMode = { mode: "body", cutoff: "a".repeat(40), receipt };
   const comments: Comment[] = [];
+  const originals = new Map<string, string>();
   const changes: LabelChange[] = [
     {
       id: 1,
@@ -103,6 +104,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     [issue.nodeId!]: { id: `created:${issue.nodeId}`, editedAt: null },
   };
   const writes: string[] = [];
+  const records = new Map<string, SourceRecord>();
   let record: SourceRecord | undefined,
     version = 0,
     clock = 0;
@@ -114,6 +116,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     fail: "",
     bodyEditor: "factory[bot]",
     missingResult: false,
+    originalHistory: true,
     deletion: null as string | null,
     before: undefined as (() => void) | undefined,
   };
@@ -274,6 +277,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
           body.includes("triage-attestation") ? "attestation" : "report",
         );
         comments.push(c);
+        originals.set(c.nodeId!, c.body);
         edits[c.nodeId!] = { id: `created:${c.nodeId}`, editedAt: null };
         evaluate();
         fail("after-comment");
@@ -296,10 +300,54 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
         const path = input.path,
           body = input.body as any;
         const data = (data: unknown) => ({ status: 200, headers: {}, data });
+        if (
+          path === "/graphql" &&
+          body.query.includes("FactoryOriginalCommentRoles")
+        )
+          return data({
+            data: {
+              nodes: body.variables.ids.map((id: string) => {
+                const comment = comments.find((entry) => entry.nodeId === id);
+                return comment
+                  ? {
+                      id,
+                      body: comment.body,
+                      lastEditedAt: edits[id].editedAt,
+                      includesCreatedEdit: controls.originalHistory,
+                      userContentEdits: {
+                        nodes: [{ diff: originals.get(id), deletedAt: null }],
+                      },
+                    }
+                  : null;
+              }),
+            },
+          });
         if (path === `/repos/${repository}`)
           return data({ default_branch: "main" });
         if (path === `/repos/${repository}/git/ref/heads/main`)
           return data({ object: { sha: "c".repeat(40) } });
+        if (
+          path ===
+          `/repos/${repository}/git/ref/heads/repo-canon/issue-contracts`
+        )
+          return data({
+            object: { sha: version.toString(16).padStart(40, "0") },
+          });
+        if (path.startsWith(`/repos/${repository}/commits?`)) {
+          if (controls.fail === "evidence-history") {
+            controls.fail = "";
+            return data({ message: "History unavailable" });
+          }
+          const page = Number(
+            new URL(path, "https://api.github.com").searchParams.get("page"),
+          );
+          return data(
+            [...records.keys()]
+              .reverse()
+              .slice((page - 1) * 100, page * 100)
+              .map((sha) => ({ sha })),
+          );
+        }
         if (path.includes("/contents/")) {
           if (input.method === "PUT") {
             fail("ledger");
@@ -307,6 +355,10 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
               throw new Error("CAS conflict");
             record = JSON.parse(Buffer.from(body.content, "base64").toString());
             version++;
+            records.set(
+              version.toString(16).padStart(40, "0"),
+              structuredClone(record!),
+            );
             writes.push("ledger");
             return data({ content: { sha: String(version) } });
           }
@@ -316,7 +368,14 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
               throw new PlatformError("notFound", "No mode file");
             value = { mode: controls.mode, cutoff: mode.cutoff };
           } else if (path.includes("cutoff.json")) value = receipt;
-          else value = record;
+          else {
+            const ref = new URL(
+              path,
+              "https://api.github.com",
+            ).searchParams.get("ref");
+            value =
+              ref && /^[a-f0-9]{40}$/.test(ref) ? records.get(ref) : record;
+          }
           if (!value) throw new PlatformError("notFound", "No record");
           const bytes = Buffer.from(JSON.stringify(value));
           return data({
@@ -442,6 +501,11 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     set record(value) {
       record = value;
       version++;
+      if (record)
+        records.set(
+          version.toString(16).padStart(40, "0"),
+          structuredClone(record),
+        );
     },
     get result() {
       return state;

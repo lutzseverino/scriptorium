@@ -16,13 +16,18 @@ import { postResultComment, type ResultPost } from "./run-result.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
 import type { Actor, ReadinessHold } from "./readiness.ts";
-import { issueComments, passContinuation } from "./run-comment.ts";
+import {
+  issueComments,
+  passContinuation,
+  isRunComment,
+} from "./run-comment.ts";
 import {
   publishContract,
   type PublicationProgress,
 } from "./contract-publication.ts";
 import {
   readContractMode,
+  contractEvidence,
   ContractPublicationHold,
 } from "./contract-protocol.ts";
 import type { PullRequestState } from "./run-ending.ts";
@@ -85,7 +90,12 @@ export function repositoryPlatform(
   const { labels } = configuration;
   const { issueTracker, pullRequests, access } = connection;
   const path = connection.repository.path;
-  const comments = issueComments(issueTracker, configuration);
+  const evidenceIds = contractEvidence(
+    connection,
+    configuration.contractResult,
+    isRunComment,
+  );
+  const comments = issueComments(issueTracker, configuration, evidenceIds);
   // An issue as the decision core identifies it: its number in this
   // repository, or `<path>#<n>` in another.
   const id = (linked: IssueReference): IssueId =>
@@ -215,8 +225,22 @@ export function repositoryPlatform(
       } catch (error) {
         if (!(error instanceof PlatformError)) throw error;
       }
-    const continuation = comments && passContinuation(comments, configuration);
-    return continuation ? { continuation } : {};
+    if (!comments) return {};
+    try {
+      const continuation = passContinuation(
+        comments,
+        configuration,
+        await evidenceIds(number, comments),
+      );
+      return continuation ? { continuation } : {};
+    } catch (error) {
+      if (
+        !(error instanceof PlatformError) &&
+        !(error instanceof ContractPublicationHold)
+      )
+        throw error;
+      return {};
+    }
   }
 
   // Whether an open PR is still a draft. Postern's neutral PR port does not

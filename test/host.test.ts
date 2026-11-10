@@ -740,6 +740,41 @@ function fakePlatform(
               },
             };
           }
+          if (body.query.includes("FactoryOriginalCommentRoles")) {
+            const ids = (body.variables as unknown as { ids: string[] }).ids;
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  nodes: ids.map((id) => {
+                    const comment = state[repository]
+                      .flatMap((issue) =>
+                        issue.discussion instanceof Error
+                          ? []
+                          : issue.discussion,
+                      )
+                      .find((entry) => entry.nodeId === id)!;
+                    const history = commentEdits.get(id);
+                    return {
+                      id,
+                      body: comment.body,
+                      lastEditedAt: history ? comment.updatedAt : null,
+                      includesCreatedEdit: true,
+                      userContentEdits: {
+                        nodes: [
+                          {
+                            diff: history?.[0] ?? comment.body,
+                            deletedAt: null,
+                          },
+                        ],
+                      },
+                    };
+                  }),
+                },
+              },
+            };
+          }
           if (body.query.includes("ContractSourceEdits")) {
             const ids = (body.variables as unknown as { ids: string[] }).ids;
             return {

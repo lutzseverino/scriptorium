@@ -521,3 +521,129 @@ export function contractEvidenceIds(
   }
   return ids;
 }
+
+// Evidence keeps its immutable role after Canon invalidates its authorization
+// or a later publication replaces the current proof. Read all retained ledger
+// revisions, pinned to one tip, and cache that history only until the tip moves.
+// These IDs only exclude mutable targets; they grant no readiness authority.
+export function contractEvidence(
+  connection: Connection,
+  result: { marker: string; author: string },
+  isReport: (comment: Comment) => boolean,
+) {
+  const cached = new Map<number, { tip: string; ids: Set<string> }>();
+  const originalRoles = new Map<string, boolean>();
+  // Prepared repositories have no ledger. Authenticate the original role of
+  // report-shaped comments instead of trusting an edited payload, including
+  // legacy evidence created before this bridge ever observed the issue.
+  const protectOriginalRoles = async (
+    comments: Comment[],
+    ids: Set<string>,
+  ) => {
+    const candidates = comments.filter(
+      (comment) => isReport(comment) && !ids.has(String(comment.id)),
+    );
+    const unknown = candidates.filter(
+      (comment) => !comment.nodeId || !originalRoles.has(comment.nodeId),
+    );
+    for (let offset = 0; offset < unknown.length; offset += 50) {
+      const batch = unknown.slice(offset, offset + 50);
+      if (batch.some((comment) => !comment.nodeId))
+        return hold("Original report role has no platform identity");
+      const response = await request(connection, {
+        method: "POST",
+        path: "/graphql",
+        body: {
+          query: `query FactoryOriginalCommentRoles($ids:[ID!]!) { nodes(ids:$ids) { ... on IssueComment { id body lastEditedAt includesCreatedEdit userContentEdits(last:1) { nodes { diff deletedAt } } } } }`,
+          variables: { ids: batch.map((comment) => comment.nodeId) },
+        },
+      });
+      const nodes =
+        object(response) && !response.errors && object(response.data)
+          ? response.data.nodes
+          : null;
+      if (!Array.isArray(nodes) || nodes.length !== batch.length)
+        return hold("Original report role history is unavailable");
+      const seen = new Set<string>();
+      for (const node of nodes) {
+        if (!object(node) || !text(node.id) || seen.has(node.id))
+          return hold("Original report role history is incomplete");
+        const comment = batch.find((entry) => entry.nodeId === node.id);
+        if (!comment || !time(node.lastEditedAt))
+          return hold(
+            "Original report role history has conflicting identities",
+          );
+        seen.add(node.id);
+        const oldest =
+          object(node.userContentEdits) &&
+          Array.isArray(node.userContentEdits.nodes)
+            ? node.userContentEdits.nodes[0]
+            : null;
+        const original =
+          node.lastEditedAt === null
+            ? node.body
+            : node.includesCreatedEdit === true &&
+                object(oldest) &&
+                !oldest.deletedAt
+              ? oldest.diff
+              : null;
+        if (typeof original !== "string")
+          return hold(
+            "Original report role cannot be verified; recover complete authenticated creation history before adopting an edited comment",
+          );
+        originalRoles.set(node.id, isReport({ ...comment, body: original }));
+      }
+    }
+    for (const comment of candidates)
+      if (!originalRoles.get(comment.nodeId!)) ids.add(String(comment.id));
+    return ids;
+  };
+  return async (number: number, comments: Comment[]): Promise<Set<string>> => {
+    const ids = contractEvidenceIds(comments, result);
+    const mode = await readContractMode(connection);
+    if (mode.mode === "prepared") return protectOriginalRoles(comments, ids);
+    const legacy = mode.receipt.issues.find(
+      (entry) => entry.number === number,
+    )?.legacy;
+    if (legacy) ids.add(legacy.source.id);
+    const ref = await request(connection, {
+      path: `${base(connection)}/git/ref/heads/${ledgerBranch}`,
+    });
+    if (!object(ref) || !object(ref.object) || !sha(ref.object.sha))
+      return hold("Immutable evidence ledger revision is unavailable");
+    const tip = ref.object.sha;
+    let history = cached.get(number);
+    if (history?.tip !== tip) {
+      const retained = new Set<string>();
+      const commits = new Set<string>();
+      for (let page = 1; ; page++) {
+        const revisions = await request(connection, {
+          path: `${base(connection)}/commits?sha=${tip}&path=issues/${number}.json&per_page=100&page=${page}`,
+        });
+        if (!Array.isArray(revisions) || revisions.length > 100)
+          return hold("Immutable evidence ledger history is unreadable");
+        for (const revision of revisions) {
+          if (
+            !object(revision) ||
+            !sha(revision.sha) ||
+            commits.has(revision.sha)
+          )
+            return hold("Immutable evidence ledger history is incomplete");
+          commits.add(revision.sha);
+          const record = await contractFile<SourceRecord>(
+            connection,
+            `issues/${number}.json`,
+            revision.sha,
+          );
+          const id = record?.value.publication?.attestation.id;
+          if (text(id)) retained.add(id);
+        }
+        if (revisions.length < 100) break;
+      }
+      history = { tip, ids: retained };
+      cached.set(number, history);
+    }
+    for (const id of history.ids) ids.add(id);
+    return protectOriginalRoles(comments, ids);
+  };
+}
