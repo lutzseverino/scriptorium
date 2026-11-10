@@ -389,7 +389,7 @@ export async function verifyBodyWrite(
     method: "POST",
     path: "/graphql",
     body: {
-      query: `query ContractBodyPublication($id:ID!) { node(id:$id) { ... on Issue { id body lastEditedAt includesCreatedEdit userContentEdits(first:2) { totalCount nodes { id editedAt deletedAt editor { login } } } } } }`,
+      query: `query ContractBodyPublication($id:ID!) { node(id:$id) { ... on Issue { id body lastEditedAt includesCreatedEdit userContentEdits(first:2) { totalCount nodes { id editedAt deletedAt editor { __typename login } } } } } }`,
       variables: { id: original.issue },
     },
   });
@@ -415,6 +415,15 @@ export async function verifyBodyWrite(
         !previous.deletedAt &&
         previous.id === original.edit.id &&
         previous.editedAt === original.edit.editedAt;
+  const editor = object(latest) && object(latest.editor) ? latest.editor : null;
+  const editorLogin =
+    editor && typeof editor.login === "string"
+      ? editor.__typename === "Bot"
+        ? `${editor.login.replace(/\[bot\]$/i, "")}[bot]`
+        : editor.__typename === "User"
+          ? editor.login
+          : null
+      : null;
   if (
     !object(data) ||
     data.id !== issue.nodeId ||
@@ -424,9 +433,7 @@ export async function verifyBodyWrite(
     latest.id !== edit.id ||
     latest.editedAt !== edit.editedAt ||
     latest.deletedAt ||
-    !object(latest.editor) ||
-    typeof latest.editor.login !== "string" ||
-    latest.editor.login.toLowerCase() !== author.toLowerCase() ||
+    editorLogin?.toLowerCase() !== author.toLowerCase() ||
     !predecessor
   )
     return hold(

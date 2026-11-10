@@ -365,7 +365,12 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
                     {
                       ...edit,
                       deletedAt: null,
-                      editor: { login: controls.bodyEditor },
+                      editor: {
+                        __typename: controls.bodyEditor.endsWith("[bot]")
+                          ? "Bot"
+                          : "User",
+                        login: controls.bodyEditor.replace(/\[bot\]$/, ""),
+                      },
                     },
                   ],
                 },

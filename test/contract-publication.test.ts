@@ -426,7 +426,7 @@ test("prose may discuss Agent Brief and Original request while their duplicate s
 });
 
 test("a lost successful body response is never recovered from a human edit or incomplete history", async () => {
-  for (const editor of ["owner", ""]) {
+  for (const editor of ["owner", "factory", ""]) {
     const s = setup();
     s.fixture.controls.fail = "after-body";
     await assert.rejects(

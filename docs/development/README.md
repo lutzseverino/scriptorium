@@ -194,8 +194,9 @@ with a current result approving the latest ready-label event, so host tests
 that opt out drive missing, stale and newer results across passes. GitHub
 deletion facts not exposed by the neutral comment port use Postern's
 authenticated `access.request` fallback. `src/contract-result.ts` reads the
-`repo-canon/issue-contract-state/v1` and `/v2` formats that
-[Repo Canon v0.21.0 publishes](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result);
+`repo-canon/issue-contract-state/v1` format that
+[Repo Canon v0.21.0 publishes](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result)
+and the [public v2 protocol](https://github.com/lutzseverino/repo-canon/blob/94484bebc2b40b45759fa1d031bc289151520138/docs/development/issue-contract-v2.md);
 it imports no validator implementation. `test/contract-result-fixture.ts`
 copies a state line that release's validator posted, and the tests derive
 approvals from it. The literal v2 fixtures from Repo Canon commit `94484be` and the publication
