@@ -17,3 +17,5 @@ immediately, with no legacy-directory reading window.
   labels, model label prefix, implementation skill, trusted contract result, pauses, and protection.
 - [Sandbox image contract](sandbox-image.md): repository toolchain requirements,
   the factory's agent layer, pinned tools, and image reuse.
+
+- [Body-backed triage contracts](body-contracts.md): publication, exact evidence, legacy compatibility, staged activation and recovery.

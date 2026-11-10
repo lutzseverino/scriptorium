@@ -47,6 +47,11 @@ import { createRegistry } from "../src/providers.ts";
 import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
 import { contractResult } from "./contract-result-fixture.ts";
+import {
+  contractFixture,
+  contractConfiguration,
+  brief as bodyBrief,
+} from "./contract-fixture.ts";
 
 // The host runner, run against a stateful fake of each repository's Postern
 // connection, real Git clones of local bare remotes, the provider registry
@@ -444,7 +449,10 @@ function fakePlatform(
           await request("closeIssue", number);
           edit(number).state = "CLOSED";
         },
-        issue: unused,
+        async issue(number) {
+          await request("issue", number);
+          return facts(find(repository, number));
+        },
         issueEvent: unused,
         labels: unused,
         updateLabel: unused,
@@ -571,6 +579,24 @@ function fakePlatform(
           return viewer;
         },
         async request(options) {
+          if (options.path === `/repos/${repository}`)
+            return {
+              status: 200,
+              headers: {},
+              data: { default_branch: "main" },
+            };
+          if (options.path === `/repos/${repository}/git/ref/heads/main`)
+            return {
+              status: 200,
+              headers: {},
+              data: { object: { sha: "a".repeat(40) } },
+            };
+          if (
+            options.path.startsWith(
+              `/repos/${repository}/contents/.github/issue-contracts.json?`,
+            )
+          )
+            throw new PlatformError("notFound", "No cutoff configuration");
           assert.equal(options.path, "/graphql");
           const body = options.body as {
             query: string;
@@ -710,6 +736,77 @@ function fakePlatform(
                       pageInfo: { hasNextPage: false, endCursor: null },
                     },
                   },
+                },
+              },
+            };
+          }
+          if (body.query.includes("FactoryOriginalCommentRoles")) {
+            const ids = (body.variables as unknown as { ids: string[] }).ids;
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  nodes: ids.map((id) => {
+                    const comment = state[repository]
+                      .flatMap((issue) =>
+                        issue.discussion instanceof Error
+                          ? []
+                          : issue.discussion,
+                      )
+                      .find((entry) => entry.nodeId === id)!;
+                    const history = commentEdits.get(id);
+                    return {
+                      id,
+                      body: comment.body,
+                      lastEditedAt: history ? comment.updatedAt : null,
+                      includesCreatedEdit: true,
+                      userContentEdits: {
+                        nodes: [
+                          {
+                            diff: history?.[0] ?? comment.body,
+                            deletedAt: null,
+                          },
+                        ],
+                      },
+                    };
+                  }),
+                },
+              },
+            };
+          }
+          if (body.query.includes("ContractSourceEdits")) {
+            const ids = (body.variables as unknown as { ids: string[] }).ids;
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  nodes: ids.map((id) => {
+                    const comment = state[repository]
+                      .flatMap((issue) =>
+                        issue.discussion instanceof Error
+                          ? []
+                          : issue.discussion,
+                      )
+                      .find((c) => c.nodeId === id)!;
+                    const history = commentEdits.get(id);
+                    return {
+                      id,
+                      lastEditedAt: history ? comment.updatedAt : null,
+                      userContentEdits: {
+                        nodes: history
+                          ? [
+                              {
+                                id: `EDIT_${id}_${history.length}`,
+                                editedAt: comment.updatedAt,
+                                deletedAt: null,
+                              },
+                            ]
+                          : [],
+                      },
+                    };
+                  }),
                 },
               },
             };
@@ -938,7 +1035,11 @@ function host(
     usage = {},
     retention = [],
     pruning = [],
+    wrapConnection,
   }: {
+    wrapConnection?: (
+      connection: ConnectionWithLinkAdditions,
+    ) => ConnectionWithLinkAdditions;
     repositories: Record<string, IssueSpec[]>;
     remotes: Record<string, string>;
     tokens?: Record<string, string | Error>;
@@ -1052,7 +1153,8 @@ function host(
           "unsupported",
           "No platform adapter serves the remote on host git.example.test.",
         );
-      return github.connect(name, options);
+      const connection = github.connect(name, options);
+      return wrapConnection ? wrapConnection(connection) : connection;
     },
     git: async (_token, cwd, args) => {
       gitCalls.push({ cwd, args });
@@ -3652,7 +3754,7 @@ test("pickup, retries and parent readiness follow the validator's current result
         posted(2, []),
         posted(3, [
           postedResult(3, resultAt, {
-            format: "repo-canon/issue-contract-state/v2",
+            format: "repo-canon/issue-contract-state/v3",
           }),
         ]),
         posted(4, [postedResult(4, resultAt)], {
@@ -3691,7 +3793,7 @@ test("pickup, retries and parent readiness follow the validator's current result
   assert.match(held(run, 2)!, /no contract result from @github-actions\[bot\]/);
   assert.match(
     held(run, 3)!,
-    /has format repo-canon\/issue-contract-state\/v2/,
+    /has format repo-canon\/issue-contract-state\/v3/,
   );
   assert.match(
     held(run, 4)!,
@@ -3699,7 +3801,7 @@ test("pickup, retries and parent readiness follow the validator's current result
   );
   assert.match(
     held(run, 5)!,
-    /result or the issue's comment history could not be read/,
+    /result or trusted history\/mode could not be read/,
   );
   assert.match(
     held(run, 7)!,
@@ -9332,5 +9434,75 @@ test("host implement limits span providers, persist counts and release ended slo
         0,
       ),
     2,
+  );
+});
+
+test("body triage publication survives host restarts and admits implement through the real reader", async (t) => {
+  const protocol = contractFixture();
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+      }),
+    },
+    wrapConnection: protocol.wrap,
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  protocol.controls.evaluation = false;
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["model:claude-sonnet-5-5", "type:enhancement"],
+    body: bodyBrief,
+  });
+  await run.drain();
+  await run.tick();
+  assert.equal(protocol.writes.filter((w) => w === "body").length, 1);
+  assert.equal(
+    protocol.comments.filter((c) => c.body.includes("triage-attestation"))
+      .length,
+    0,
+  );
+  assert.equal(protocol.issue.labels.includes("state:ready"), false);
+  run.restart();
+  protocol.controls.evaluation = true;
+  await run.tick();
+  await run.tick();
+  assert.equal(
+    protocol.issue.labels.includes("state:ready"),
+    true,
+    run.reports.join("\n"),
+  );
+  const body = protocol.issue.body;
+  const evidence = structuredClone(
+    protocol.comments.find((c) => c.body.includes("triage-attestation"))!,
+  );
+  assert.ok(evidence);
+  assert.equal(body.split("## Original request").length, 2);
+  assert.ok(body.endsWith("Search is slow.\n\nKeep these bytes.\n"));
+  await run.tick();
+  assert.equal(run.launched.length, 2, run.reports.join("\n"));
+  assert.equal(protocol.result?.status, "approved");
+  assert.equal(protocol.writes.filter((w) => w === "body").length, 1);
+  assert.equal(protocol.writes.filter((w) => w === "attestation").length, 1);
+  assert.equal(
+    protocol.changes.filter((c) => c.label === "state:ready").length,
+    1,
+  );
+  assert.equal(
+    protocol.comments.filter((c) => c.body.includes('"phases":')).length,
+    1,
+  );
+  assert.equal(protocol.issue.body, body);
+  assert.deepEqual(
+    protocol.comments.find((c) => c.id === evidence.id),
+    evidence,
+  );
+  assert.deepEqual(
+    run.tokenCommands.filter((c) => c.includes('"issues":"write"')),
+    [],
   );
 });

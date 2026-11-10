@@ -3,6 +3,7 @@
 // the decisions out through each repository's hosting platform, its clone and
 // the providers' sandboxes.
 import { randomUUID } from "node:crypto";
+import type { Publication } from "./contract-publication.ts";
 import { trustedFinding, type Provenance } from "./triggers.ts";
 import {
   existsSync,
@@ -147,6 +148,7 @@ type HostRun = Run & {
   provenance?: Provenance;
   // Its run result's comment and labels are on the issue.
   resultPosted?: true;
+  publication?: Publication;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
   launchResult?: LaunchResult;
@@ -532,7 +534,15 @@ export function createHost(
             },
             run.configuration,
           );
-          const link = await platform.postResult(run.issue, post);
+          const link = await platform.postResult(run.issue, post, {
+            state: run.publication,
+            now: ports.now,
+            save(publication) {
+              run.publication = publication;
+              record(run);
+            },
+          });
+          if (link === null) continue;
           issue.labels = postedLabels(issue.labels, post);
           run.resultPosted = true;
           record(run);
@@ -857,19 +867,22 @@ export function createHost(
           releaseHeld: undefined,
           exited: true,
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
-          ended: recorded.interrupted
-            ? { interrupted: true }
-            : pausedEnding(recorded)
-              ? recoveredPause(recorded)
-              : recorded.pausing
-                ? { paused: recorded.pausing }
-                : {
-                    timedOut: false,
-                    pullRequest: "none",
-                    // A run that left its result ended by itself; one
-                    // without it ended with the earlier process.
-                    ...(!recorded.result && { orphaned: true as const }),
-                  },
+          ended:
+            recorded.publication && !recorded.resultPosted
+              ? undefined
+              : recorded.interrupted
+                ? { interrupted: true }
+                : pausedEnding(recorded)
+                  ? recoveredPause(recorded)
+                  : recorded.pausing
+                    ? { paused: recorded.pausing }
+                    : {
+                        timedOut: false,
+                        pullRequest: "none",
+                        // A run that left its result ended by itself; one
+                        // without it ended with the earlier process.
+                        ...(!recorded.result && { orphaned: true as const }),
+                      },
           token: "",
           finished: Promise.resolve(),
           controller: new AbortController(),
