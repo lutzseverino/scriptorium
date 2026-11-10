@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -502,11 +510,14 @@ test("an invalid host configuration stops the process with its reason", () => {
 });
 
 test("storage admission and dedicated cache targets are opt-in and validated in bytes", (t) => {
-  const path = join(directory(t), "host.json");
+  const root = directory(t);
+  const path = join(root, "host.json");
+  const alias = join(root, "alias");
+  symlinkSync(root, alias);
   const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   const imageStorage = {
-    storePaths: ["/var/lib/containerd", "/var/lib/docker"],
-    cachePath: "/var/lib/docker/volumes/factory-sandbox/_data",
+    storePaths: [root, alias],
+    cachePath: root,
     reserveBytes: 16106127360,
     resumeBytes: 18253611008,
   };
@@ -661,5 +672,124 @@ test("implement limits are optional independent nonnegative safe integers", (t) 
   for (const implement of [null, [], 2, { unknown: 1 }]) {
     writeFileSync(path, JSON.stringify({ ...base, implement }));
     assert.match(refused(path).join("\n"), /implement(?:\.unknown)?:/);
+  }
+});
+
+test("configured store and cache paths are probed as the loading identity", (t) => {
+  assert.notEqual(
+    process.getuid!(),
+    0,
+    "permission regression must run non-root",
+  );
+  const root = directory(t);
+  const ancestor = join(root, "private");
+  const store = join(ancestor, "store");
+  mkdirSync(store, { recursive: true });
+  const alias = join(root, "alias");
+  symlinkSync(store, alias);
+  const file = join(root, "file");
+  writeFileSync(file, "not a directory");
+  const path = join(root, "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const field of ["storePaths", "cachePath"] as const) {
+    for (const [candidate, failure] of [
+      [store, null],
+      [alias, null],
+      [join(root, "missing"), /ENOENT/],
+      [file, /not a directory/],
+    ] as const) {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          ...base,
+          imageStorage: {
+            storePaths: [root],
+            reserveBytes: 1,
+            resumeBytes: 2,
+            [field]: field === "storePaths" ? [candidate] : candidate,
+          },
+        }),
+      );
+      if (failure) {
+        const message = refused(path).join("\n");
+        assert.ok(message.includes(`imageStorage.${field}`));
+        assert.ok(message.includes(candidate));
+        assert.match(message, failure);
+      } else assert.ok(read(path).configuration.imageStorage);
+    }
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...base,
+        imageStorage: {
+          storePaths: [root],
+          reserveBytes: 1,
+          resumeBytes: 2,
+          [field]: field === "storePaths" ? [store] : store,
+        },
+      }),
+    );
+    chmodSync(ancestor, 0);
+    try {
+      const message = refused(path).join("\n");
+      assert.ok(message.includes(`imageStorage.${field}`));
+      assert.ok(message.includes(store));
+      assert.match(message, /EACCES/);
+    } finally {
+      chmodSync(ancestor, 0o700);
+    }
+  }
+});
+
+test("configuration and admission reject invalid local filesystem capacity", async (t) => {
+  const { observeImageStorage } = await import("../src/image-storage.ts");
+  const root = directory(t);
+  const path = join(root, "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const native = fs.statfsSync(root, { bigint: true });
+  for (const invalid of [
+    { bsize: 0n },
+    { blocks: 0n },
+    { bavail: -1n },
+    { bavail: native.blocks + 1n },
+    { bsize: BigInt(Number.MAX_SAFE_INTEGER), blocks: 2n, bavail: 2n },
+  ]) {
+    const mocked = t.mock.method(fs, "statfsSync", () => ({
+      ...native,
+      ...invalid,
+    }));
+    syncBuiltinESMExports();
+    try {
+      for (const field of ["storePaths", "cachePath"] as const) {
+        writeFileSync(
+          path,
+          JSON.stringify({
+            ...base,
+            imageStorage: {
+              storePaths: [root],
+              reserveBytes: 1,
+              resumeBytes: 2,
+              ...(field === "cachePath" && { cachePath: root }),
+            },
+          }),
+        );
+        const message = refused(path).join("\n");
+        assert.ok(message.includes(`imageStorage.${field}`));
+        assert.ok(message.includes(root));
+        assert.match(message, /observation.*invalid/);
+      }
+      await assert.rejects(
+        observeImageStorage([root], {
+          environment: { DOCKER_HOST: "unix:///fixture.sock" },
+          run: async () => {
+            assert.fail("preflight must not run Docker");
+          },
+        }),
+        /observation.*invalid/,
+      );
+    } finally {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    }
   }
 });

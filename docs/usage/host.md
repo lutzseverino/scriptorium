@@ -1438,6 +1438,25 @@ alone do not identify every content/snapshot store. The host process needs to
 see the same backing mounts as the native daemon. Docker Desktop/VM stores,
 remote stores and unresolved mappings cannot be measured this way; leave the
 policy disabled until a trustworthy native local mapping is available.
+Loading an enabled `imageStorage` policy resolves every configured store and
+cache path, checks that it is a directory and validates its local filesystem
+reading. A missing, inaccessible, non-directory or unmeasurable path rejects the
+configuration with its field, path and underlying error. This preflight uses the
+loading process's effective identity and mount view; it runs no Docker command,
+reclamation or admission-state write. Run deployment preflight as the actual
+service identity with the service's mount visibility. An administrator's
+successful parse does not prove that the service can access those paths.
+A host wrapper's `check-config` calls the installed release's
+`readHostConfiguration`; running that wrapper as another identity cannot
+certify service access.
+
+An explicitly configured readable parent or mount point can identify a store's
+filesystem without traversing the private store directory. The host operator
+must verify that it maps to every actual backing filesystem in the service's
+mount view; a parent on a different mount measures the wrong filesystem.
+Configure such a directory explicitly. The factory never climbs to an ancestor
+or substitutes the process root when a configured child is inaccessible.
+
 Enabled admission rejects non-Unix Docker endpoints and factory builders that
 use a remote, different or multiple daemon endpoint. Missing, unreadable,
 invalid or incomplete observations hold builds rather than fall back to a
@@ -1499,7 +1518,11 @@ or guarantee a build's peak disk requirement.
 The private process log reports the hold. `status.json.imageStorage` exposes
 `held`, `reason`, `observedAt`, the byte thresholds, each filesystem's identity,
 configured paths and available bytes, and the reclamation pressure, freed-space
-report and error. Thresholds are null for a cache-target-only policy. These
+report and error. `held` includes configuration and measurement failures;
+`reclamation.pressure` is true only after a fresh, valid observation below the
+applicable reserve or recovery threshold. An unreadable path keeps admission
+held, with the path and cause in `reason`, without implying storage pressure on
+retries or after restart. Thresholds are null for a cache-target-only policy. These
 diagnostics do not appear in the public provider event stream or issue comments.
 
 ## Repository pauses

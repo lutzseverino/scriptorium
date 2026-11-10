@@ -343,3 +343,89 @@ test("a restart retains a storage hold until the configured recovery threshold",
   availableBytes = 17 * GiB;
   await restarted.run((check) => check());
 });
+
+test("paths lost after configuration preflight hold without pressure across retries and restart", async (t) => {
+  const { chmodSync, mkdirSync, readFileSync, writeFileSync } =
+    await import("node:fs");
+  const { join } = await import("node:path");
+  const { directory } = await import("./fakes.ts");
+  const { readHostConfiguration } =
+    await import("../src/host-configuration.ts");
+  const { observeImageStorage } = await import("../src/image-storage.ts");
+  assert.notEqual(
+    process.getuid!(),
+    0,
+    "permission regression must run non-root",
+  );
+  const root = directory(t);
+  const ancestor = join(root, "private");
+  const store = join(ancestor, "store");
+  mkdirSync(store, { recursive: true });
+  const configPath = join(root, "host.json");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      ...JSON.parse(
+        readFileSync(
+          new URL("fixtures/host-configuration/valid.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+      imageBuilder: "daemon",
+      imageStorage: {
+        storePaths: [root, store],
+        reserveBytes: 1,
+        resumeBytes: 2,
+      },
+    }),
+  );
+  const configured = readHostConfiguration(configPath).imageStorage!;
+  const local = {
+    environment: { DOCKER_HOST: "unix:///fixture.sock" },
+    run: async () => {
+      assert.fail("local probes must not run Docker");
+    },
+  };
+  let builds = 0;
+  let reclaims = 0;
+  const ports = {
+    statePath: join(root, "storage.json"),
+    observe: (paths: string[]) => observeImageStorage(paths, local),
+    reclaim: async () => {
+      reclaims++;
+      return null;
+    },
+    now: () => new Date(at),
+  };
+  const storage = createImageStorage(configured, ports);
+  chmodSync(ancestor, 0);
+  try {
+    // An explicit readable parent is measurable on this same filesystem, but
+    // cannot stand in for the inaccessible child in the configured policy.
+    const parent = await observeImageStorage([root], local);
+    assert.equal(parent.length, 1);
+    for (const restart of [false, false, true]) {
+      const attempt = restart ? createImageStorage(configured, ports) : storage;
+      await assert.rejects(
+        attempt.run(async (check) => {
+          await check();
+          builds++;
+        }),
+        ImageStorageHold,
+      );
+      const diagnostic = attempt.status()!;
+      assert.equal(diagnostic.held, true);
+      assert.match(diagnostic.reason!, /EACCES/);
+      assert.ok(diagnostic.reason!.includes(store));
+      assert.deepEqual(diagnostic.filesystems, []);
+      assert.equal(diagnostic.reclamation.pressure, false);
+    }
+    assert.equal(builds, 0);
+    assert.equal(reclaims, 0);
+  } finally {
+    chmodSync(ancestor, 0o700);
+  }
+  const child = await observeImageStorage([store], local);
+  const parent = await observeImageStorage([root], local);
+  assert.equal(child[0].filesystem, parent[0].filesystem);
+});
