@@ -47,6 +47,23 @@ function github(
       url.pathname === "/graphql"
         ? /^query (\w+)/.exec(body.query)![1]
         : `${init?.method ?? "GET"} ${url.pathname}`;
+    // Existing platform fixtures use a verified pre-cutoff repository. Body
+    // protocol transport is exercised by the dedicated publication fixture.
+    const modeRead =
+      request === "GET /repos/acme/widgets"
+        ? { default_branch: "main" }
+        : request === "GET /repos/acme/widgets/git/ref/heads/main"
+          ? { object: { sha: "a".repeat(40) } }
+          : undefined;
+    if (modeRead)
+      return new Response(JSON.stringify(modeRead), { status: 200 });
+    if (
+      request ===
+      "GET /repos/acme/widgets/contents/.github/issue-contracts.json"
+    )
+      return new Response(JSON.stringify({ message: "Not found" }), {
+        status: 404,
+      });
     requests.push(request);
     assert.equal(
       new Headers(init?.headers).get("authorization"),
@@ -326,11 +343,11 @@ test("an unknown format version or an unreadable result holds with a hold commen
         reviewEventId: "42",
         sourceInvalidation: null,
       },
-      /^is refused: the latest contract result from @github-actions\[bot\] has no format version, and this factory reads only repo-canon\/issue-contract-state\/v1; update the factory or the repository's issue-contract validator so they share a result format$/,
+      /^is refused: the latest contract result from @github-actions\[bot\] has no format version, and this factory reads only repo-canon\/issue-contract-state\/v1 and repo-canon\/issue-contract-state\/v2; update the factory or the repository's issue-contract validator so they share a result format$/,
     ],
     [
-      resultState({ format: "repo-canon/issue-contract-state/v2" }),
-      /has format repo-canon\/issue-contract-state\/v2, and this factory reads only repo-canon\/issue-contract-state\/v1/,
+      resultState({ format: "repo-canon/issue-contract-state/v3" }),
+      /has format repo-canon\/issue-contract-state\/v3, and this factory reads only repo-canon\/issue-contract-state\/v1/,
     ],
     ['{"format":', /result from @github-actions\[bot\] is unreadable/],
     ["null", /is unreadable/],
@@ -682,7 +699,7 @@ test("unreadable comments or deletion history wait with an actionable reason", a
       }),
       {
         reason:
-          /^waits: the issue-contract validator's result or the issue's comment history could not be read this pass; restore comment access and retry$/,
+          /^waits: the issue-contract validator's result or trusted history\/mode could not be read this pass; restore access and retry$/,
         waiting: true,
       },
     );

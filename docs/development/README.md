@@ -194,12 +194,14 @@ with a current result approving the latest ready-label event, so host tests
 that opt out drive missing, stale and newer results across passes. GitHub
 deletion facts not exposed by the neutral comment port use Postern's
 authenticated `access.request` fallback. `src/contract-result.ts` reads the
-`repo-canon/issue-contract-state/v1` format that
+`repo-canon/issue-contract-state/v1` and `/v2` formats that
 [Repo Canon v0.21.0 publishes](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result);
 it imports no validator implementation. `test/contract-result-fixture.ts`
 copies a state line that release's validator posted, and the tests derive
-approvals from it. A new result format is a new version the factory accepts
-or refuses explicitly. The platform tests fail each state transition part
+approvals from it. The literal v2 fixtures from Repo Canon commit `94484be` and the publication
+fixtures exercise body/edit identity, preserved intake, evidence/notice/readiness
+ordering, interrupted writes and report/evidence separation. A new result format
+is a new version the factory accepts or refuses explicitly. The platform tests fail each state transition part
 way. `test/boundary.test.ts` checks that the package declares and imports
 nothing from outside itself but Node.js, Sandcastle and Postern, so no
 Markdown parser, and that the platform projection and decision modules read

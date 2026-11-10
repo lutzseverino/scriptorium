@@ -16,6 +16,7 @@ import { isHoldComment, upsert } from "./hold-comments.ts";
 import type { InputResume } from "./platform.ts";
 import type { RunResult } from "./run-result.ts";
 import { reference } from "./readiness.ts";
+import { contractEvidenceIds } from "./contract-protocol.ts";
 
 const phases = ["triage", "implement", "review", "merge"] as const;
 export type Phase = (typeof phases)[number];
@@ -91,11 +92,15 @@ const encode = (value: unknown) =>
 
 // A run comment the factory's account wrote, with the state its marker holds.
 function runState(comment: Comment): State | null {
+  if (comment.body.includes("<!-- repo-canon:triage-attestation ")) return null;
   const match = comment.author?.bot && runMarker.exec(lastLine(comment));
   if (!match) return null;
   try {
     const state = JSON.parse(match[1]);
-    return typeof state?.phases === "object" && state.phases !== null
+    return typeof state?.phases === "object" &&
+      state.phases !== null &&
+      !Object.hasOwn(state, "run") &&
+      !Object.hasOwn(state, "outcome")
       ? state
       : null;
   } catch {
@@ -115,8 +120,16 @@ function latestPass(comments: Comment[]) {
 }
 
 // The continuation of a stop the issue's unfinished pass released.
-export function passContinuation(comments: Comment[]): InputResume | undefined {
-  const pass = latestPass(comments);
+export function passContinuation(
+  comments: Comment[],
+  configuration?: Pick<PlatformConventions, "contractResult">,
+): InputResume | undefined {
+  const evidence =
+    configuration &&
+    contractEvidenceIds(comments, configuration.contractResult);
+  const pass = latestPass(
+    evidence ? comments.filter((c) => !evidence.has(String(c.id))) : comments,
+  );
   return pass?.state.final ? undefined : pass?.state.resume;
 }
 
@@ -167,7 +180,13 @@ export function issueComments(
       action?: Action,
     ): Promise<void> {
       const comments = await tracker.comments(issue);
-      const latest = latestPass(comments);
+      const evidence = contractEvidenceIds(
+        comments,
+        configuration.contractResult,
+      );
+      const latest = latestPass(
+        comments.filter((comment) => !evidence.has(String(comment.id))),
+      );
       const pass =
         latest && (!latest.state.final || update.final) ? latest : undefined;
       const state: State = {

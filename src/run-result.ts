@@ -194,6 +194,7 @@ export type ResultPost = {
   marker: string;
   add: string[];
   remove: string[];
+  triage?: { run: string; brief: string; disclaimer: string; author: string };
 };
 
 // The factory's frame: the configured disclaimer, the body, the run's facts
@@ -231,6 +232,18 @@ export function resultPost(
     marker,
     add: [...(result.labels ?? []), ...(result.state ? [result.state] : [])],
     remove: triage && labels.triage ? [labels.triage] : [],
+    ...(triage &&
+      result.outcome === "done" && {
+        triage: {
+          run: run.id,
+          brief: `${disclaimer}\n\n${result.body}`,
+          disclaimer,
+          author:
+            configuration.version === 3
+              ? (configuration.triageResult?.author ?? "")
+              : "",
+        },
+      }),
   };
 }
 
@@ -249,11 +262,29 @@ export function postedLabels(labels: string[], post: ResultPost): string[] {
 export async function postResultComment(
   tracker: IssueTracker,
   issue: number,
-  { comment, marker }: Pick<ResultPost, "comment" | "marker">,
+  {
+    comment,
+    marker,
+    triage,
+  }: Pick<ResultPost, "comment" | "marker" | "triage">,
 ): Promise<string> {
-  const posted = (await tracker.comments(issue)).find((existing) =>
-    existing.body.split(/\r\n?|\n/).includes(marker),
+  const matches = (await tracker.comments(issue)).filter((existing) =>
+    existing.body.includes(marker),
   );
+  if (
+    matches.length > 1 ||
+    matches.some(
+      (existing) =>
+        existing.body !== comment ||
+        (triage &&
+          ((triage.author && existing.author?.login !== triage.author) ||
+            existing.createdAt !== existing.updatedAt)),
+    )
+  )
+    throw new Error(
+      "Result evidence conflicts with its immutable issue/run identity; restore fresh applicable review instead of adopting an edited marker",
+    );
+  const posted = matches[0];
   return (posted ?? (await tracker.createComment(issue, comment))).url;
 }
 
@@ -282,7 +313,7 @@ export function resultGuidance(
     families.length
       ? `"labels" lists any other labels to apply, each starting with ${families.join(", ")}.`
       : `Ask for no other labels.`,
-    `"body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: ${kind === "triage" ? "the Agent Brief and its triage notes, or the question that stops it" : "what the run delivered, or the question or stop note"}.`,
+    `"body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: ${kind === "triage" ? "the complete Agent Brief with its seven required fields, applicable Seams and triage notes, or the question that stops it. Do not include Original request: the host preserves the authenticated original separately" : "what the run delivered, or the question or stop note"}.`,
     `"reason" is one line on why the run ended, required when it failed.`,
     "The factory posts the body and applies those labels; do not post that comment or apply those labels yourself. Comments on pull requests and review-thread replies stay yours to post.",
   ].join(" ");

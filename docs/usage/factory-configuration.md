@@ -292,8 +292,12 @@ gate, hold or readiness requirement.
 The factory accepts readiness only from a person, except, with
 `runKinds.triage` on, readiness the factory's own triage run applied. That readiness counts when its latest
 application is by `triageResult.author`, and the validator's current result
-approves it with, as its contract source, a comment by that account that names
-the triage run on exactly one `triageResult.marker` line. A result by another
+approves that event and verifies its factory proof. In legacy mode, the selected
+comment by that account names the triage run on exactly one
+`triageResult.marker` line. In body mode, the validator binds the exact body
+revision to a separate configured-author attestation and preserved independent
+intake provenance; the host checks those referenced platform facts.
+See [body-backed triage contracts](body-contracts.md). A result by another
 account, another marker, a line naming no run or two, or a result made stale
 by a later change grants no readiness. The contract result's other checks
 still apply.
@@ -442,9 +446,12 @@ no default. A Repo Canon adopter uses its validator's values:
 
 The result is the latest comment by `author`, ignoring case, with a line
 `<!-- <marker> {…} -->` whose JSON object is in format
-`repo-canon/issue-contract-state/v1`. The factory reads `format`, `status`,
-`label`, `reviewEventId` and `source`, and checks them against the issue's
-platform facts. A result in another format, including an earlier line without
+`repo-canon/issue-contract-state/v1` or `repo-canon/issue-contract-state/v2`.
+The factory reads readiness, selected source and current-event approval. V2
+also binds the repository's explicit cutoff, exact observation and verified
+factory association; the host checks their platform identities without parsing
+contract Markdown. [Body-backed triage contracts](body-contracts.md) explains
+publication mode, automatic freshness reevaluation and migration recovery. A result in another format, including an earlier line without
 `format`, holds the issue with a hold comment until the validator and the
 factory share a format.
 

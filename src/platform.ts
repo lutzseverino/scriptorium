@@ -17,11 +17,20 @@ import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
 import type { Actor, ReadinessHold } from "./readiness.ts";
 import { issueComments, passContinuation } from "./run-comment.ts";
+import {
+  publishContract,
+  type PublicationProgress,
+} from "./contract-publication.ts";
+import {
+  readContractMode,
+  ContractPublicationHold,
+} from "./contract-protocol.ts";
 import type { PullRequestState } from "./run-ending.ts";
 import {
   contractResultHold,
   triageBacked,
   type ContractFacts,
+  bodyContractFacts,
 } from "./contract-result.ts";
 import {
   claimLabels,
@@ -147,23 +156,38 @@ export function repositoryPlatform(
     comments?: Comment[];
   }> {
     try {
-      const comments = await issueTracker.comments(number);
+      let comments = await issueTracker.comments(number);
       const latestDeletion =
         connection.repository.platform === "github"
           ? await latestCommentDeletion(number)
           : undefined;
-      const all = { ...facts, comments, latestDeletion };
+      const mode = await readContractMode(connection);
+      const snapshot =
+        mode.mode === "body"
+          ? await bodyContractFacts(
+              connection,
+              number,
+              mode,
+              configuration.labels.ready,
+            )
+          : undefined;
+      const body = snapshot?.body;
+      if (snapshot) comments = snapshot.comments;
+      const all = { ...facts, comments, latestDeletion, ...(body && { body }) };
       return {
         hold: contractResultHold(all, configuration),
         triage: triageBacked(all, configuration),
         comments,
       };
     } catch (error) {
-      if (!(error instanceof PlatformError)) throw error;
+      if (
+        !(error instanceof PlatformError) &&
+        !(error instanceof ContractPublicationHold)
+      )
+        throw error;
       return {
         hold: {
-          reason:
-            "waits: the issue-contract validator's result or the issue's comment history could not be read this pass; restore comment access and retry",
+          reason: `waits: the issue-contract validator's result or trusted history/mode could not be read this pass; restore access and retry${error instanceof ContractPublicationHold ? `: ${error.message}` : ""}`,
           waiting: true,
         },
         triage: false,
@@ -186,7 +210,7 @@ export function repositoryPlatform(
       } catch (error) {
         if (!(error instanceof PlatformError)) throw error;
       }
-    const continuation = comments && passContinuation(comments);
+    const continuation = comments && passContinuation(comments, configuration);
     return continuation ? { continuation } : {};
   }
 
@@ -771,7 +795,23 @@ export function repositoryPlatform(
 
     // A run result's comment, then its labels, so readiness a triage result
     // applies finds its brief. Resolves the comment's link.
-    async postResult(issue: number, post: ResultPost): Promise<string> {
+    async postResult(
+      issue: number,
+      post: ResultPost,
+      progress?: PublicationProgress,
+    ): Promise<string | null> {
+      if (post.triage) {
+        if (!progress)
+          throw new Error("Triage publication requires durable host progress");
+        const published = await publishContract(
+          connection,
+          configuration,
+          issue,
+          post,
+          progress,
+        );
+        if (published !== undefined) return published;
+      }
       const link = await postResultComment(issueTracker, issue, post);
       if (post.add.length) await issueTracker.addLabels(issue, post.add);
       for (const label of post.remove) await remove(issue, label);
