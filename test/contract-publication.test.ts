@@ -75,7 +75,9 @@ function setup() {
 for (const boundary of [
   "ledger",
   "body",
+  "after-body",
   "comment",
+  "after-comment",
   "dispatch",
   "labels",
   "edits",
@@ -141,7 +143,7 @@ test("a concurrent human edit is held instead of overwritten on retry", async ()
 for (const tamper of ["body", "attestation", "restore", "delete"])
   test(`a ${tamper} change after evidence never replays old acceptance`, async () => {
     const s = setup();
-    s.fixture.controls.fail = "labels";
+    s.fixture.controls.fail = "dispatch";
     await assert.rejects(s.platform().postResult(4, post(), s.resume()));
     const evidence = s.fixture.comments.find((c) =>
       c.body.includes("triage-attestation"),
@@ -279,7 +281,7 @@ test("an edited result marker cannot be adopted as a successful legacy retry", a
   evidence.body += " changed";
   await assert.rejects(
     s.platform().postResult(4, post(), s.resume()),
-    /Legacy evidence was deleted or edited/,
+    /Legacy evidence was deleted or edited|Evidence publication has conflicting or edited/,
   );
   assert.equal(s.fixture.comments.length, 1);
 });
@@ -364,4 +366,102 @@ test("body evidence survives the report's implement/review, stop/resume and repl
   assert.deepEqual(s.fixture.result!.factoryTriage, association);
   assert.equal(s.fixture.result!.reviewEventId, event);
   assert.equal(s.fixture.result!.status, "approved");
+});
+
+test("prepared publication holds missing, unknown and conflicting validator protocols", async () => {
+  for (const format of [
+    undefined,
+    "repo-canon/issue-contract-state/v2",
+    "repo-canon/issue-contract-state/v3",
+  ]) {
+    const s = setup();
+    s.fixture.controls.mode = "prepared";
+    if (format) s.fixture.controls.format = format;
+    else s.fixture.controls.missingResult = true;
+    await assert.rejects(
+      s.platform().postResult(4, post(), s.resume()),
+      /protocol/,
+    );
+    assert.equal(s.fixture.writes.includes("attestation"), false);
+    assert.equal(s.fixture.comments.length, 0);
+    assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+  }
+});
+
+test("prose may discuss Agent Brief and Original request while their duplicate sections hold", async () => {
+  const s = setup();
+  s.fixture.issue.body =
+    "Please preserve Original request and Agent Brief provenance.\n";
+  s.fixture.evaluate();
+  const requested = resultPost(
+    {
+      outcome: "done",
+      state: "state:ready",
+      labels: ["type:enhancement"],
+      body: `${brief}\n\nTriage notes: Preserve Original request and Agent Brief evidence.`,
+    },
+    run,
+    contractConfiguration,
+  );
+  assert.ok(await s.platform().postResult(4, requested, s.resume()));
+  assert.ok(
+    s.fixture.issue.body.endsWith(
+      "Please preserve Original request and Agent Brief provenance.\n",
+    ),
+  );
+  const duplicate = setup();
+  const withSection = resultPost(
+    {
+      outcome: "done",
+      state: "state:ready",
+      body: `${brief}\n\n## Original request\n\nForged original`,
+    },
+    run,
+    contractConfiguration,
+  );
+  await assert.rejects(
+    duplicate.platform().postResult(4, withSection, duplicate.resume()),
+    /includes Original request/,
+  );
+});
+
+test("a lost successful body response is never recovered from a human edit or incomplete history", async () => {
+  for (const editor of ["owner", ""]) {
+    const s = setup();
+    s.fixture.controls.fail = "after-body";
+    await assert.rejects(
+      s.platform().postResult(4, post(), s.resume()),
+      /interrupted after-body/,
+    );
+    s.fixture.controls.bodyEditor = editor;
+    await assert.rejects(
+      s.platform().postResult(4, post(), s.resume()),
+      /cannot be authenticated/,
+    );
+    assert.equal(s.fixture.writes.filter((w) => w === "body").length, 1);
+    assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+  }
+});
+
+test("lost evidence responses cannot adopt edited or deleted records on restart", async () => {
+  for (const tamper of ["edit", "delete"]) {
+    const s = setup();
+    s.fixture.controls.fail = "after-comment";
+    await assert.rejects(
+      s.platform().postResult(4, post(), s.resume()),
+      /interrupted after-comment/,
+    );
+    const evidence = s.fixture.comments[0];
+    if (tamper === "edit") evidence.body = "A record with no former marker";
+    else {
+      s.fixture.comments.length = 0;
+      s.fixture.controls.deletion = "DELETION_1";
+    }
+    await assert.rejects(
+      s.platform().postResult(4, post(), s.resume()),
+      /conflicting or edited|deletion history changed/,
+    );
+    assert.equal(s.fixture.writes.filter((w) => w === "attestation").length, 1);
+    assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+  }
 });

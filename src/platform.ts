@@ -171,9 +171,14 @@ export function repositoryPlatform(
               configuration.labels.ready,
             )
           : undefined;
-      const body = snapshot?.body;
+      const sourceFacts = snapshot?.sourceFacts;
       if (snapshot) comments = snapshot.comments;
-      const all = { ...facts, comments, latestDeletion, ...(body && { body }) };
+      const all = {
+        ...facts,
+        comments,
+        latestDeletion,
+        ...(sourceFacts && { body: sourceFacts }),
+      };
       return {
         hold: contractResultHold(all, configuration),
         triage: triageBacked(all, configuration),

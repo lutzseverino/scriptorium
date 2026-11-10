@@ -42,8 +42,12 @@ Publication checkpoints live in the host's existing run record. Restart
 refetches mode, source, evidence and readiness identities. Known checkpoints
 resume without duplicate originals, evidence or ready events. A concurrent edit
 holds rather than overwriting it. If a body write succeeded but its exact edit
-checkpoint was lost, recover authenticated publication history or obtain fresh
-triage/review; identical text alone cannot authenticate the missing write.
+checkpoint was lost, the host verifies its recorded intent against the host
+editor and exact predecessor in authenticated edit history. Missing history or
+a concurrent human edit holds for recovery or fresh triage/review; identical
+text alone cannot authenticate the missing write. Evidence intents similarly
+retain their discussion and deletion identities before posting, so lost
+responses recover unchanged comments and edited/deleted evidence holds.
 A prepared result recovered after cutoff holds for fresh body triage and never
 posts a new legacy contract. Stop/failed results retain their framed comment
 and state behavior and never replace a contract body.

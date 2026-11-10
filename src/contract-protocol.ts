@@ -267,6 +267,37 @@ export async function sourceEdits(
   return edits;
 }
 
+export async function commentDeletionIdentity(
+  connection: Connection,
+  number: number,
+): Promise<string | null> {
+  const [owner, name] = connection.repository.path.split("/");
+  const response = await request(connection, {
+    method: "POST",
+    path: "/graphql",
+    body: {
+      query: `query ContractEvidenceDeletions($owner:String!,$name:String!,$number:Int!) { repository(owner:$owner,name:$name) { issue(number:$number) { timelineItems(last:1,itemTypes:[COMMENT_DELETED_EVENT]) { nodes { ... on CommentDeletedEvent { id } } } } } }`,
+      variables: { owner, name, number },
+    },
+  });
+  const data = object(response) && object(response.data) ? response.data : null;
+  const repo = data && object(data.repository) ? data.repository : null;
+  const issue = repo && object(repo.issue) ? repo.issue : null;
+  const timeline =
+    issue && object(issue.timelineItems) ? issue.timelineItems : null;
+  const nodes =
+    timeline && Array.isArray(timeline.nodes) ? timeline.nodes : null;
+  if (
+    !nodes ||
+    nodes.length > 1 ||
+    (nodes.length === 1 && (!object(nodes[0]) || !text(nodes[0].id)))
+  )
+    return hold(
+      "Exact comment deletion history is unavailable during evidence publication",
+    );
+  return nodes.length ? (nodes[0].id as string) : null;
+}
+
 // Canon's canonical observation serialization (public v2). Reporting changes
 // its digest, but not the selected source, acceptance or immutable proof.
 export function contractObservation(
@@ -340,6 +371,67 @@ export function bodyRevision(
       }),
     ),
   };
+}
+
+// A body mutation has no API compare-and-swap. If its response/checkpoint was
+// lost, authenticate the host's one edit and its exact predecessor, rather
+// than adopting equal bytes or overwriting a human edit. Incomplete history
+// deliberately cannot recover a publication.
+export async function verifyBodyWrite(
+  connection: Connection,
+  issue: Issue,
+  edit: Edit,
+  original: { issue: string; edit: Edit; createdAt: string },
+  intended: string,
+  author: string,
+): Promise<void> {
+  const response = await request(connection, {
+    method: "POST",
+    path: "/graphql",
+    body: {
+      query: `query ContractBodyPublication($id:ID!) { node(id:$id) { ... on Issue { id body lastEditedAt includesCreatedEdit userContentEdits(first:2) { totalCount nodes { id editedAt deletedAt editor { login } } } } } }`,
+      variables: { id: original.issue },
+    },
+  });
+  const data =
+    object(response) && object(response.data) ? response.data.node : null;
+  const history =
+    object(data) && object(data.userContentEdits)
+      ? data.userContentEdits
+      : null;
+  const nodes = history && Array.isArray(history.nodes) ? history.nodes : [];
+  const latest = nodes[0],
+    previous = nodes[1];
+  const predecessor =
+    original.edit.id === `created:${original.issue}`
+      ? (history?.totalCount === 1 && nodes.length === 1) ||
+        (history?.totalCount === 2 &&
+          object(data) &&
+          data.includesCreatedEdit === true &&
+          object(previous) &&
+          !previous.deletedAt &&
+          previous.editedAt === original.createdAt)
+      : object(previous) &&
+        !previous.deletedAt &&
+        previous.id === original.edit.id &&
+        previous.editedAt === original.edit.editedAt;
+  if (
+    !object(data) ||
+    data.id !== issue.nodeId ||
+    data.body !== intended ||
+    data.lastEditedAt !== issue.bodyEditTime ||
+    !object(latest) ||
+    latest.id !== edit.id ||
+    latest.editedAt !== edit.editedAt ||
+    latest.deletedAt ||
+    !object(latest.editor) ||
+    typeof latest.editor.login !== "string" ||
+    latest.editor.login.toLowerCase() !== author.toLowerCase() ||
+    !predecessor
+  )
+    return hold(
+      "Body write cannot be authenticated against its recorded host intent and exact predecessor; preserve concurrent edits or recover complete authenticated publication history",
+    );
 }
 export function markedRun(markdown: string, marker: string): string | null {
   const lines = markdown

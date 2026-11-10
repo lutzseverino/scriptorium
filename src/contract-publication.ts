@@ -7,27 +7,31 @@ import {
   attestationFormat,
   bodyRevision,
   contractFile,
+  commentDeletionIdentity,
   digest,
   hold,
   ledgerBranch,
-  markedRun,
   readAttestation,
   readContractMode,
   request,
   same,
   sourceEdits,
+  verifyBodyWrite,
   type Attestation,
   type Edit,
   type Intake,
   type SourceRecord,
   type WriterProof,
 } from "./contract-protocol.ts";
-import { currentBodyDecision } from "./contract-result.ts";
+import {
+  currentBodyDecision,
+  requirePreparedProtocol,
+} from "./contract-result.ts";
 
 export type Publication = {
   mode: "prepared" | "body";
   cutoff?: string;
-  original?: { body: string; edit: Edit; issue: string };
+  original?: { body: string; edit: Edit; issue: string; createdAt: string };
   body?: string;
   published?: { revision: string; source: Attestation["source"] };
   evidence?: {
@@ -37,6 +41,7 @@ export type Publication = {
     edit: Edit;
     url: string;
   };
+  evidenceIntent?: { body: string; after: number; deletion: string | null };
   readyRequested?: true;
 };
 export type PublicationProgress = {
@@ -78,58 +83,26 @@ export async function publishContract(
   }
   if (mode.mode === "prepared") {
     const tracker = connection.issueTracker;
-    if (!state.evidence) {
-      await postResultComment(tracker, number, post);
-      const candidates = (await tracker.comments(number)).filter(
-        (c) =>
-          c.body === post.comment &&
-          (!post.triage!.author || c.author?.login === post.triage!.author),
-      );
-      if (candidates.length !== 1)
-        return hold(
-          "Legacy publication has no unique immutable evidence identity",
-        );
-      const evidence = candidates[0];
-      const edit = (await sourceEdits(connection, [evidence.nodeId]))[
-        evidence.nodeId!
-      ];
-      if (edit.id !== `created:${evidence.nodeId}`)
-        return hold(
-          "Legacy publication evidence was edited before its identity was recorded",
-        );
-      state.evidence = {
-        id: evidence.id,
-        nodeId: evidence.nodeId!,
-        body: evidence.body,
-        edit,
-        url: evidence.url,
-      };
-      save();
-    }
-    const evidence = (await tracker.comments(number)).find(
-      (c) => c.id === state.evidence!.id,
+    requirePreparedProtocol(await tracker.comments(number), configuration);
+    await evidenceComment(
+      connection,
+      number,
+      state,
+      save,
+      post.comment,
+      post.marker,
+      post.triage.author,
     );
-    if (
-      !evidence ||
-      evidence.body !== state.evidence.body ||
-      (post.triage.author && evidence.author?.login !== post.triage.author) ||
-      !same(
-        (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
-        state.evidence.edit,
-      )
-    )
-      return hold(
-        "Legacy evidence was deleted or edited; never reconstruct it from a report",
-      );
     if (!same(await readContractMode(connection), mode))
       return hold(
         "Cutoff changed before legacy readiness; hold and re-triage in body mode",
       );
+    requirePreparedProtocol(await tracker.comments(number), configuration);
     if (post.add.length) await tracker.addLabels(number, post.add);
     for (const label of post.remove)
       if ((await tracker.issue(number)).labels.includes(label))
         await tracker.removeLabel(number, label);
-    return state.evidence.url;
+    return state.evidence!.url;
   }
   const triage = configuration.triageResult;
   if (!triage || !configuration.runKinds?.triage)
@@ -183,7 +156,7 @@ export async function publishContract(
   if (!record?.intake) {
     // A possible previous Brief is not authenticated original intake. This is
     // conservative containment, not a competing Markdown contract selector.
-    if (/agent\s+brief|original\s+request/i.test(issue.body))
+    if (hasSection(issue.body, "agent brief"))
       return hold(
         "Original request is unavailable or ambiguous; recover authenticated intake",
       );
@@ -238,7 +211,7 @@ export async function publishContract(
   if (typeof intake.original !== "string" || typeof intake.author !== "string")
     return hold("Preserved original intake is unreadable");
   if (
-    !state.published &&
+    !state.original &&
     !(await currentBodyDecision(connection, configuration, number, mode, true))
   ) {
     await request(connection, {
@@ -252,11 +225,16 @@ export async function publishContract(
     return null;
   }
   if (!state.original) {
-    if (/original\s+request/i.test(post.triage.brief))
+    if (hasSection(post.triage.brief, "original request"))
       return hold(
         "The model result includes Original request; re-triage with intake supplied only by the host",
       );
-    state.original = { body: issue.body, issue: issue.nodeId, edit };
+    state.original = {
+      body: issue.body,
+      issue: issue.nodeId,
+      edit,
+      createdAt: issue.createdAt,
+    };
     state.body = `${post.triage.brief.trimEnd()}\n\n## Original request\n\n${intake.original}`;
     if (state.body.length > 65_536)
       return hold(
@@ -265,10 +243,31 @@ export async function publishContract(
     save();
   }
   if (!state.published) {
-    if (issue.body !== state.original.body || !same(edit, state.original.edit))
+    const ordinary = post.add.filter(
+      (label) =>
+        label !== configuration.labels.ready && !issue.labels.includes(label),
+    );
+    if (ordinary.length) await tracker.addLabels(number, ordinary);
+    if (issue.body === state.body && !same(edit, state.original.edit)) {
+      await verifyBodyWrite(
+        connection,
+        issue,
+        edit,
+        state.original,
+        state.body!,
+        triage.author,
+      );
+      state.published = bodyRevision(issue, edit);
+      save();
+    } else if (
+      issue.body !== state.original.body ||
+      !same(edit, state.original.edit)
+    )
       return hold(
         "Issue changed before body publication; preserve the concurrent edit",
       );
+  }
+  if (!state.published) {
     // Refetch mode and source immediately before replacing intake. GitHub has
     // no body compare-and-swap; the serialized publisher must retain the freeze.
     if (!same(await readContractMode(connection), mode))
@@ -286,6 +285,14 @@ export async function publishContract(
     edit = await editOf(issue);
     if (issue.body !== state.body)
       return hold("Published body was concurrently changed");
+    await verifyBodyWrite(
+      connection,
+      issue,
+      edit,
+      state.original,
+      state.body!,
+      triage.author,
+    );
     state.published = bodyRevision(issue, edit);
     save();
   }
@@ -327,46 +334,26 @@ export async function publishContract(
       intake: { author: intake.author, writerRun: intake.writerRun },
     };
     const evidenceBody = `${post.triage.disclaimer}\n\nTriage evidence for the exact body revision.\n<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->\n<!-- repo-canon:triage-attestation ${JSON.stringify(payload)} -->`;
-    const candidates = (await tracker.comments(number)).filter(
-      (c) =>
-        markedRun(c.body, triage.marker) === post.triage!.run &&
-        readAttestation(c),
+    await evidenceComment(
+      connection,
+      number,
+      state,
+      save,
+      evidenceBody,
+      `<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->`,
+      triage.author,
     );
-    if (
-      candidates.length > 1 ||
-      candidates.some(
-        (c) => c.body !== evidenceBody || c.author?.login !== triage.author,
-      )
-    )
-      return hold("Conflicting or edited body attestation exists for this run");
-    const existing =
-      candidates[0] ?? (await tracker.createComment(number, evidenceBody));
-    const evidenceEdit = (await sourceEdits(connection, [existing.nodeId]))[
-      existing.nodeId!
-    ];
-    if (evidenceEdit.id !== `created:${existing.nodeId}`)
-      return hold(
-        "Existing publication evidence was edited; do not adopt it by marker",
-      );
-    state.evidence = {
-      id: existing.id,
-      nodeId: existing.nodeId!,
-      body: existing.body,
-      edit: evidenceEdit,
-      url: existing.url,
-    };
-    save();
   }
   const evidence = (await tracker.comments(number)).find(
     (c) => c.id === state.evidence!.id,
   );
   if (
     !evidence ||
-    evidence.body !== state.evidence.body ||
+    evidence.body !== state.evidence!.body ||
     evidence.author?.login !== triage.author ||
     !same(
       (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
-      state.evidence.edit,
+      state.evidence!.edit,
     )
   )
     return hold(
@@ -377,7 +364,7 @@ export async function publishContract(
     attestation: {
       id: String(evidence.id),
       revision: digest(evidence.body),
-      edit: state.evidence.edit,
+      edit: state.evidence!.edit,
     },
   };
   await unchanged();
@@ -484,5 +471,124 @@ export async function publishContract(
     if ((await tracker.issue(number)).labels.includes(label))
       await tracker.removeLabel(number, label);
   }
-  return state.evidence.url;
+  return state.evidence!.url;
+}
+
+// This is only a duplicate-preservation guard, not contract selection or
+// structure validation. Prose may discuss these names freely. Ambiguous
+// existing section syntax holds for authenticated intake recovery; Canon
+// remains the sole interpreter of the completed brief.
+function hasSection(markdown: string, name: string): boolean {
+  const normalized = markdown.replace(/[*_`]/g, "").replace(/\r\n?/g, "\n");
+  return normalized.split("\n").some((line, index, lines) => {
+    const heading = line
+      .replace(/^\s{0,3}#{1,6}\s+/, "")
+      .replace(/\s+#+\s*$/, "")
+      .trim()
+      .toLowerCase();
+    return (
+      (heading === name &&
+        (/^\s{0,3}#{1,6}\s+/.test(line) ||
+          /^\s*(?:=+|-+)\s*$/.test(lines[index + 1] ?? ""))) ||
+      new RegExp(
+        `^\\s*<h[1-6](?:\\s[^>]*)?>\\s*${name}\\s*</h[1-6]>\\s*$`,
+        "i",
+      ).test(line)
+    );
+  });
+}
+
+// The same immutable evidence path serves legacy briefs and body attestations.
+// Save the complete publication intent and discussion/deletion frontier before
+// posting, so a lost response can recover one unchanged record by identity.
+async function evidenceComment(
+  connection: ConnectionWithLinkAdditions,
+  number: number,
+  state: Publication,
+  save: () => void,
+  body: string,
+  marker: string,
+  author: string,
+): Promise<void> {
+  const tracker = connection.issueTracker;
+  let comments = await tracker.comments(number);
+  if (!state.evidenceIntent) {
+    const existing = comments.filter((c) => c.body.includes(marker));
+    state.evidenceIntent = {
+      body,
+      after: existing.length
+        ? Math.min(...existing.map((c) => c.id)) - 1
+        : Math.max(
+            0,
+            ...comments
+              .filter((c) => !author || c.author?.login === author)
+              .map((c) => c.id),
+          ),
+      deletion: await commentDeletionIdentity(connection, number),
+    };
+    save();
+  }
+  if (
+    state.evidenceIntent.body !== body ||
+    (!state.evidence &&
+      state.evidenceIntent.deletion !==
+        (await commentDeletionIdentity(connection, number)))
+  )
+    return hold(
+      "Evidence publication intent or deletion history changed; do not reconstruct missing evidence",
+    );
+  if (!state.evidence) {
+    let candidates = comments.filter(
+      (c) =>
+        c.id > state.evidenceIntent!.after &&
+        (!author || c.author?.login === author),
+    );
+    if (candidates.length > 1 || candidates.some((c) => c.body !== body))
+      return hold(
+        "Evidence publication has conflicting or edited records after its saved frontier",
+      );
+    if (!candidates.length) {
+      await postResultComment(tracker, number, { comment: body, marker });
+      comments = await tracker.comments(number);
+      candidates = comments.filter(
+        (c) =>
+          c.id > state.evidenceIntent!.after &&
+          c.body === body &&
+          (!author || c.author?.login === author),
+      );
+    }
+    if (candidates.length !== 1)
+      return hold(
+        "Evidence publication has no unique configured-author identity",
+      );
+    const evidence = candidates[0];
+    const edit = (await sourceEdits(connection, [evidence.nodeId]))[
+      evidence.nodeId!
+    ];
+    if (edit.id !== `created:${evidence.nodeId}`)
+      return hold(
+        "Existing evidence was edited before its exact publication checkpoint",
+      );
+    state.evidence = {
+      id: evidence.id,
+      nodeId: evidence.nodeId!,
+      body: evidence.body,
+      edit,
+      url: evidence.url,
+    };
+    save();
+  }
+  const evidence = comments.find((c) => c.id === state.evidence!.id);
+  if (
+    !evidence ||
+    evidence.body !== state.evidence!.body ||
+    (author && evidence.author?.login !== author) ||
+    !same(
+      (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
+      state.evidence!.edit,
+    )
+  )
+    return hold(
+      "Legacy evidence was deleted or edited; never reconstruct it from a report",
+    );
 }

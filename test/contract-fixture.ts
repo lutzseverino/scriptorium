@@ -109,9 +109,12 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
   let state: Record<string, any> | null = null;
   const controls = {
     evaluation: true,
-    format: "repo-canon/issue-contract-state/v2",
+    format: undefined as string | undefined,
     mode: "body",
     fail: "",
+    bodyEditor: "factory[bot]",
+    missingResult: false,
+    deletion: null as string | null,
     before: undefined as (() => void) | undefined,
   };
   const at = () =>
@@ -123,6 +126,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     }
   };
   const feedback = () =>
+    !controls.missingResult &&
     state &&
     ({
       id: 99999,
@@ -135,11 +139,21 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     } satisfies Comment);
   const evaluate = () => {
     if (!controls.evaluation) return;
-    const selected = bodyRevision(issue, edits[issue.nodeId!]);
+    const categories = issue.labels.filter((label) =>
+      ["type:bug", "type:enhancement"].includes(label),
+    );
+    const bodySelected = categories.length === 1 && issue.bodyEditTime !== null;
+    const selected = bodySelected
+      ? bodyRevision(issue, edits[issue.nodeId!])
+      : {
+          revision: null,
+          source: { type: "issue-body", editedAt: issue.bodyEditTime },
+        };
     const proof = record?.publication;
     const evidence =
       proof && comments.find((c) => String(c.id) === proof.attestation.id);
     const association =
+      bodySelected &&
       proof &&
       evidence &&
       digest(evidence.body) === proof.attestation.revision &&
@@ -159,13 +173,19 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     const ready = changes.findLast((c) => c.label === "state:ready");
     state = {
       ...canonical.cases[2].state,
-      format: controls.format,
+      format:
+        controls.format ??
+        (controls.mode === "prepared"
+          ? "repo-canon/issue-contract-state/v1"
+          : "repo-canon/issue-contract-state/v2"),
       status:
         ready?.action === "added" &&
         issue.labels.includes("state:ready") &&
         association
           ? "approved"
-          : "awaiting-review",
+          : bodySelected
+            ? "awaiting-review"
+            : "needs-attention",
       ...selected,
       label: ready?.action === "added" ? "state:ready" : null,
       reviewEventId: ready ? String(ready.id) : null,
@@ -178,7 +198,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
           sha: receipt.sha,
           epoch: receipt.epoch,
         },
-        state: "migrated",
+        state: bodySelected ? "migrated" : "native",
         reason: null,
       },
       factoryTriage: association,
@@ -256,6 +276,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
         comments.push(c);
         edits[c.nodeId!] = { id: `created:${c.nodeId}`, editedAt: null };
         evaluate();
+        fail("after-comment");
         return structuredClone(c);
       },
       async updateComment(id, body) {
@@ -265,6 +286,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
         edits[c.nodeId!] = { id: `edit:${clock}`, editedAt: c.updatedAt };
         writes.push("update report");
         evaluate();
+        fail("after-comment");
         return structuredClone(c);
       },
     },
@@ -316,6 +338,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
           };
           writes.push("body");
           evaluate();
+          fail("after-body");
           return data({});
         }
         if (path.endsWith("/dispatches")) {
@@ -324,6 +347,47 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
           evaluate();
           return data({});
         }
+        if (
+          path === "/graphql" &&
+          body.query.includes("ContractBodyPublication")
+        ) {
+          const edit = edits[issue.nodeId!];
+          return data({
+            data: {
+              node: {
+                id: issue.nodeId,
+                body: issue.body,
+                lastEditedAt: issue.bodyEditTime,
+                includesCreatedEdit: false,
+                userContentEdits: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      ...edit,
+                      deletedAt: null,
+                      editor: { login: controls.bodyEditor },
+                    },
+                  ],
+                },
+              },
+            },
+          });
+        }
+        if (
+          path === "/graphql" &&
+          body.query.includes("ContractEvidenceDeletions")
+        )
+          return data({
+            data: {
+              repository: {
+                issue: {
+                  timelineItems: {
+                    nodes: controls.deletion ? [{ id: controls.deletion }] : [],
+                  },
+                },
+              },
+            },
+          });
         if (path === "/graphql" && body.query.includes("ContractSourceEdits")) {
           fail("edits");
           return data({

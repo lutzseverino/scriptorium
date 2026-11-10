@@ -94,6 +94,27 @@ export type BodyResult = {
 
 const nullableText = (value: unknown) =>
   value === null || typeof value === "string";
+
+export function requirePreparedProtocol(
+  comments: Comment[],
+  configuration: PlatformConventions,
+): void {
+  const posted = latestResult(comments, configuration.contractResult);
+  if (!posted)
+    return hold(
+      "No configured-validator protocol evidence is available for legacy publication; restore automatic evaluation before retrying",
+    );
+  let result;
+  try {
+    result = JSON.parse(posted.line);
+  } catch {
+    return hold("Prepared validator protocol evidence is unreadable");
+  }
+  if (!result || result.format !== resultFormat)
+    return hold(
+      "Prepared publication requires the supported v1 validator protocol; unknown or body-mode results must be resolved before publishing",
+    );
+}
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const fields = (
@@ -234,7 +255,7 @@ export async function bodyContractFacts(
   return {
     comments,
     changes,
-    body: {
+    sourceFacts: {
       issue,
       mode,
       edits,
@@ -277,9 +298,7 @@ export async function currentBodyDecision(
       "Body mode requires a supported well-formed v2 validator result; update/re-evaluate the compatible validator",
     );
   if (
-    !result ||
-    !validBodyResult(result) ||
-    result.observation !== facts.body.observation ||
+    result.observation !== facts.sourceFacts.observation ||
     result.selection.cutoff?.id !== mode.cutoff ||
     (!allowHeld && result.selection.state === "held")
   )
