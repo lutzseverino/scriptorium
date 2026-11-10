@@ -17,6 +17,13 @@ export const ledgerBranch = "repo-canon/issue-contracts";
 export const digest = (value: string) =>
   `sha256:${createHash("sha256").update(value).digest("hex")}`;
 export const same = isDeepStrictEqual;
+export const sameLogin = (
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean =>
+  typeof left === "string" &&
+  typeof right === "string" &&
+  left.toLowerCase() === right.toLowerCase();
 export type Edit = { id: string; editedAt: string | null };
 export type BodySource = {
   type: "issue-body";

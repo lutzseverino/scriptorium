@@ -21,6 +21,7 @@ import {
   readAttestation,
   readContractMode,
   same,
+  sameLogin,
   sourceEdits,
   text,
   validBodySource,
@@ -561,6 +562,7 @@ export function triageBacked(
         payload.revision === result.revision &&
         same(payload.source, source) &&
         same(payload.intake, association.intake) &&
+        sameLogin(payload.intake.author, body.issue.author?.login) &&
         digest(evidence.body) === association.attestation.revision &&
         same(body.edits[evidence.nodeId!], association.attestation.edit) &&
         (association.intake.author.toLowerCase() !== author.toLowerCase() ||

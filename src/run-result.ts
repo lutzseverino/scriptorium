@@ -10,6 +10,7 @@ import type {
   RunKindName,
 } from "./factory-configuration.ts";
 import { configured, stopLabels } from "./label-roles.ts";
+import { sameLogin } from "./contract-protocol.ts";
 
 export type RunResult = {
   outcome: "done" | "stop" | "failed";
@@ -277,7 +278,8 @@ export async function postResultComment(
       (existing) =>
         existing.body !== comment ||
         (triage &&
-          ((triage.author && existing.author?.login !== triage.author) ||
+          ((triage.author &&
+            !sameLogin(existing.author?.login, triage.author)) ||
             existing.createdAt !== existing.updatedAt)),
     )
   )

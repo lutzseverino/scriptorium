@@ -15,6 +15,7 @@ import {
   readContractMode,
   request,
   same,
+  sameLogin,
   sourceEdits,
   verifyBodyWrite,
   type Attestation,
@@ -181,7 +182,7 @@ export async function publishContract(
   if (progress.writerProof) {
     const proof = progress.writerProof;
     if (
-      intake.author !== triage.author ||
+      !sameLogin(intake.author, triage.author) ||
       proof.repository !== connection.repository.path ||
       proof.issue !== issue.nodeId ||
       !same(proof.sourceEdit, intake.sourceEdit) ||
@@ -197,7 +198,7 @@ export async function publishContract(
     }
   }
   if (
-    intake.author === triage.author &&
+    sameLogin(intake.author, triage.author) &&
     (!intake.writerRun ||
       intake.writerRun === post.triage.run ||
       !intake.writerProof ||
@@ -212,7 +213,7 @@ export async function publishContract(
   if (typeof intake.original !== "string" || typeof intake.author !== "string")
     return hold("Preserved original intake is unreadable");
   if (
-    !state.original &&
+    !state.published &&
     !(await currentBodyDecision(connection, configuration, number, mode, true))
   ) {
     await request(connection, {
@@ -352,7 +353,7 @@ export async function publishContract(
   if (
     !evidence ||
     evidence.body !== state.evidence!.body ||
-    evidence.author?.login !== triage.author ||
+    !sameLogin(evidence.author?.login, triage.author) ||
     !same(
       (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
       state.evidence!.edit,
@@ -426,7 +427,7 @@ export async function publishContract(
       if (
         !applied ||
         applied.action !== "added" ||
-        applied.actor?.login !== triage.author ||
+        !sameLogin(applied.actor?.login, triage.author) ||
         Date.parse(applied.time) <=
           Math.max(
             Date.parse(proofNoticedAt),
@@ -526,8 +527,8 @@ async function evidenceComment(
             ...comments
               .filter((c) =>
                 author
-                  ? c.author?.login === author
-                  : c.author?.login !== validatorAuthor,
+                  ? sameLogin(c.author?.login, author)
+                  : !sameLogin(c.author?.login, validatorAuthor),
               )
               .map((c) => c.id),
           ),
@@ -549,8 +550,8 @@ async function evidenceComment(
       (c) =>
         c.id > state.evidenceIntent!.after &&
         (author
-          ? c.author?.login === author
-          : c.author?.login !== validatorAuthor),
+          ? sameLogin(c.author?.login, author)
+          : !sameLogin(c.author?.login, validatorAuthor)),
     );
     if (candidates.length > 1 || candidates.some((c) => c.body !== body))
       return hold(
@@ -564,8 +565,8 @@ async function evidenceComment(
           c.id > state.evidenceIntent!.after &&
           c.body === body &&
           (author
-            ? c.author?.login === author
-            : c.author?.login !== validatorAuthor),
+            ? sameLogin(c.author?.login, author)
+            : !sameLogin(c.author?.login, validatorAuthor)),
       );
     }
     if (candidates.length !== 1)
@@ -593,7 +594,7 @@ async function evidenceComment(
   if (
     !evidence ||
     evidence.body !== state.evidence!.body ||
-    (author && evidence.author?.login !== author) ||
+    (author && !sameLogin(evidence.author?.login, author)) ||
     !same(
       (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
       state.evidence!.edit,

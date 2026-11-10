@@ -26,7 +26,7 @@ const run = {
   effort: "high",
   attempt: 1,
 };
-const post = () =>
+const post = (configuration = contractConfiguration) =>
   resultPost(
     {
       outcome: "done",
@@ -35,9 +35,9 @@ const post = () =>
       body: brief,
     },
     run,
-    contractConfiguration,
+    configuration,
   );
-function setup() {
+function setup(configuration = contractConfiguration) {
   const fixture = contractFixture();
   const unused = () => {
     throw new Error("unexpected port");
@@ -52,7 +52,7 @@ function setup() {
     access: { request: unused },
   } as unknown as ConnectionWithLinkAdditions);
   fixture.evaluate();
-  const platform = () => repositoryPlatform(connection, contractConfiguration);
+  const platform = () => repositoryPlatform(connection, configuration);
   let checkpoint: Publication | undefined;
   const resume = (): PublicationProgress => ({
     state: structuredClone(checkpoint),
@@ -464,4 +464,42 @@ test("lost evidence responses cannot adopt edited or deleted records on restart"
     assert.equal(s.fixture.writes.filter((w) => w === "attestation").length, 1);
     assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
   }
+});
+
+test("configured author casing preserves prepared/body publication, retries and ready actors", async () => {
+  for (const mode of ["prepared", "body"]) {
+    const configuration = structuredClone(contractConfiguration);
+    configuration.triageResult!.author = "Factory[BOT]";
+    const s = setup(configuration);
+    s.fixture.controls.mode = mode;
+    const requested = post(configuration);
+    assert.ok(await s.platform().postResult(4, requested, s.resume()), mode);
+    const evidence = structuredClone(s.fixture.comments[0]);
+    assert.ok(
+      await s.platform().postResult(4, requested, s.resume()),
+      `${mode} retry`,
+    );
+    assert.deepEqual(s.fixture.comments[0], evidence);
+    assert.equal(
+      s.fixture.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+  }
+});
+
+test("a recovered body intent rechecks protocol compatibility before its mutation", async () => {
+  const s = setup();
+  s.fixture.controls.fail = "body";
+  await assert.rejects(
+    s.platform().postResult(4, post(), s.resume()),
+    /interrupted body/,
+  );
+  assert.ok(s.checkpoint?.original);
+  s.fixture.controls.format = "repo-canon/issue-contract-state/v3";
+  s.fixture.evaluate();
+  await assert.rejects(
+    s.platform().postResult(4, post(), s.resume()),
+    /supported well-formed v2 validator/,
+  );
+  assert.equal(s.fixture.writes.includes("body"), false);
 });
