@@ -27,7 +27,7 @@ validation and documentation discovery. Add this line at the start of either
 configuration example below:
 
 ```json
-"$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json"
+"$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.0/schemas/factory-configuration.schema.json"
 ```
 
 The public schema is pinned to the shipping release; its description links
@@ -67,7 +67,7 @@ malformed values are invalid.
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
+  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.0/schemas/factory-configuration.schema.json",
   "version": 3,
   "labels": {
     "ready": "state:ready",
@@ -92,7 +92,7 @@ factory profile ships every run kind and label role:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
+  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.0/schemas/factory-configuration.schema.json",
   "version": 3,
   "labels": {
     "triage": "state:triage",
@@ -326,7 +326,7 @@ values are invalid.
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.0.0/schemas/factory-configuration.schema.json",
+  "$schema": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.0/schemas/factory-configuration.schema.json",
   "version": 2,
   "labels": {
     "ready": "queued",
