@@ -11,6 +11,7 @@ import {
   type ProviderSettings,
 } from "./providers.ts";
 import { imageBuilders, type ImageBuilder } from "./sandbox-image.ts";
+import { readStorageFilesystem } from "./storage-filesystem.ts";
 
 export type HostConfiguration = {
   // Each repository the factory serves, as `<owner>/<name>`.
@@ -130,6 +131,25 @@ export function readHostConfiguration(
   const warnings: string[] = [];
   const configuration = migrated(value, problems, warnings);
   problems.push(...hostConfigurationProblems(configuration));
+  if (problems.length === 0) {
+    const storage = (configuration as HostConfiguration).imageStorage;
+    if (storage) {
+      const paths: [string, string][] = storage.storePaths.map(
+        (path, index) => [`imageStorage.storePaths[${index}]`, path],
+      );
+      if (storage.cachePath)
+        paths.push(["imageStorage.cachePath", storage.cachePath]);
+      for (const [field, path] of paths) {
+        try {
+          readStorageFilesystem(path);
+        } catch (error) {
+          problems.push(
+            `${field}: cannot measure configured storage path ${path}: ${error}`,
+          );
+        }
+      }
+    }
+  }
   if (problems.length > 0)
     throw new Error(
       [

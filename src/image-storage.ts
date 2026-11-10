@@ -3,14 +3,8 @@
 // fresh checks immediately before each expanding Docker operation.
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  mkdir,
-  realpath,
-  rename,
-  stat,
-  statfs,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { readStorageFilesystem } from "./storage-filesystem.ts";
 import {
   docker,
   sandboxBuilder,
@@ -93,21 +87,34 @@ export function createImageStorage(
     let filesystems: StorageFilesystem[] = [];
     let reason: string | null = null;
     const reclamation = {
-      pressure: held,
+      pressure: false,
       freed: null as string | null,
       error: null as string | null,
     };
+    async function observe() {
+      filesystems = [];
+      try {
+        const reading = await ports.observe(paths);
+        validateObservation(paths, reading);
+        filesystems = reading;
+      } catch (error) {
+        throw new Error(
+          `storage configuration or measurement failed: ${error}`,
+          { cause: error },
+        );
+      }
+    }
     try {
       if (policy) {
-        filesystems = await ports.observe(paths);
-        validateObservation(paths, filesystems);
+        await observe();
         const threshold = held ? policy.resumeBytes : policy.reserveBytes;
-        if (filesystems.some((fs) => fs.availableBytes < threshold))
-          held = true;
+        reclamation.pressure = filesystems.some(
+          (fs) => fs.availableBytes < threshold,
+        );
+        if (reclamation.pressure) held = true;
       }
-      reclamation.pressure = held;
       try {
-        reclamation.freed = await ports.reclaim(held);
+        reclamation.freed = await ports.reclaim(reclamation.pressure);
       } catch (error) {
         reclamation.error = `${error}`;
         throw error;
@@ -115,8 +122,7 @@ export function createImageStorage(
       // Never admit using a measurement from before reclamation, even if the
       // prune reports success or says it freed nothing.
       if (policy) {
-        filesystems = await ports.observe(paths);
-        validateObservation(paths, filesystems);
+        await observe();
         const required = held ? policy.resumeBytes : policy.reserveBytes;
         if (filesystems.some((fs) => fs.availableBytes < required)) {
           held = true;
@@ -192,7 +198,7 @@ export async function observeImageStorage(
     run = docker,
     builder = "daemon",
     environment = process.env,
-    filesystem = readFilesystem,
+    filesystem = async (path) => readStorageFilesystem(path),
   }: {
     run?: DockerRun;
     builder?: ImageBuilder;
@@ -278,27 +284,4 @@ export async function observeImageStorage(
   const result = [...observed.values()];
   validateObservation(paths, result);
   return result;
-}
-
-async function readFilesystem(
-  path: string,
-): Promise<Omit<StorageFilesystem, "paths">> {
-  const resolved = await realpath(path);
-  const info = await stat(resolved, { bigint: true });
-  if (!info.isDirectory())
-    throw new Error(`storage path ${path} is not a directory`);
-  const space = await statfs(resolved, { bigint: true });
-  const available = space.bavail * space.bsize;
-  if (
-    space.bsize <= 0n ||
-    space.blocks <= 0n ||
-    space.bavail < 0n ||
-    space.bavail > space.blocks ||
-    available > BigInt(Number.MAX_SAFE_INTEGER)
-  )
-    throw new Error(`storage observation for ${path} is invalid`);
-  return {
-    filesystem: `device:${info.dev}`,
-    availableBytes: Number(available),
-  };
 }
