@@ -92,6 +92,7 @@ export async function publishContract(
       post.comment,
       post.marker,
       post.triage.author,
+      configuration.contractResult.author,
     );
     if (!same(await readContractMode(connection), mode))
       return hold(
@@ -342,6 +343,7 @@ export async function publishContract(
       evidenceBody,
       `<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->`,
       triage.author,
+      configuration.contractResult.author,
     );
   }
   const evidence = (await tracker.comments(number)).find(
@@ -509,6 +511,7 @@ async function evidenceComment(
   body: string,
   marker: string,
   author: string,
+  validatorAuthor: string,
 ): Promise<void> {
   const tracker = connection.issueTracker;
   let comments = await tracker.comments(number);
@@ -521,7 +524,11 @@ async function evidenceComment(
         : Math.max(
             0,
             ...comments
-              .filter((c) => !author || c.author?.login === author)
+              .filter((c) =>
+                author
+                  ? c.author?.login === author
+                  : c.author?.login !== validatorAuthor,
+              )
               .map((c) => c.id),
           ),
       deletion: await commentDeletionIdentity(connection, number),
@@ -541,7 +548,9 @@ async function evidenceComment(
     let candidates = comments.filter(
       (c) =>
         c.id > state.evidenceIntent!.after &&
-        (!author || c.author?.login === author),
+        (author
+          ? c.author?.login === author
+          : c.author?.login !== validatorAuthor),
     );
     if (candidates.length > 1 || candidates.some((c) => c.body !== body))
       return hold(
@@ -554,7 +563,9 @@ async function evidenceComment(
         (c) =>
           c.id > state.evidenceIntent!.after &&
           c.body === body &&
-          (!author || c.author?.login === author),
+          (author
+            ? c.author?.login === author
+            : c.author?.login !== validatorAuthor),
       );
     }
     if (candidates.length !== 1)
