@@ -64,7 +64,11 @@ The sandbox image contract tests build and run the factory layer on
 `debian:bookworm-slim` without Node and on both `node:24-bookworm` and
 `node:26-bookworm` with their existing UID and GID 1000, and remove sandbox
 containers by the layer's label. They run in both CI runtime jobs, where Docker
-is required; local runs skip them when Docker is unavailable. Run them alone
+is required; local runs skip them when Docker is unavailable. On all three
+bases, they run `ps -axo pgid=,stat=` as `agent` and check usable process-group
+and state output. The minimal Debian case verifies factory provision of `ps`;
+the Node bases may already include it. Acceptance requires a passing
+Docker-equipped CI or owner run; local skips are not acceptance. Run them alone
 with `node --test test/sandbox-image-build.test.ts`. Run the tag tests, which
 also drive both builders' commands against a fake Docker CLI, with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
@@ -87,7 +91,10 @@ publication, run `pnpm release:check <tag-pinned-schema-URL>` as the
 [release procedure](release.md) directs to verify public resolution.
 
 The fast `test/agent-layer.test.ts` guard executes the install commands with
-spies, without Docker or network access, for both architectures. It rejects
+spies, without Docker, network access, package installation or root access.
+It executes the actual distribution-package RUN with `apt-get` and cleanup
+spies and glob expansion disabled, asserting that the install requests `procps`.
+For both architectures, it rejects
 missing or malformed pins and extraction or installation before verification.
 `test/agent-layer-upstream.test.ts` compares all ten pins against upstream
 metadata using `gh api` and Claude Code's manifest. CI passes its read-only

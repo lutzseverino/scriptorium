@@ -1,6 +1,33 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { agentLayer, verifiedDownloads } from "./agent-layer-fixture.ts";
+
+test("the factory layer installs procps for the agent's process census", () => {
+  const runs = agentLayer.replaceAll(/\\\n/g, "").match(/^RUN .*$/gm)!;
+  const packages = runs.filter((run) => /\bapt-get\s+/.test(run));
+  assert.equal(packages.length, 1, "distribution packages share one RUN");
+  const output = execFileSync(
+    "bash",
+    [
+      "-fc",
+      `
+        apt-get() { printf '%s\\n' "$*"; }
+        rm() { :; }
+      ` + packages[0]!.slice(4),
+    ],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+  const installs = output
+    .trim()
+    .split("\n")
+    .map((line) => line.split(/\s+/))
+    .filter((args) => args[0] === "install");
+  assert.ok(
+    installs.some((args) => args.includes("procps")),
+    "the actual apt-get install must request procps",
+  );
+});
 
 for (const architecture of ["amd64", "arm64"]) {
   test(`every ${architecture} download has a pinned SHA-256 checked before use`, () => {

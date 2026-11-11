@@ -8,7 +8,7 @@ ARG AGENT_GID
 # Every edit to this layer requires an AGENT_LAYER_VERSION bump.
 # Release binaries keep the repository's toolchain independent of Node.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl tar gzip passwd libatomic1 \
+    ca-certificates curl tar gzip passwd libatomic1 procps \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eu; \

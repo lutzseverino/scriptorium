@@ -147,6 +147,25 @@ function assertProviderPolicy(image: string): void {
   assert.equal(settings.disableClaudeAiConnectors, true);
 }
 
+function assertProcessCensus(image: string): void {
+  const output = execFileSync(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "sh",
+      image,
+      "-ec",
+      'test "$(id -un)" = agent; ps -axo pgid=,stat=',
+    ],
+    { encoding: "utf8", timeout: 60_000 },
+  );
+  const rows = output.trim().split("\n");
+  for (const row of rows)
+    assert.match(row, /^\s*[1-9]\d*\s+[A-Za-z][<NLsl+]*\s*$/);
+}
+
 // Asserts as agent that Codex finds its code-mode host, without which the
 // factory's code-mode-only Codex models have no tools. Codex looks for the host
 // beside its own resolved executable and reports code mode before the turn
@@ -233,6 +252,7 @@ test(
     assert.match(output, /gh version 2\.102\.0/);
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
     assert.match(output, /codex-cli 0\.162\.1/);
+    assertProcessCensus(image);
     assertProviderPolicy(image);
     assertCodeModeHost(image);
     // The relocatable Git release must find its HTTPS helper, not just print a version.
@@ -404,6 +424,7 @@ for (const major of [24, 26]) {
       assert.match(output, /2\.1\.287 \(Claude Code\)/);
       assert.match(output, /codex-cli 0\.162\.1/);
       assert.match(output, new RegExp(`^v${major}\\.`, "m"));
+      assertProcessCensus(image);
       assertProviderPolicy(image);
       assertCodeModeHost(image);
     },
