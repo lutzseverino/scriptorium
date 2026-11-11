@@ -61,6 +61,12 @@ in the toolchain image and supports Linux amd64 and arm64. Binaries and Git's
 helpers are installed system-wide, ahead of the toolchain's executables in
 `PATH`.
 
+The factory also installs the distribution's `procps` package, providing system
+`ps` on `agent`'s normal `PATH`. On every supported Debian/Ubuntu sandbox,
+`agent` can run `ps -axo pgid=,stat=` for process-group safety checks such as
+Repository Standards' validation. Repository-specific toolchains and delivery
+runtimes remain the repository's responsibility.
+
 Before extracting or installing a download, the layer checks the exact
 downloaded tarball or bare Claude Code binary against a hand-pinned SHA-256
 for the selected architecture. A mismatch fails the build with `sha256sum`'s
