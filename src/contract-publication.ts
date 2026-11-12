@@ -3,10 +3,12 @@
 import type { ConnectionWithLinkAdditions, Issue } from "@lutzseverino/postern";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { postResultComment, type ResultPost } from "./run-result.ts";
+import { isRunComment } from "./run-comment.ts";
 import {
   attestationFormat,
   bodyRevision,
   contractFile,
+  contractEvidence,
   commentDeletionIdentity,
   digest,
   hold,
@@ -97,7 +99,7 @@ export async function publishContract(
       post.comment,
       post.marker,
       post.triage.author,
-      configuration.contractResult.author,
+      configuration.contractResult,
     );
     if (!same(await readContractMode(connection), mode))
       return hold(
@@ -108,7 +110,8 @@ export async function publishContract(
     if (
       !evidence ||
       evidence.body !== state.evidence!.body ||
-      !sameLogin(evidence.author?.login, post.triage.author) ||
+      (post.triage.author &&
+        !sameLogin(evidence.author?.login, post.triage.author)) ||
       !same(
         (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
         state.evidence!.edit,
@@ -129,7 +132,7 @@ export async function publishContract(
           !sameLogin(applied.actor?.login, post.triage.author) ||
           Date.parse(applied.time) <=
             Math.max(
-              Date.parse(notice.result.publishedAt as string),
+              Date.parse(notice.publishedAt),
               Date.parse(evidence.createdAt),
             )
         )
@@ -140,7 +143,7 @@ export async function publishContract(
         if (
           Math.floor((progress.now?.() ?? new Date()).getTime() / 1000) *
             1000 <=
-          Date.parse(notice.result.publishedAt as string)
+          Date.parse(notice.publishedAt)
         )
           return null;
         if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
@@ -391,7 +394,7 @@ export async function publishContract(
       evidenceBody,
       `<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->`,
       triage.author,
-      configuration.contractResult.author,
+      configuration.contractResult,
     );
   }
   const evidence = (await tracker.comments(number)).find(
@@ -559,7 +562,7 @@ async function evidenceComment(
   body: string,
   marker: string,
   author: string,
-  validatorAuthor: string,
+  validator: PlatformConventions["contractResult"],
 ): Promise<void> {
   const tracker = connection.issueTracker;
   let comments = await tracker.comments(number);
@@ -575,7 +578,7 @@ async function evidenceComment(
               .filter((c) =>
                 author
                   ? sameLogin(c.author?.login, author)
-                  : !sameLogin(c.author?.login, validatorAuthor),
+                  : !sameLogin(c.author?.login, validator.author),
               )
               .map((c) => c.id),
           ),
@@ -598,8 +601,21 @@ async function evidenceComment(
         c.id > state.evidenceIntent!.after &&
         (author
           ? sameLogin(c.author?.login, author)
-          : !sameLogin(c.author?.login, validatorAuthor)),
+          : !sameLogin(c.author?.login, validator.author)),
     );
+    if (candidates.some(isRunComment)) {
+      // A wait report may land after the saved frontier while evidence identity
+      // reads are held. Authenticate its original mutable role before excluding
+      // it; edited evidence that merely resembles a report remains protected.
+      const protectedIds = await contractEvidence(
+        connection,
+        validator,
+        isRunComment,
+      )(number, comments);
+      candidates = candidates.filter(
+        (c) => !isRunComment(c) || protectedIds.has(String(c.id)),
+      );
+    }
     if (candidates.length > 1 || candidates.some((c) => c.body !== body))
       return hold(
         "Evidence publication has conflicting or edited records after its saved frontier",
@@ -613,7 +629,7 @@ async function evidenceComment(
           c.body === body &&
           (author
             ? sameLogin(c.author?.login, author)
-            : !sameLogin(c.author?.login, validatorAuthor)),
+            : !sameLogin(c.author?.login, validator.author)),
       );
     }
     if (candidates.length !== 1)

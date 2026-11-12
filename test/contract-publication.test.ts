@@ -745,3 +745,69 @@ test("prepared publication holds an unauthorized carried readiness event", async
   );
   assert.equal(s.checkpoint?.readyRequested, undefined);
 });
+
+test("the real validator's first prepared notice permits readiness in a later second", async () => {
+  const { decideIssueContract } = await import(
+    new URL("../vendor/repo-canon/validate-issue-contract.mjs", import.meta.url)
+      .href
+  );
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  s.fixture.controls.missingResult = true;
+  const requested = post();
+  requested.comment = requested.comment.replace(
+    "**Out of scope:**",
+    "**Seams:** No trigger\n\n**Out of scope:**",
+  );
+  assert.equal(await s.platform().postResult(4, requested, s.resume()), null);
+  const evidence = s.fixture.comments[0];
+  const decision = decideIssueContract({
+    issue: {
+      ...s.fixture.issue,
+      state: "open",
+      labels: s.fixture.issue.labels.map((name) => ({ name })),
+    },
+    comments: [
+      { ...evidence, node_id: evidence.nodeId, updated_at: evidence.updatedAt },
+    ],
+    issueEvents: [],
+    permissions: {},
+    event: { kind: "commentCreated", actor: { login: "factory[bot]" } },
+    seamsBoundary: {
+      tag: "v0.26.0",
+      commit: "a".repeat(40),
+      publishedAt: "2026-10-01T00:00:00Z",
+    },
+  });
+  assert.equal(decision.exitCode, 0, decision.message);
+  const line = decision.feedback.body
+    .split("\n")
+    .find((line: string) =>
+      line.startsWith("<!-- repo-canon:issue-contract-state "),
+    );
+  const state = JSON.parse(
+    line.slice("<!-- repo-canon:issue-contract-state ".length, -4),
+  );
+  assert.equal(state.format, "repo-canon/issue-contract-state/v1");
+  assert.equal(state.publishedAt, null);
+  assert.equal(state.status, "awaiting-review");
+  s.fixture.controls.evaluation = false;
+  s.fixture.comments.push({
+    id: 100000,
+    nodeId: "FIRST_NOTICE",
+    author: { login: "github-actions[bot]", bot: true },
+    body: decision.feedback.body,
+    createdAt: "2026-10-08T03:00:00Z",
+    updatedAt: "2026-10-08T03:00:00Z",
+    url: "notice",
+  });
+  const sameSecond = s.resume();
+  sameSecond.now = () => new Date("2026-10-08T03:00:00Z");
+  assert.equal(await s.platform().postResult(4, requested, sameSecond), null);
+  assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+  assert.ok(await s.platform().postResult(4, requested, s.resume()));
+  assert.equal(
+    s.fixture.changes.filter((c) => c.label === "state:ready").length,
+    1,
+  );
+});

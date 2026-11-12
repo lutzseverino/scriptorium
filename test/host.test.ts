@@ -1,4 +1,5 @@
 import { holdKeys } from "../src/hold-comments.ts";
+import { digest } from "../src/contract-protocol.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -264,6 +265,9 @@ function fakePlatform(
         : []),
     ];
     const at = times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+    const evidence = discussion.findLast(
+      (c) => c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+    );
     const state = {
       format: "repo-canon/issue-contract-state/v1",
       status: ready ? "approved" : "awaiting-review",
@@ -279,6 +283,27 @@ function fakePlatform(
         ready?.item.event === "labeled"
           ? String(ready.item.id ?? ready.id)
           : null,
+      ...(evidence && {
+        kind: "triaged Agent Brief",
+        source: {
+          type: "comment",
+          id: String(evidence.id),
+          editedAt: evidence.updatedAt,
+        },
+        revision: digest(
+          JSON.stringify({
+            format: "repo-canon/issue-contract-revision/v1",
+            kind: "triaged Agent Brief",
+            source: {
+              type: "comment",
+              id: evidence.nodeId,
+              editedAt: evidence.updatedAt,
+            },
+            body: evidence.body,
+          }),
+        ),
+        publishedAt: null,
+      }),
     };
     return {
       id: issue.number * 10000 + 9999,
@@ -8016,6 +8041,7 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
     body: "## Agent Brief",
   });
   await run.drain();
+  run.clock.now = new Date("2026-10-09T12:00:01Z");
   // Settlement applies the result's readiness and releases triage's claim.
   // Without a configured triage result, the owner's readiness starts
   // implement on the next pass.
@@ -8037,6 +8063,7 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   currentIssue.branchPullRequests.push({
     ...publishedPR(currentRemote, "factory/issue-5"),
     number: 42,
+    createdAt: "2026-10-09T12:00:02Z",
   });
   run.github.drafts.add(42);
   run.launched[2].finish();
@@ -8933,6 +8960,7 @@ test("a triage run's result posts its brief in the factory's frame and applies i
     reason: "the brief is ready.",
   });
   await run.drain();
+  run.clock.now = new Date("2026-10-09T12:00:01Z");
   await run.tick();
   const issue = run.github.find("acme/widgets", 4);
   assert.deepEqual(issue.labels, [
@@ -9833,3 +9861,123 @@ test("a shared issue-list failure still pauses the repository and preserves unpu
   await run.tick();
   assert.equal(protocol.issue.labels.includes("state:ready"), true);
 });
+
+test("prepared publication requests readiness before admission waits for exact current-event approval", async (t) => {
+  const protocol = contractFixture();
+  protocol.controls.mode = "prepared";
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+      }),
+    },
+    wrapConnection: protocol.wrap,
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["type:enhancement", "model:claude-sonnet-5-5"],
+    body: bodyBrief,
+  });
+  await run.drain();
+  protocol.controls.result = { status: "awaiting-review" };
+  await run.tick();
+  assert.ok(protocol.issue.labels.includes("state:ready"));
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  protocol.controls.result = {
+    status: "approved",
+    reviewEventId: "wrong-event",
+  };
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  protocol.controls.result = {};
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(
+    protocol.changes.filter((c) => c.label === "state:ready").length,
+    1,
+  );
+});
+
+for (const restart of [false, true])
+  test(`a publication wait report preserves interrupted evidence recovery, restart: ${restart}`, async (t) => {
+    const protocol = contractFixture();
+    protocol.controls.mode = "prepared";
+    protocol.controls.fail = "comment";
+    let malformed = true;
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [{ number: 4, labels: ["state:triage"] }],
+      },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...kindsFiles,
+          ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+        }),
+      },
+      wrapConnection(connection) {
+        const wrapped = protocol.wrap(connection);
+        const request = wrapped.access.request;
+        wrapped.access.request = (input) => {
+          const body = input.body as any;
+          if (
+            malformed &&
+            input.path === "/graphql" &&
+            body?.query?.includes("ContractSourceEdits") &&
+            body.variables.ids.some((id: string) => id.startsWith("C_"))
+          ) {
+            malformed = false;
+            return Promise.resolve({
+              status: 200,
+              headers: {},
+              data: { data: { nodes: [] } },
+            });
+          }
+          return request(input);
+        };
+        return wrapped;
+      },
+    });
+    await run.tick();
+    assert.equal(
+      protocol.comments.length,
+      0,
+      "initial report write was unavailable",
+    );
+    run.launched[0].finish(undefined, undefined, {
+      outcome: "done",
+      state: "state:ready",
+      labels: ["type:enhancement"],
+      body: bodyBrief,
+    });
+    await run.drain();
+    await run.tick();
+    assert.equal(protocol.issue.labels.includes("state:ready"), false);
+    assert.equal(
+      protocol.comments.length,
+      2,
+      "evidence and the new wait report coexist",
+    );
+    const record = recordOf(run.state, 4, 1);
+    assert.ok(record.publication.evidenceIntent);
+    assert.equal(record.publication.evidence, undefined);
+    const active = restart ? run.restart() : run;
+    await active.tick();
+    assert.ok(protocol.issue.labels.includes("state:ready"));
+    assert.equal(
+      protocol.comments.filter(
+        (c) =>
+          c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+      ).length,
+      1,
+    );
+    assert.equal(
+      protocol.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+    assert.equal(run.launched.length, 1);
+  });

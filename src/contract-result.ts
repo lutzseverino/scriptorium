@@ -126,6 +126,8 @@ export function preparedContractNotice(
   const posted = requirePreparedProtocol(comments, configuration);
   if (!posted) return null;
   const { result } = posted;
+  // Canon cannot know its first notice's own write time in advance.
+  const publishedAt = result.publishedAt ?? posted.comment.updatedAt;
   if (
     !["awaiting-review", "approved"].includes(String(result.status)) ||
     !text(result.kind) ||
@@ -134,24 +136,27 @@ export function preparedContractNotice(
       id: String(evidence.id),
       editedAt: evidence.updatedAt,
     }) ||
-    result.revision !==
-      digest(
-        JSON.stringify({
-          format: "repo-canon/issue-contract-revision/v1",
-          kind: result.kind,
-          source: {
-            type: "comment",
-            id: evidence.nodeId,
-            editedAt: evidence.updatedAt,
-          },
-          body: evidence.body,
-        }),
-      ) ||
-    typeof result.publishedAt !== "string" ||
-    !Number.isFinite(Date.parse(result.publishedAt))
+    result.revision !== commentRevision(evidence, result.kind) ||
+    typeof publishedAt !== "string" ||
+    !Number.isFinite(Date.parse(publishedAt))
   )
     return null;
-  return posted;
+  return { ...posted, publishedAt };
+}
+
+function commentRevision(comment: Comment, kind: unknown): string {
+  return digest(
+    JSON.stringify({
+      format: "repo-canon/issue-contract-revision/v1",
+      kind,
+      source: {
+        type: "comment",
+        id: comment.nodeId,
+        editedAt: comment.updatedAt,
+      },
+      body: comment.body,
+    }),
+  );
 }
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -446,19 +451,7 @@ export function contractResultHold(
         result.revision === legacy.revision &&
         same(body.edits[brief.nodeId!], legacy.edit) &&
         brief.updatedAt === source.editedAt &&
-        legacy.revision ===
-          digest(
-            JSON.stringify({
-              format: "repo-canon/issue-contract-revision/v1",
-              kind: result.kind,
-              source: {
-                type: "comment",
-                id: brief.nodeId,
-                editedAt: brief.updatedAt,
-              },
-              body: brief.body,
-            }),
-          )
+        legacy.revision === commentRevision(brief, result.kind)
       )
         return null;
     }
