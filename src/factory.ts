@@ -130,8 +130,8 @@ export type Continuation = {
   relaunch?: true;
 };
 
-// A run the host started, in the repository named `<owner>/<name>`.
-// Worker exit is independent of publication, observed ending and settlement.
+// A run the host started, in the repository named `<owner>/<name>`. Its
+// agent's exit is independent of publication, observed ending and settlement.
 export type Run = {
   repository: string;
   issue: number;
@@ -151,9 +151,11 @@ export type Run = {
   log: string;
   // The result the run left when its agent exited, as the host read it.
   result?: ReadResult;
-  // A stop request still occupies capacity until the worker actually exits.
+  // A stop request still occupies capacity until the agent actually exits.
   exited: boolean;
-  // Null until the exited worker's ending can be observed.
+  // Null while the agent runs and after exit until its ending can be
+  // observed; interrupted once a factory restart stopped its sandbox, and
+  // paused once its agent exited on a pause's cause.
   ended: null | { interrupted: true } | { paused: Pause } | RunEnding;
 };
 
@@ -517,7 +519,7 @@ function countRunning(
 }
 
 // Shared by admission and operational status. Missing kinds are v2 implement
-// work; only a worker that has not exited occupies capacity.
+// work; only a run whose agent has not exited occupies capacity.
 export function runningCounts(runs: readonly Run[]): RunningCounts {
   const counts: RunningCounts = {
     providers: new Map(),

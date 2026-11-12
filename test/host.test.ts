@@ -10022,7 +10022,7 @@ for (const restart of [false, true])
   });
 
 for (const wait of ["protocol", "notice"] as const)
-  test(`three exited triage workers free a full provider cap during a ${wait} wait`, async (t) => {
+  test(`three exited triage runs free a full provider cap during a ${wait} wait`, async (t) => {
     const protocols = [4, 5, 6].map((number) => contractFixture(number));
     for (const p of protocols) p.controls.mode = "prepared";
     const run = host(t, {
@@ -10075,7 +10075,7 @@ for (const wait of ["protocol", "notice"] as const)
         triage: 0,
         review: 0,
       });
-      // Settlement delay must not turn an already exited worker into a timeout.
+      // Settlement delay must not turn an already exited run into a timeout.
       run.clock.now = new Date("2026-10-09T17:00:00Z");
     }
     const eligible = run.github.find("acme/widgets", 7);
@@ -10327,6 +10327,8 @@ test("a published result with an unobserved ending recovers its open PR and owne
   assert.equal(retained.settled, false);
   assert.equal(run.status().providers[0].running, 0);
   assert.equal(run.status().providers[0].retained, 1);
+  assert.equal(run.status().capacity.host.runKinds.implement, 0);
+  assert.equal(run.status().capacity.host.implement.free, 1);
   unreadable = true;
   const restarted = run.restart();
   await restarted.tick();
@@ -10347,4 +10349,9 @@ test("a published result with an unobserved ending recovers its open PR and owne
   assert.deepEqual(recovered.result, retained.result);
   assert.equal(recovered.pullRequestSince, retained.pullRequestSince);
   assert.equal(run.launched.length, 1);
+  // The fully observed open PR keeps its claim without running occupancy.
+  assert.equal(run.status().providers[0].running, 0);
+  assert.equal(run.status().providers[0].retained, 1);
+  assert.equal(run.status().capacity.host.runKinds.implement, 0);
+  assert.equal(run.status().capacity.host.implement.free, 1);
 });
