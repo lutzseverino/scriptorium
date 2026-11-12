@@ -11,10 +11,21 @@ globalThis.fetch = async (input, options) => {
     throw new Error(`Unexpected fixture origin: ${url.origin}`);
   const state = JSON.parse(readFileSync("state.json", "utf8"));
   const body = options.body ? JSON.parse(options.body) : null;
+  const operation = body?.query?.match(/query (\w+)/)?.[1] ?? url.pathname;
+  const reads = JSON.parse(readFileSync("transport.json", "utf8"));
+  reads.push({
+    operation,
+    variables: body?.variables,
+    page: url.searchParams.get("page"),
+  });
+  writeFileSync("transport.json", JSON.stringify(reads));
   let result;
+  const headers = {};
   if (url.pathname === "/graphql") {
     let data;
-    if (body.query.includes("query BabysitReviewRevision")) {
+    if (["BabysitReviewRevision", "PinnedFilesRevision"].includes(operation)) {
+      if (state.configurationFailure === "revision")
+        throw new Error("Fixture configuration read failed");
       data = {
         nameWithOwner: repository,
         defaultBranchRef: {
@@ -22,12 +33,26 @@ globalThis.fetch = async (input, options) => {
           target: { __typename: "Commit", oid: git("rev-parse", "main") },
         },
       };
-    } else if (body.query.includes("query BabysitReviewConfiguration")) {
+      if (state.advanceDefaultTo)
+        git("update-ref", "refs/heads/main", state.advanceDefaultTo);
+    } else if (
+      ["BabysitReviewConfiguration", "PinnedFiles"].includes(operation)
+    ) {
+      if (state.configurationFailure === "files")
+        throw new Error("Fixture configuration read failed");
       const blob = (expression) => {
+        if (!expression.startsWith(`${body.variables.revision}:`))
+          throw new Error("Fixture file read is not pinned");
+        const path = expression.slice(41);
+        if (Object.hasOwn(state.fileResponses ?? {}, path))
+          return state.fileResponses[path];
         try {
           return {
             __typename: "Blob",
-            text: git("show", expression),
+            text: execFileSync("git", ["show", expression], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "pipe"],
+            }),
             isTruncated: false,
           };
         } catch {
@@ -36,8 +61,11 @@ globalThis.fetch = async (input, options) => {
       };
       data = {
         commit: { __typename: "Commit", oid: body.variables.revision },
-        policy: blob(body.variables.policy),
-        reviewer: blob(body.variables.reviewer),
+        ...Object.fromEntries(
+          [...body.query.matchAll(/(\w+): object\(expression: \$(\w+)\)/g)].map(
+            ([, alias, variable]) => [alias, blob(body.variables[variable])],
+          ),
+        ),
       };
     } else if (body.query.includes("query PosternPullRequest(")) {
       data = {
@@ -78,6 +106,18 @@ globalThis.fetch = async (input, options) => {
       };
     } else throw new Error("Unexpected fixture GraphQL query");
     result = { data: { repository: data } };
+  } else if (url.pathname === `/repos/${repository}/issues/47/timeline`) {
+    const page = Number(url.searchParams.get("page") ?? 1);
+    if (state.timelineFailurePage === page)
+      throw new Error("Fixture timeline page failed");
+    const pages = state.timelinePages ?? [[]];
+    if (!Number.isSafeInteger(page) || page < 1 || page > pages.length)
+      throw new Error(`Unexpected fixture timeline page: ${page}`);
+    result = pages[page - 1];
+    if (page < pages.length) {
+      url.searchParams.set("page", String(page + 1));
+      headers.Link = `<${url.href}>; rel="next"`;
+    }
   } else if (url.pathname === `/repos/${repository}/activity`) {
     result = [{ after: state.headRefOid, timestamp: state.pushedAt }];
   } else if (url.pathname === `/repos/${repository}/actions/runs`) {
@@ -106,5 +146,5 @@ globalThis.fetch = async (input, options) => {
   } else if (url.pathname === `/repos/${repository}/pulls/47/comments`) {
     result = [];
   } else throw new Error(`Unexpected fixture request: ${url.pathname}`);
-  return new Response(JSON.stringify(result), { status: 200 });
+  return new Response(JSON.stringify(result), { status: 200, headers });
 };
