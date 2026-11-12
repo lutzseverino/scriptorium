@@ -10,7 +10,7 @@ import {
 // tag exists. The release procedure repeats this against the public URLs.
 const candidate = (url: string) => {
   const prefix =
-    "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.0/";
+    "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.1/";
   assert.ok(url.startsWith(prefix), `unexpected artifact URL: ${url}`);
   return readFile(
     new URL(`../${url.slice(prefix.length)}`, import.meta.url),
@@ -40,7 +40,7 @@ test("the release artifact check refuses unresolved schema and documentation URL
 test("the release artifact check refuses moving schema or documentation references", async () => {
   await assert.rejects(
     checkReleaseArtifact(
-      configurationSchemaUrl.replace("scriptorium-v4.1.0", "main"),
+      configurationSchemaUrl.replace("scriptorium-v4.1.1", "main"),
       candidate,
     ),
     /release tag/,
@@ -51,7 +51,7 @@ test("the release artifact check refuses moving schema or documentation referenc
         const text = await candidate(url);
         if (url !== configurationSchemaUrl) return text;
         const schema = JSON.parse(text);
-        schema[field] = schema[field].replaceAll("scriptorium-v4.1.0", "main");
+        schema[field] = schema[field].replaceAll("scriptorium-v4.1.1", "main");
         return JSON.stringify(schema);
       }),
       /public URL|description must link/,

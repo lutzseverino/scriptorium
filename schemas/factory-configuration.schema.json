@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.0/schemas/factory-configuration.schema.json",
+  "$id": "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.1/schemas/factory-configuration.schema.json",
   "title": "Scriptorium repository configuration",
-  "description": "Scriptorium v4.1.0 reads .scriptorium/config.json and .scriptorium/Dockerfile only. Configuration: https://github.com/lutzseverino/scriptorium/blob/scriptorium-v4.1.0/docs/usage/factory-configuration.md ; sandbox image: https://github.com/lutzseverino/scriptorium/blob/scriptorium-v4.1.0/docs/usage/sandbox-image.md . Supports configuration versions 2 and 3. This schema checks structure; the host also validates label uniqueness ignoring case and balanced, known comment-template names.",
+  "description": "Scriptorium v4.1.1 reads .scriptorium/config.json and .scriptorium/Dockerfile only. Configuration: https://github.com/lutzseverino/scriptorium/blob/scriptorium-v4.1.1/docs/usage/factory-configuration.md ; sandbox image: https://github.com/lutzseverino/scriptorium/blob/scriptorium-v4.1.1/docs/usage/sandbox-image.md . Supports configuration versions 2 and 3. This schema checks structure; the host also validates label uniqueness ignoring case and balanced, known comment-template names.",
   "oneOf": [
     {
       "$ref": "#/definitions/version2"
