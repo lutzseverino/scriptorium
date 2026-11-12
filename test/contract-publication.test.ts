@@ -734,6 +734,28 @@ for (const boundary of ["after-comment", "labels", "ready-checkpoint"])
     assert.equal(s.checkpoint?.readyRequested, true);
   });
 
+test("prepared readiness recovery needs no configured triage author", async () => {
+  const { triageResult: _, ...configuration } = contractConfiguration;
+  const s = setup(configuration);
+  s.fixture.controls.mode = "prepared";
+  const progress = s.resume();
+  const save = progress.save;
+  progress.save = (state) => {
+    if (state.readyRequested) throw new Error("lost readiness checkpoint");
+    save(state);
+  };
+  await assert.rejects(
+    s.platform().postResult(4, post(configuration), progress),
+  );
+  assert.ok(await s.platform().postResult(4, post(configuration), s.resume()));
+  assert.equal(s.fixture.comments.length, 1);
+  assert.equal(
+    s.fixture.changes.filter((c) => c.label === "state:ready").length,
+    1,
+  );
+  assert.equal(s.checkpoint?.readyRequested, true);
+});
+
 test("prepared publication holds an unauthorized carried readiness event", async () => {
   const s = setup();
   s.fixture.controls.mode = "prepared";

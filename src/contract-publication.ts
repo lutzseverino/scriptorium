@@ -514,7 +514,9 @@ function afterNoticeSecond(
 }
 
 // An interrupted readiness write can be recovered only from our actor's event
-// after the matching notice. Never duplicate a carried event.
+// after the matching notice. Never duplicate a carried event. Without a
+// configured triage author, factory readiness grants nothing, so admission
+// still needs a person's approved event.
 function recoverReadiness(
   applied: LabelChange | undefined,
   author: string,
@@ -524,7 +526,7 @@ function recoverReadiness(
   if (
     !applied ||
     applied.action !== "added" ||
-    !sameLogin(applied.actor?.login, author) ||
+    (author && !sameLogin(applied.actor?.login, author)) ||
     Date.parse(applied.time) <= noticedAt
   )
     hold(
