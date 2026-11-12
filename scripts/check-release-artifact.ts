@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { Ajv, type AnySchemaObject } from "ajv";
 
 export const configurationSchemaUrl =
-  "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.1/schemas/factory-configuration.schema.json";
+  "https://raw.githubusercontent.com/lutzseverino/scriptorium/scriptorium-v4.1.2/schemas/factory-configuration.schema.json";
 
 type ReadUrl = (url: string) => Promise<string>;
 
