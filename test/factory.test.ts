@@ -166,6 +166,7 @@ function run(
     continuation: { attempt: 1, ...continuation },
     startedAt: "2026-10-09T11:00:00Z",
     log: log(issueNumber, details.repository),
+    exited: details.ended != null,
     ended: null,
     ...rest,
   };
@@ -3970,3 +3971,38 @@ test("every implement continuation reacquires host and repository capacity", () 
     );
   }
 });
+
+for (const runKind of [undefined, "triage", "review"] as const)
+  test(`an exited ${runKind ?? "legacy"} run with pending observation holds no budgets or stop decisions`, () => {
+    const pending = run(4, {
+      exited: true,
+      ended: null,
+      startedAt: "2026-10-08T00:00:00Z",
+      continuation: { runKind },
+    });
+    const issues = [
+      issue(4, ["ready-for-agent", "factory:running"]),
+      issue(5),
+      issue(6),
+    ];
+    const decisions = decide({
+      issues,
+      runs: [pending],
+      settings: {
+        caps: { "claude-code": 1, codex: 1 },
+        implement: { total: 1, perRepository: 1 },
+      },
+    });
+    assert.deepEqual(
+      decisions.filter((d) => d.kind === "launch").map((d) => d.issue),
+      [5],
+    );
+    assert.ok(!decisions.some((d) => d.issue === 4 && d.kind !== "skip"));
+    const paused = decide({
+      issues,
+      runs: [pending],
+      usage: { "claude-code": 99 },
+      settings: { pauseThreshold: 95 },
+    });
+    assert.ok(!paused.some((d) => d.kind === "stop"));
+  });

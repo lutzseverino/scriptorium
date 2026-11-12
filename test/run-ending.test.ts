@@ -122,6 +122,7 @@ function run(ending: Partial<RunEnding>, details: Partial<Run> = {}) {
       continuation: { attempt: 1 as const },
       startedAt: "2026-10-09T11:00:00Z",
       log: "/srv/factory/issue-4-attempt-1.log",
+      exited: true,
       ...details,
       ended,
     },

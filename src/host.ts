@@ -169,7 +169,6 @@ type HostRun = Run & {
   // Resolves once the run's log is published and its directory removed.
   finished: Promise<void>;
   controller: AbortController;
-  exited: boolean;
   exitedAt: Date | null;
   stopped: boolean;
   // The pause its stop at the pause threshold fixed, which becomes how it
@@ -278,7 +277,8 @@ export function createHost(
     const counts = providerRunCounts(
       runs.map((run) => ({
         provider: run.provider,
-        ended: run.exited ? run.ended : null,
+        exited: run.exited,
+        ended: run.ended,
       })),
     );
     return Object.keys(configuration.providers).map((provider) =>
@@ -890,7 +890,7 @@ export function createHost(
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
           ended:
             recorded.publication && !recorded.resultPosted
-              ? undefined
+              ? null
               : recorded.interrupted
                 ? { interrupted: true }
                 : pausedEnding(recorded)
@@ -1325,11 +1325,11 @@ export function createHost(
         return;
       case "stop": {
         const run = find(decision);
-        if (!run) return;
+        if (!run || run.exited) return;
         if (!decision.pause) run.stopped = true;
         // The first stop at the pause threshold fixes the run's pause, kept
         // across a restart; a run that already exited ends as it exited.
-        else if (!run.exited && !run.pausing) {
+        else if (!run.pausing) {
           run.pausing = decision.pause;
           record(run);
         }
@@ -1542,7 +1542,8 @@ export function createHost(
           ...(run.result && { result: run.result }),
           startedAt: run.startedAt,
           log: run.log,
-          ended: run.exited ? run.ended : null,
+          exited: run.exited,
+          ended: run.ended,
         })),
       usage: readings,
       holds,
@@ -1618,7 +1619,7 @@ export function createHost(
                 redactor.redact(JSON.stringify(imageStorage)),
               ) as ImageStorageStatus)
             : undefined,
-          runs.map((run) => ({ ...run, ended: run.exited ? run.ended : null })),
+          runs,
           configuration.implement,
         ),
       );
