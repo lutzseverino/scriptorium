@@ -1,6 +1,10 @@
 // The host's recoverable contract publication, called only by platform.postResult.
 // Checkpoints are saved before mutations. Reports never enter this state.
-import type { ConnectionWithLinkAdditions, Issue } from "@lutzseverino/postern";
+import type {
+  ConnectionWithLinkAdditions,
+  Issue,
+  LabelChange,
+} from "@lutzseverino/postern";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { postResultComment, type ResultPost } from "./run-result.ts";
 import { isRunComment } from "./run-comment.ts";
@@ -122,29 +126,20 @@ export async function publishContract(
     if (!notice) return null;
     if (!state.readyRequested) {
       const issue = await tracker.issue(number);
-      if (issue.labels.includes(ready)) {
-        const applied = (await tracker.labelChanges(number)).findLast(
-          (c) => c.label === ready,
+      if (issue.labels.includes(ready))
+        recoverReadiness(
+          (await tracker.labelChanges(number)).findLast(
+            (c) => c.label === ready,
+          ),
+          post.triage.author,
+          Math.max(
+            Date.parse(notice.publishedAt),
+            Date.parse(evidence.createdAt),
+          ),
+          "prepared",
         );
-        if (
-          !applied ||
-          applied.action !== "added" ||
-          !sameLogin(applied.actor?.login, post.triage.author) ||
-          Date.parse(applied.time) <=
-            Math.max(
-              Date.parse(notice.publishedAt),
-              Date.parse(evidence.createdAt),
-            )
-        )
-          return hold(
-            "Readiness predates the matching prepared notice or belongs to another reviewer",
-          );
-      } else {
-        if (
-          Math.floor((progress.now?.() ?? new Date()).getTime() / 1000) *
-            1000 <=
-          Date.parse(notice.publishedAt)
-        )
+      else {
+        if (!afterNoticeSecond(progress, Date.parse(notice.publishedAt)))
           return null;
         if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
       }
@@ -471,32 +466,14 @@ export async function publishContract(
   const applied = changes.findLast((c) => c.label === ready);
   issue = await tracker.issue(number);
   if (!state.readyRequested) {
-    // An interrupted readiness write can be recovered only from our actor's
-    // event after the matching proof notice. Never duplicate a carried event.
-    if (issue.labels.includes(ready)) {
-      if (
-        !applied ||
-        applied.action !== "added" ||
-        !sameLogin(applied.actor?.login, triage.author) ||
-        Date.parse(applied.time) <=
-          Math.max(
-            Date.parse(proofNoticedAt),
-            Date.parse(proofNotice.result.publishedAt!),
-          )
-      )
-        return hold(
-          "Readiness predates the matching body/proof notice or belongs to another reviewer",
-        );
-    } else {
-      // Canon rejects same-second notice/acceptance. A later host pass retries.
-      if (
-        Math.floor((progress.now?.() ?? new Date()).getTime() / 1000) * 1000 <=
-        Math.max(
-          Date.parse(proofNoticedAt),
-          Date.parse(proofNotice.result.publishedAt!),
-        )
-      )
-        return null;
+    const noticedAt = Math.max(
+      Date.parse(proofNoticedAt),
+      Date.parse(proofNotice.result.publishedAt!),
+    );
+    if (issue.labels.includes(ready))
+      recoverReadiness(applied, triage.author, noticedAt, "body/proof");
+    else {
+      if (!afterNoticeSecond(progress, noticedAt)) return null;
       await unchanged();
       const ordinary = post.add.filter((label) => label !== ready);
       if (ordinary.length) await tracker.addLabels(number, ordinary);
@@ -525,6 +502,34 @@ export async function publishContract(
       await tracker.removeLabel(number, label);
   }
   return state.evidence!.url;
+}
+
+// Canon rejects same-second notice/acceptance. A later host pass retries.
+function afterNoticeSecond(
+  progress: PublicationProgress,
+  noticedAt: number,
+): boolean {
+  const now = (progress.now?.() ?? new Date()).getTime();
+  return Math.floor(now / 1000) * 1000 > noticedAt;
+}
+
+// An interrupted readiness write can be recovered only from our actor's event
+// after the matching notice. Never duplicate a carried event.
+function recoverReadiness(
+  applied: LabelChange | undefined,
+  author: string,
+  noticedAt: number,
+  route: string,
+): void {
+  if (
+    !applied ||
+    applied.action !== "added" ||
+    !sameLogin(applied.actor?.login, author) ||
+    Date.parse(applied.time) <= noticedAt
+  )
+    hold(
+      `Readiness predates the matching ${route} notice or belongs to another reviewer`,
+    );
 }
 
 // This is only a duplicate-preservation guard, not contract selection or

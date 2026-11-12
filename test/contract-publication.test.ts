@@ -655,7 +655,7 @@ test("prepared evidence with unavailable creation history is held instead of ado
 });
 
 for (const mismatch of ["source", "revision", "status"] as const)
-  test(`prepared publication waits when a supported notice has another ${mismatch}`, async () => {
+  test(`prepared publication grants no readiness when a supported notice has another ${mismatch}`, async () => {
     const s = setup();
     s.fixture.controls.mode = "prepared";
     s.fixture.controls.missingResult = true;
@@ -673,7 +673,16 @@ for (const mismatch of ["source", "revision", "status"] as const)
         : mismatch === "revision"
           ? { revision: `sha256:${"0".repeat(64)}` }
           : { status: "needs-attention" };
-    assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+    if (mismatch === "status")
+      // A completed evaluation of this brief is not a wait for one.
+      await assert.rejects(
+        s.platform().postResult(4, post(), s.resume()),
+        (error) =>
+          error instanceof ContractPublicationHold &&
+          /published brief is needs-attention/.test(error.message),
+      );
+    else
+      assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
     assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
     assert.equal(s.fixture.comments.length, 1);
     s.fixture.controls.result = {};

@@ -129,14 +129,22 @@ export function preparedContractNotice(
   // Canon cannot know its first notice's own write time in advance.
   const publishedAt = result.publishedAt ?? posted.comment.updatedAt;
   if (
-    !["awaiting-review", "approved"].includes(String(result.status)) ||
     !text(result.kind) ||
     !same(result.source, {
       type: "comment",
       id: String(evidence.id),
       editedAt: evidence.updatedAt,
     }) ||
-    result.revision !== commentRevision(evidence, result.kind) ||
+    result.revision !== commentRevision(evidence, result.kind)
+  )
+    return null;
+  // A completed evaluation of this exact brief that grants no review is not a
+  // wait: the immutable brief cannot be corrected in place.
+  if (!["awaiting-review", "approved"].includes(String(result.status)))
+    return hold(
+      `The configured validator's notice for the published brief is ${String(result.status)} and permits no readiness request`,
+    );
+  if (
     typeof publishedAt !== "string" ||
     !Number.isFinite(Date.parse(publishedAt))
   )

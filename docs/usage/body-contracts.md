@@ -134,6 +134,9 @@ Distinguish these recovery actions:
 - For a published brief awaiting its matching notice, restore automatic
   issue-contract evaluation and its runners; normal passes retry the retained
   result. Publication is not validator approval or implementation admission.
+- When the matching notice evaluates the published brief but grants no review,
+  such as `needs-attention`, the result holds with that status. The immutable
+  brief cannot be corrected in place; obtain fresh triage.
 - For an unknown, unsupported or conflicting validator result, restore the
   compatible configured validator and evaluate the actual source. For missing,
   edited, deleted or authentication-conflicting evidence, recover authenticated
