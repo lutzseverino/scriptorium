@@ -4,6 +4,7 @@
 // the providers' sandboxes.
 import { randomUUID } from "node:crypto";
 import type { Publication } from "./contract-publication.ts";
+import { ContractPublicationHold } from "./contract-protocol.ts";
 import { trustedFinding, type Provenance } from "./triggers.ts";
 import {
   existsSync,
@@ -524,6 +525,9 @@ export function createHost(
           !("invalid" in run.result) &&
           !run.resultPosted
         ) {
+          // Publication is an unsettled run's own progress. A protocol hold
+          // must not invalidate the repository observation or sibling endings.
+          run.ended = null;
           const post = resultPost(
             run.result,
             {
@@ -534,15 +538,32 @@ export function createHost(
             },
             run.configuration,
           );
-          const link = await platform.postResult(run.issue, post, {
-            state: run.publication,
-            now: ports.now,
-            save(publication) {
-              run.publication = publication;
-              record(run);
-            },
-          });
-          if (link === null) continue;
+          let link: string | null;
+          let waiting =
+            "Publication waits for the configured validator's matching notice; restore automatic evaluation and retry the retained result";
+          try {
+            link = await platform.postResult(run.issue, post, {
+              state: run.publication,
+              now: ports.now,
+              save(publication) {
+                run.publication = publication;
+                record(run);
+              },
+            });
+          } catch (error) {
+            if (!(error instanceof ContractPublicationHold)) throw error;
+            link = null;
+            waiting = `Publication held: ${error.message}`;
+          }
+          if (link === null) {
+            record(run);
+            report(`${name}#${run.issue} ${waiting}`);
+            await tell(pass, issue, {
+              phase: phaseOf(run),
+              facts: { state: "running", reason: waiting },
+            });
+            continue;
+          }
           issue.labels = postedLabels(issue.labels, post);
           run.resultPosted = true;
           record(run);

@@ -1,12 +1,18 @@
 // The host's recoverable contract publication, called only by platform.postResult.
 // Checkpoints are saved before mutations. Reports never enter this state.
-import type { ConnectionWithLinkAdditions, Issue } from "@lutzseverino/postern";
+import type {
+  ConnectionWithLinkAdditions,
+  Issue,
+  LabelChange,
+} from "@lutzseverino/postern";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { postResultComment, type ResultPost } from "./run-result.ts";
+import { isRunComment } from "./run-comment.ts";
 import {
   attestationFormat,
   bodyRevision,
   contractFile,
+  contractEvidence,
   commentDeletionIdentity,
   digest,
   hold,
@@ -26,6 +32,7 @@ import {
 } from "./contract-protocol.ts";
 import {
   currentBodyDecision,
+  preparedContractNotice,
   requirePreparedProtocol,
 } from "./contract-result.ts";
 
@@ -85,6 +92,9 @@ export async function publishContract(
   if (mode.mode === "prepared") {
     const tracker = connection.issueTracker;
     requirePreparedProtocol(await tracker.comments(number), configuration);
+    const ready = configuration.labels.ready;
+    const ordinary = post.add.filter((label) => label !== ready);
+    if (ordinary.length) await tracker.addLabels(number, ordinary);
     await evidenceComment(
       connection,
       number,
@@ -93,14 +103,49 @@ export async function publishContract(
       post.comment,
       post.marker,
       post.triage.author,
-      configuration.contractResult.author,
+      configuration.contractResult,
     );
     if (!same(await readContractMode(connection), mode))
       return hold(
         "Cutoff changed before legacy readiness; hold and re-triage in body mode",
       );
-    requirePreparedProtocol(await tracker.comments(number), configuration);
-    if (post.add.length) await tracker.addLabels(number, post.add);
+    const comments = await tracker.comments(number);
+    const evidence = comments.find((c) => c.id === state!.evidence!.id);
+    if (
+      !evidence ||
+      evidence.body !== state.evidence!.body ||
+      (post.triage.author &&
+        !sameLogin(evidence.author?.login, post.triage.author)) ||
+      !same(
+        (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
+        state.evidence!.edit,
+      )
+    )
+      return hold("Legacy evidence was deleted or edited before readiness");
+    const notice = preparedContractNotice(comments, configuration, evidence);
+    if (!notice) return null;
+    if (!state.readyRequested) {
+      const issue = await tracker.issue(number);
+      if (issue.labels.includes(ready))
+        recoverReadiness(
+          (await tracker.labelChanges(number)).findLast(
+            (c) => c.label === ready,
+          ),
+          post.triage.author,
+          Math.max(
+            Date.parse(notice.publishedAt),
+            Date.parse(evidence.createdAt),
+          ),
+          "prepared",
+        );
+      else {
+        if (!afterNoticeSecond(progress, Date.parse(notice.publishedAt)))
+          return null;
+        if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
+      }
+      state.readyRequested = true;
+      save();
+    }
     for (const label of post.remove)
       if ((await tracker.issue(number)).labels.includes(label))
         await tracker.removeLabel(number, label);
@@ -344,7 +389,7 @@ export async function publishContract(
       evidenceBody,
       `<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->`,
       triage.author,
-      configuration.contractResult.author,
+      configuration.contractResult,
     );
   }
   const evidence = (await tracker.comments(number)).find(
@@ -421,32 +466,14 @@ export async function publishContract(
   const applied = changes.findLast((c) => c.label === ready);
   issue = await tracker.issue(number);
   if (!state.readyRequested) {
-    // An interrupted readiness write can be recovered only from our actor's
-    // event after the matching proof notice. Never duplicate a carried event.
-    if (issue.labels.includes(ready)) {
-      if (
-        !applied ||
-        applied.action !== "added" ||
-        !sameLogin(applied.actor?.login, triage.author) ||
-        Date.parse(applied.time) <=
-          Math.max(
-            Date.parse(proofNoticedAt),
-            Date.parse(proofNotice.result.publishedAt!),
-          )
-      )
-        return hold(
-          "Readiness predates the matching body/proof notice or belongs to another reviewer",
-        );
-    } else {
-      // Canon rejects same-second notice/acceptance. A later host pass retries.
-      if (
-        Math.floor((progress.now?.() ?? new Date()).getTime() / 1000) * 1000 <=
-        Math.max(
-          Date.parse(proofNoticedAt),
-          Date.parse(proofNotice.result.publishedAt!),
-        )
-      )
-        return null;
+    const noticedAt = Math.max(
+      Date.parse(proofNoticedAt),
+      Date.parse(proofNotice.result.publishedAt!),
+    );
+    if (issue.labels.includes(ready))
+      recoverReadiness(applied, triage.author, noticedAt, "body/proof");
+    else {
+      if (!afterNoticeSecond(progress, noticedAt)) return null;
       await unchanged();
       const ordinary = post.add.filter((label) => label !== ready);
       if (ordinary.length) await tracker.addLabels(number, ordinary);
@@ -475,6 +502,36 @@ export async function publishContract(
       await tracker.removeLabel(number, label);
   }
   return state.evidence!.url;
+}
+
+// Canon rejects same-second notice/acceptance. A later host pass retries.
+function afterNoticeSecond(
+  progress: PublicationProgress,
+  noticedAt: number,
+): boolean {
+  const now = (progress.now?.() ?? new Date()).getTime();
+  return Math.floor(now / 1000) * 1000 > noticedAt;
+}
+
+// An interrupted readiness write can be recovered only from our actor's event
+// after the matching notice. Never duplicate a carried event. Without a
+// configured triage author, factory readiness grants nothing, so admission
+// still needs a person's approved event.
+function recoverReadiness(
+  applied: LabelChange | undefined,
+  author: string,
+  noticedAt: number,
+  route: string,
+): void {
+  if (
+    !applied ||
+    applied.action !== "added" ||
+    (author && !sameLogin(applied.actor?.login, author)) ||
+    Date.parse(applied.time) <= noticedAt
+  )
+    hold(
+      `Readiness predates the matching ${route} notice or belongs to another reviewer`,
+    );
 }
 
 // This is only a duplicate-preservation guard, not contract selection or
@@ -512,7 +569,7 @@ async function evidenceComment(
   body: string,
   marker: string,
   author: string,
-  validatorAuthor: string,
+  validator: PlatformConventions["contractResult"],
 ): Promise<void> {
   const tracker = connection.issueTracker;
   let comments = await tracker.comments(number);
@@ -528,7 +585,7 @@ async function evidenceComment(
               .filter((c) =>
                 author
                   ? sameLogin(c.author?.login, author)
-                  : !sameLogin(c.author?.login, validatorAuthor),
+                  : !sameLogin(c.author?.login, validator.author),
               )
               .map((c) => c.id),
           ),
@@ -551,8 +608,21 @@ async function evidenceComment(
         c.id > state.evidenceIntent!.after &&
         (author
           ? sameLogin(c.author?.login, author)
-          : !sameLogin(c.author?.login, validatorAuthor)),
+          : !sameLogin(c.author?.login, validator.author)),
     );
+    if (candidates.some(isRunComment)) {
+      // A wait report may land after the saved frontier while evidence identity
+      // reads are held. Authenticate its original mutable role before excluding
+      // it; edited evidence that merely resembles a report remains protected.
+      const protectedIds = await contractEvidence(
+        connection,
+        validator,
+        isRunComment,
+      )(number, comments);
+      candidates = candidates.filter(
+        (c) => !isRunComment(c) || protectedIds.has(String(c.id)),
+      );
+    }
     if (candidates.length > 1 || candidates.some((c) => c.body !== body))
       return hold(
         "Evidence publication has conflicting or edited records after its saved frontier",
@@ -566,7 +636,7 @@ async function evidenceComment(
           c.body === body &&
           (author
             ? sameLogin(c.author?.login, author)
-            : !sameLogin(c.author?.login, validatorAuthor)),
+            : !sameLogin(c.author?.login, validator.author)),
       );
     }
     if (candidates.length !== 1)
