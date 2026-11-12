@@ -613,6 +613,7 @@ test("text and JSON project the host's shared implement counts with current limi
       continuation: { attempt: 1 },
       startedAt: now.toISOString(),
       log: "/tmp/log",
+      exited: false,
       ended: null,
     },
   ];
@@ -630,6 +631,7 @@ test("text and JSON project the host's shared implement counts with current limi
   runs.push({
     ...runs[0],
     issue: 4,
+    exited: true,
     ended: {
       paused: {
         cause: "usage limit",

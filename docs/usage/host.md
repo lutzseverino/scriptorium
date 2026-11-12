@@ -1577,6 +1577,24 @@ Queued resume requests remain unapplied. Codex's existing usage adapter may
 make its temporary private credential copy and remove it after reading; the
 configured credential and factory records remain unchanged.
 
+### Forward recovery of retained exited work
+
+After upgrading to a fixed host, normal passes and supported restart recovery
+restore truthful worker capacity for existing retained exited runs. No record
+edits or deletion, cap increases, force-cleared claims or replacement attempts
+are needed. A repository that cannot be read still retains its exited work;
+passes continue to write status and provider observations. Active workers in
+that repository continue to occupy capacity until exit.
+
+Publication resumes from its saved checkpoint once the repository and validator
+prerequisites recover, preserving the result, run identity, attempt and PR
+ownership. Publication, readiness, review and final settlement keep their
+existing gates. A missing ending is never evidence of a paused run. Slot
+recovery is not completed PR delivery: an open PR can still await review or
+merge while its exited worker consumes no running capacity. An unreadable or
+older status observation remains unavailable under the rules below; absence
+of trustworthy counts never establishes free capacity.
+
 ### Implement capacity
 
 The optional host configuration object `implement` accepts `total` and
@@ -1587,20 +1605,23 @@ and merge delivery that runs implement. Admissions consume slots immediately
 within the same pass, preserving the existing queue priority and other gates.
 Triage and review consume provider slots but no implement slots.
 
-All dimensions count the same non-ended factory-managed sandboxes. A paused
-sandbox still stopping counts until it ends; retained ended or paused records
-and claims awaiting merge take no slot. A later launch reacquires capacity.
+All dimensions count the same factory-managed workers that have not exited.
+A worker still stopping counts until exit. Pending result publication, ending
+observation, paused or interrupted records, and claims awaiting merge take no
+slot after exit. A posted result or an open PR alone does not prove exit.
+A later launch reacquires capacity.
 These caps neither end running work nor change usage or owner holds.
 
 The `capacity` field in status JSON extends the existing version 1 projection:
 
-- `counting: "non-ended-runs"` identifies the shared admission boundary.
+- `counting: "non-ended-runs"` identifies the shared worker lifecycle boundary:
+  the worker has not exited, independently of its derived ending or settlement.
 - `observation` has the same provenance shape as provider observations. Counts
   come from `status.json.capacity.observedAt` and are always `last-observed`;
   missing, legacy, unreadable, future or inconsistent snapshots and pending
   operational transactions make them `unavailable`. A live usage read does not
   establish work counts. The event checkpoint has no capacity fallback.
-- `host` and each entry of `repositories` contain `runKinds` (non-ended
+- `host` and each entry of `repositories` contain `runKinds` (workers that have not exited:
   `implement`, `triage` and `review` counts) and `implement` with `limit`,
   `running` and `free`. Repository entries also name `repository`.
 - Limits come from the validated configuration read by the command. A `null`
@@ -1669,7 +1690,7 @@ thresholds come from the configuration read for this command.
 | `cap`                                     | The configured provider sandbox cap.                                                                                                                                                                                                                                     |
 | `running`, `free`                         | Non-ended runs across all served repositories, and `max(0, cap - running)`, or `null` when work cannot be established.                                                                                                                                                   |
 | `paused`                                  | Last-observed paused work, including a sandbox stopping for a pause; `null` when unavailable.                                                                                                                                                                            |
-| `retained`                                | Last-observed ended runs retained by the host, including paused and interrupted work and claims awaiting merge; `null` when unavailable. Paused work can be a subset of retained work.                                                                                   |
+| `retained`                                | Last-observed exited runs retained by the host, including unresolved endings, pending publication, paused and interrupted work and claims awaiting merge; `null` when unavailable. Paused work can be a subset of retained work.                                         |
 | `claimsHeld`                              | Whether observed usage or owner control holds new claims; `null` when the observations cannot establish this.                                                                                                                                                            |
 | `pausedRecoveryUsageHeld`                 | Whether usage holds paused-run recovery under the configured thresholds, without a reserve raise. Interrupted running-work recovery instead uses the pause threshold. Owner holds apply to new claims, not paused-run recovery. `null` means unavailable usage evidence. |
 | `launchPermission`                        | Always `not-established`: this command grants no claim or continuation launch.                                                                                                                                                                                           |
@@ -1737,21 +1758,21 @@ also used by the event stream's `state` field. Times are UTC ISO 8601 strings;
 percentages are numbers. The snapshot's `updatedAt` identifies the pass, and
 each provider's `observedAt` identifies that observation.
 
-| Field                                 | Meaning                                                                                                                                                                                                                                                      |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `provider`, `observedAt`              | Provider name and observation time.                                                                                                                                                                                                                          |
-| `usage`                               | `{ "state": "known", "reading": { "used": 92, "at": "…", "reset": "…" } }` for a fresh reading, or `{ "state": "unknown" }`. The reading's `at` is when it was obtained; `reset` is optional. A fresh cached reading remains known after a failed read.      |
-| `usageHold`                           | Automatic usage hold: `used`, `at`, optional `reset`, and fixed `since` and `until`; otherwise `null`. Its evidence still applies when `usage` is unknown.                                                                                                   |
-| `ownerHold`                           | `{ "since": "…", "used": 92 }`, or `null`. `used` is `null` for recovery from an unreadable owner record. Only an owner resume releases it.                                                                                                                  |
-| `reserve`                             | `{ "drainThreshold": 94, "since": "…", "until": "…" }`, or `null`. `until: null` means no reset has been reported yet.                                                                                                                                       |
-| `thresholds`                          | Configured `drainThreshold`, `pauseThreshold`, `afterDrain`, and `effectiveDrainThreshold` for new claims after a reserve raise. Disabled thresholds are `null`.                                                                                             |
-| `running`, `paused`                   | Counts across all repositories, including unreadable repositories. Only non-ended runs occupy slots; interrupted and other ended work takes no slot. A run stopping at the pause threshold counts as running until exit and as paused from the stop request. |
-| `counting`, `cap`, `free`, `retained` | New host observations include `counting: "non-ended-runs"`, the configured cap, nonnegative free slots, and retained ended work. Older observations lack this boundary marker, so the status command cannot use their counts.                                |
-| `claimsHeld`                          | Whether usage or the owner holds new claims, independently of repository readiness and capacity.                                                                                                                                                             |
-| `pauseAtThreshold`                    | Whether usage in force reaches the pause threshold, including when there is no sandbox to stop.                                                                                                                                                              |
-| `drained`                             | New claims are held and no running work remains. This is an observation, never a latch on recovery.                                                                                                                                                          |
-| `reason`                              | `owner-hold`, `pause-threshold`, `drain-threshold`, or `available`, in that precedence order.                                                                                                                                                                |
-| `nextAction`                          | `owner-resume`, `wait-for-usage`, or `claims-allowed`. A resume can still meet a usage threshold; a reserve raise never overrides the pause threshold. Paused runs retain their separate automatic recovery.                                                 |
+| Field                                 | Meaning                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`, `observedAt`              | Provider name and observation time.                                                                                                                                                                                                                                                            |
+| `usage`                               | `{ "state": "known", "reading": { "used": 92, "at": "…", "reset": "…" } }` for a fresh reading, or `{ "state": "unknown" }`. The reading's `at` is when it was obtained; `reset` is optional. A fresh cached reading remains known after a failed read.                                        |
+| `usageHold`                           | Automatic usage hold: `used`, `at`, optional `reset`, and fixed `since` and `until`; otherwise `null`. Its evidence still applies when `usage` is unknown.                                                                                                                                     |
+| `ownerHold`                           | `{ "since": "…", "used": 92 }`, or `null`. `used` is `null` for recovery from an unreadable owner record. Only an owner resume releases it.                                                                                                                                                    |
+| `reserve`                             | `{ "drainThreshold": 94, "since": "…", "until": "…" }`, or `null`. `until: null` means no reset has been reported yet.                                                                                                                                                                         |
+| `thresholds`                          | Configured `drainThreshold`, `pauseThreshold`, `afterDrain`, and `effectiveDrainThreshold` for new claims after a reserve raise. Disabled thresholds are `null`.                                                                                                                               |
+| `running`, `paused`                   | Counts across all repositories, including unreadable repositories. Only workers that have not exited occupy slots; pending publication and unresolved endings after exit take no slot. A run stopping at the pause threshold counts as running until exit and as paused from the stop request. |
+| `counting`, `cap`, `free`, `retained` | New host observations include `counting: "non-ended-runs"`, the configured cap, nonnegative free slots, and retained exited work, including unresolved endings. Older observations lack this boundary marker, so the status command cannot use their counts.                                   |
+| `claimsHeld`                          | Whether usage or the owner holds new claims, independently of repository readiness and capacity.                                                                                                                                                                                               |
+| `pauseAtThreshold`                    | Whether usage in force reaches the pause threshold, including when there is no sandbox to stop.                                                                                                                                                                                                |
+| `drained`                             | New claims are held and no running work remains. This is an observation, never a latch on recovery.                                                                                                                                                                                            |
+| `reason`                              | `owner-hold`, `pause-threshold`, `drain-threshold`, or `available`, in that precedence order.                                                                                                                                                                                                  |
+| `nextAction`                          | `owner-resume`, `wait-for-usage`, or `claims-allowed`. A resume can still meet a usage threshold; a reserve raise never overrides the pause threshold. Paused runs retain their separate automatic recovery.                                                                                   |
 
 ```json
 {

@@ -67,7 +67,7 @@ test("host status keeps explicitly supplied provider statuses", () => {
   });
 });
 
-test("capacity projection counts exactly the non-ended run kinds across providers", () => {
+test("capacity projection counts worker exits independently of retained endings across providers", () => {
   const now = "2026-11-09T00:00:00.000Z";
   const run = (
     repository: string,
@@ -82,6 +82,7 @@ test("capacity projection counts exactly the non-ended run kinds across provider
     continuation: { attempt: 1 },
     startedAt: now,
     log: "/tmp/log",
+    exited: details.ended != null,
     ended: null,
     ...details,
   });
@@ -97,6 +98,13 @@ test("capacity projection counts exactly the non-ended run kinds across provider
       },
     }),
     run("acme/widgets", 7, { ended: { timedOut: false, pullRequest: "open" } }),
+    ...([undefined, "triage", "review"] as const).map((runKind, i) =>
+      run("acme/widgets", 8 + i, {
+        exited: true,
+        ended: null,
+        continuation: { attempt: 1, runKind },
+      }),
+    ),
   ];
   const repos = [
     { name: "acme/widgets", paused: null },

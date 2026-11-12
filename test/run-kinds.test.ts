@@ -148,6 +148,7 @@ function run(
     continuation: { attempt: 1, ...continuation },
     startedAt: "2026-10-09T11:00:00Z",
     log: "/srv/factory/logs/issue-4-attempt-1.log",
+    exited: details.ended != null,
     ended: null,
     ...rest,
   };

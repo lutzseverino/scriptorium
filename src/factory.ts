@@ -130,9 +130,8 @@ export type Continuation = {
   relaunch?: true;
 };
 
-// A run the host started, in the repository named `<owner>/<name>`. `ended`
-// is null while its sandbox runs, interrupted once a factory restart stopped
-// its sandbox, and paused once its agent exited on a pause's cause.
+// A run the host started, in the repository named `<owner>/<name>`.
+// Worker exit is independent of publication, observed ending and settlement.
 export type Run = {
   repository: string;
   issue: number;
@@ -152,6 +151,9 @@ export type Run = {
   log: string;
   // The result the run left when its agent exited, as the host read it.
   result?: ReadResult;
+  // A stop request still occupies capacity until the worker actually exits.
+  exited: boolean;
+  // Null until the exited worker's ending can be observed.
   ended: null | { interrupted: true } | { paused: Pause } | RunEnding;
 };
 
@@ -515,21 +517,21 @@ function countRunning(
 }
 
 // Shared by admission and operational status. Missing kinds are v2 implement
-// work; only a non-ended sandbox occupies capacity, never a retained claim.
+// work; only a worker that has not exited occupies capacity.
 export function runningCounts(runs: readonly Run[]): RunningCounts {
   const counts: RunningCounts = {
     providers: new Map(),
     host: emptyRunKindCounts(),
     repositories: new Map(),
   };
-  for (const run of runs) if (run.ended === null) countRunning(counts, run);
+  for (const run of runs) if (!run.exited) countRunning(counts, run);
   return counts;
 }
 
-// Shared by admission and operational status. Retained ended work, including
-// interrupted runs and claims awaiting merge, occupies no sandbox slot.
+// Shared by admission and operational status. Exited work is retained even
+// before its ending is observed; only an explicit paused ending is paused.
 export function providerRunCounts(
-  runs: readonly Pick<Run, "provider" | "ended">[],
+  runs: readonly Pick<Run, "provider" | "exited" | "ended">[],
 ): Map<string, { running: number; paused: number; retained: number }> {
   const counts = new Map<
     string,
@@ -541,10 +543,10 @@ export function providerRunCounts(
       paused: 0,
       retained: 0,
     };
-    if (run.ended === null) entry.running++;
+    if (!run.exited) entry.running++;
     else {
       entry.retained++;
-      if ("paused" in run.ended) entry.paused++;
+      if (run.ended && "paused" in run.ended) entry.paused++;
     }
     counts.set(run.provider, entry);
   }
@@ -563,7 +565,7 @@ function settle(
   const at = { repository: run.repository, issue: run.issue };
   const limit = snapshot.settings.timeLimitMinutes;
   const overtime = `the time limit of ${limit} minutes`;
-  if (run.ended === null) {
+  if (!run.exited) {
     const elapsed = Date.parse(snapshot.now) - Date.parse(run.startedAt);
     if (elapsed > limit * 60_000)
       return [{ kind: "stop", ...at, reason: `exceeded ${overtime}` }];
@@ -584,6 +586,8 @@ function settle(
       },
     ];
   }
+  // Publication or ending observation may still be pending after exit.
+  if (run.ended === null) return [];
   if ("interrupted" in run.ended || "paused" in run.ended) return { held: run };
   const repository = snapshot.repositories.find(
     (repository) => repository.name === run.repository,
@@ -715,7 +719,7 @@ function continuation(
     (run) =>
       run.repository === repository.name &&
       run.issue === issue.number &&
-      run.ended === null,
+      !run.exited,
   );
   const merge = !claim?.inputResume && target && !running;
   const reviews = runKind(configuration, "review");

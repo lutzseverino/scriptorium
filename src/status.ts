@@ -103,12 +103,12 @@ export function hostStatus(
       ...(runs.some(
         (run) =>
           run.repository === name &&
-          run.ended === null &&
+          !run.exited &&
           run.continuation.mergeRelaunch,
       ) && {
         mergeRelaunches: runs.flatMap((run) =>
           run.repository === name &&
-          run.ended === null &&
+          !run.exited &&
           run.continuation.mergeRelaunch
             ? [
                 {

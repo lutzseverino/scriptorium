@@ -9657,6 +9657,13 @@ for (const blocked of ["notice", "protocol"] as const)
     assert.ok(decisions.some((d) => d.issue === 6 && d.kind === "release"));
     assert.ok(decisions.some((d) => d.issue === 7 && d.kind === "launch"));
     assert.equal(run.status().repositories[0].state, "running");
+    assert.equal(run.status().providers[0].running, 1);
+    assert.equal(run.status().providers[0].retained, 1);
+    assert.deepEqual(run.status().capacity.host.runKinds, {
+      implement: 1,
+      triage: 0,
+      review: 0,
+    });
     assert.ok(waiting.issue.labels.includes("factory:running"));
     assert.ok(ready.issue.labels.includes("state:ready"));
     assert.ok(!ready.issue.labels.includes("factory:running"));
@@ -9716,11 +9723,12 @@ for (const blocked of ["notice", "protocol"] as const)
     );
   });
 
-for (const checkpoint of ["mode", "none", "stop"] as const)
+for (const checkpoint of ["mode", "none", "stop", "unreadable"] as const)
   test(`host restart resumes a retained ${checkpoint} publication without a replacement run`, async (t) => {
     const protocol = contractFixture();
     protocol.controls.mode = "prepared";
     let unavailable = false;
+    let unreadable = false;
     const wrap = protocol.wrap;
     const run = host(t, {
       repositories: {
@@ -9734,6 +9742,15 @@ for (const checkpoint of ["mode", "none", "stop"] as const)
       },
       wrapConnection(connection) {
         const wrapped = wrap(connection);
+        const issues = wrapped.issueTracker.issues;
+        wrapped.issueTracker.issues = (filter) => {
+          if (unreadable)
+            throw new PlatformError(
+              "unavailable",
+              "Shared issue list unavailable",
+            );
+          return issues(filter);
+        };
         const request = wrapped.access.request;
         wrapped.access.request = (input) => {
           if (unavailable && input.path === "/repos/acme/widgets")
@@ -9765,7 +9782,7 @@ for (const checkpoint of ["mode", "none", "stop"] as const)
     );
     await run.drain();
     if (checkpoint === "none") unavailable = true;
-    if (checkpoint === "mode")
+    if (checkpoint === "mode" || checkpoint === "unreadable")
       protocol.controls.format = "repo-canon/issue-contract-state/v3";
     if (checkpoint === "stop") protocol.controls.fail = "comment";
     await run.tick();
@@ -9777,13 +9794,35 @@ for (const checkpoint of ["mode", "none", "stop"] as const)
     assert.equal(retained.resultPosted, undefined);
     assert.deepEqual(
       retained.publication,
-      checkpoint === "mode" ? { mode: "prepared" } : undefined,
+      checkpoint === "mode" || checkpoint === "unreadable"
+        ? { mode: "prepared" }
+        : undefined,
     );
     if (checkpoint === "none")
       assert.equal(run.status().repositories[0].state, "paused");
     unavailable = false;
     protocol.controls.format = undefined;
+    unreadable = checkpoint === "unreadable";
     const restarted = run.restart();
+    if (unreadable) {
+      for (let pass = 0; pass < 2; pass++) {
+        run.clock.now = new Date(run.clock.now.getTime() + 60_000);
+        await restarted.tick();
+        assert.equal(run.status().updatedAt, run.clock.now.toISOString());
+        assert.equal(run.status().repositories[0].state, "paused");
+        assert.equal(run.status().providers[0].running, 0);
+        assert.equal(run.status().providers[0].retained, 1);
+        assert.equal(run.status().providers[0].paused, 0);
+        assert.deepEqual(run.status().capacity.host.runKinds, {
+          implement: 0,
+          triage: 0,
+          review: 0,
+        });
+        assert.equal(run.launched.length, 1);
+        assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), retained);
+      }
+      unreadable = false;
+    }
     await restarted.tick();
     const published = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(published.resultPosted, true);
@@ -9981,3 +10020,331 @@ for (const restart of [false, true])
     );
     assert.equal(run.launched.length, 1);
   });
+
+for (const wait of ["protocol", "notice"] as const)
+  test(`three exited triage workers free a full provider cap during a ${wait} wait`, async (t) => {
+    const protocols = [4, 5, 6].map((number) => contractFixture(number));
+    for (const p of protocols) p.controls.mode = "prepared";
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [4, 5, 6]
+          .map((number) => ({ number, labels: ["state:triage"] }))
+          .concat([{ number: 7, labels: ["state:owner"] }]),
+      },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...kindsFiles,
+          ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+        }),
+      },
+      caps: { "claude-code": 3, codex: 1 },
+      wrapConnection: publicationConnection(protocols),
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 3);
+    for (const p of protocols) {
+      p.controls.format =
+        wait === "protocol" ? "repo-canon/issue-contract-state/v3" : undefined;
+      p.controls.missingResult = wait === "notice";
+    }
+    for (const launch of run.launched)
+      launch.finish(undefined, undefined, {
+        outcome: "done",
+        state: "state:ready",
+        body: bodyBrief,
+        labels: ["type:enhancement"],
+      });
+    await run.drain();
+    for (let pass = 0; pass < 2; pass++) {
+      const decisions = await run.tick();
+      assert.ok(
+        !decisions.some((d) => d.kind === "stop" || d.kind === "launch"),
+      );
+      const status = run.status();
+      assert.equal(status.providers[0].running, 0);
+      assert.equal(status.providers[0].free, 3);
+      assert.equal(status.providers[0].retained, 3, run.reports.join("\n"));
+      assert.equal(status.providers[0].paused, 0);
+      assert.deepEqual(status.capacity.host.runKinds, {
+        implement: 0,
+        triage: 0,
+        review: 0,
+      });
+      assert.deepEqual(status.capacity.repositories[0].runKinds, {
+        implement: 0,
+        triage: 0,
+        review: 0,
+      });
+      // Settlement delay must not turn an already exited worker into a timeout.
+      run.clock.now = new Date("2026-10-09T17:00:00Z");
+    }
+    const eligible = run.github.find("acme/widgets", 7);
+    eligible.labels = ["state:triage"];
+    eligible.timeline.push({
+      event: "labeled",
+      label: "state:triage",
+      actor: "owner",
+      at: "2026-10-09T16:59:00Z",
+    });
+    const admitted = await run.tick();
+    assert.ok(
+      admitted.some((d) => d.kind === "launch" && d.issue === 7),
+      JSON.stringify(admitted),
+    );
+    assert.equal(run.launched.length, 4);
+    for (const p of protocols) {
+      assert.ok(p.issue.labels.includes("factory:running"));
+      p.controls.format = undefined;
+      p.controls.missingResult = false;
+      p.controls.result = {};
+    }
+    await run.tick();
+    for (const number of [4, 5, 6]) {
+      const record = recordOf(run.state, number, 1);
+      assert.equal(record.settled, true);
+      assert.equal(record.ended.timedOut, false);
+      assert.equal(record.stopped, false);
+      assert.equal(record.continuation.attempt, 1);
+    }
+    for (const p of protocols) {
+      assert.equal(
+        p.comments.filter(
+          (c) =>
+            c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+        ).length,
+        1,
+      );
+
+      assert.equal(
+        p.changes.filter((c) => c.label === "state:ready").length,
+        1,
+      );
+    }
+  });
+
+for (const kind of [undefined, "triage", "implement", "review"] as const)
+  test(`unreadable repositories retain exited ${kind ?? "legacy"} work without running occupancy across restart`, async (t) => {
+    const files = kind ? kindsFiles : factoryFiles;
+    const bare = remote(t, files);
+    const pr = {
+      ...publishedPR(bare, "proposal/changes"),
+      number: 4,
+      body: "Direct change: requested improvement",
+      author: { login: "owner", bot: false },
+    };
+    let unreadable = false;
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels:
+              kind === "triage"
+                ? ["state:triage"]
+                : kind
+                  ? ["state:ready"]
+                  : ["ready-for-agent"],
+            ...(kind === "review" && {
+              isPullRequest: true,
+              labels: [],
+              branchPullRequests: [pr],
+            }),
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+      configuration: { implement: { total: 1, perRepository: 1 } },
+      caps: { "claude-code": 1, codex: 1 },
+      wrapConnection(connection) {
+        const issues = connection.issueTracker.issues;
+        connection.issueTracker.issues = (filter) => {
+          if (unreadable)
+            throw new PlatformError("unavailable", "Issue list unavailable");
+          return issues(filter);
+        };
+        return connection;
+      },
+    });
+    if (kind === "review") run.github.drafts.add(4);
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    assert.equal(
+      recordOf(run.state, 4, 1).continuation.runKind,
+      kind === "implement" ? undefined : kind,
+    );
+    unreadable = true;
+    await run.tick();
+    assert.equal(
+      run.status().providers[0].running,
+      1,
+      "unreadable active work still occupies its provider",
+    );
+    assert.equal(
+      run.status().capacity.host.implement.running,
+      !kind || kind === "implement" ? 1 : 0,
+    );
+    run.launched[0].finish(undefined, undefined, {
+      outcome: "stop",
+      state: kind ? "state:owner" : "factory:needs-input",
+      body: "Await an owner answer.",
+    });
+    await run.drain();
+    const retained = recordOf(run.state, 4, 1);
+    assert.equal(retained.exited, true);
+    assert.equal(retained.ended, null);
+    const restarted = run.restart();
+    for (const active of [run, restarted]) {
+      run.clock.now = new Date(run.clock.now.getTime() + 60_000);
+      await active.tick();
+      const status = run.status();
+      assert.equal(status.updatedAt, run.clock.now.toISOString());
+      assert.equal(status.providers[0].running, 0);
+      assert.equal(status.providers[0].retained, 1);
+      assert.equal(status.providers[0].free, 1);
+      assert.deepEqual(status.capacity.host.runKinds, {
+        implement: 0,
+        triage: 0,
+        review: 0,
+      });
+      assert.equal(status.capacity.host.implement.free, 1);
+      assert.equal(status.capacity.repositories[0].implement.free, 1);
+      assert.equal(run.launched.length, 1);
+    }
+    unreadable = false;
+    await restarted.tick();
+    const recovered = recordOf(run.state, 4, 1);
+    assert.equal(recovered.settled, true);
+    assert.equal(recovered.resultPosted, true);
+    assert.deepEqual(recovered.continuation, retained.continuation);
+    assert.deepEqual(recovered.provenance, retained.provenance);
+    assert.deepEqual(recovered.result, retained.result);
+    assert.equal(recovered.startedAt, retained.startedAt);
+    assert.equal(run.launched.length, 1);
+  });
+
+test("an exited body publication awaiting matching approval frees capacity and resumes its saved evidence", async (t) => {
+  const protocol = contractFixture();
+  let waiting = true;
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+      }),
+    },
+    wrapConnection(connection) {
+      const wrapped = protocol.wrap(connection);
+      const comments = wrapped.issueTracker.comments;
+      wrapped.issueTracker.comments = async (number) =>
+        (await comments(number)).map((c) => ({
+          ...c,
+          body:
+            waiting && c.body.includes("repo-canon:issue-contract-feedback")
+              ? c.body.replace(
+                  '"status":"approved"',
+                  '"status":"awaiting-review"',
+                )
+              : c.body,
+        }));
+      return wrapped;
+    },
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["type:enhancement"],
+    body: bodyBrief,
+  });
+  await run.drain();
+  await run.tick();
+  const checkpoint = recordOf(run.state, 4, 1);
+  assert.equal(checkpoint.settled, false);
+  assert.equal(checkpoint.ended, null);
+  assert.equal(checkpoint.publication.readyRequested, true);
+  assert.equal(run.status().providers[0].running, 0);
+  assert.equal(run.status().providers[0].retained, 1);
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(run.status().providers[0].running, 0);
+  waiting = false;
+  await restarted.tick();
+  const completed = recordOf(run.state, 4, 1);
+  assert.equal(completed.settled, true);
+  assert.deepEqual(completed.provenance, checkpoint.provenance);
+  assert.deepEqual(completed.publication, checkpoint.publication);
+  assert.equal(protocol.writes.filter((w) => w === "body").length, 1);
+  assert.equal(protocol.writes.filter((w) => w === "attestation").length, 1);
+  assert.equal(
+    protocol.changes.filter((c) => c.label === "state:ready").length,
+    1,
+  );
+  assert.equal(run.launched.length, 1);
+});
+
+test("a published result with an unobserved ending recovers its open PR and ownership after restart", async (t) => {
+  let unreadable = false;
+  let observationFails = false;
+  const bare = remote(t, factoryFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+    configuration: { implement: { total: 1, perRepository: 1 } },
+    wrapConnection(connection) {
+      const issues = connection.issueTracker.issues;
+      const closing = connection.pullRequests.closing;
+      connection.issueTracker.issues = (filter) => {
+        if (unreadable)
+          throw new PlatformError("unavailable", "Issue list unavailable");
+        return issues(filter);
+      };
+      connection.pullRequests.closing = (number) => {
+        if (observationFails)
+          throw new PlatformError("unavailable", "PR observation unavailable");
+        return closing(number);
+      };
+      return connection;
+    },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.branchPullRequests.push(publishedPR(bare));
+  await run.tick();
+  assert.equal(
+    run.status().providers[0].running,
+    1,
+    "an open PR does not prove exit",
+  );
+  run.launched[0].finish();
+  await run.drain();
+  observationFails = true;
+  await run.tick();
+  const retained = recordOf(run.state, 4, 1);
+  assert.equal(retained.resultPosted, true);
+  assert.equal(retained.ended, null);
+  assert.equal(retained.settled, false);
+  assert.equal(run.status().providers[0].running, 0);
+  assert.equal(run.status().providers[0].retained, 1);
+  unreadable = true;
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.status().capacity.host.implement.free, 1);
+  assert.equal(run.status().providers[0].running, 0);
+  unreadable = false;
+  observationFails = false;
+  await restarted.tick();
+  const recovered = recordOf(run.state, 4, 1);
+  assert.equal(recovered.ended.pullRequest, "open");
+  assert.equal(recovered.settled, false);
+  assert.deepEqual(recovered.ownedPullRequests, [40]);
+  assert.deepEqual(recovered.continuation, retained.continuation);
+  assert.deepEqual(recovered.provenance, {
+    ...retained.provenance,
+    ownedPullRequests: [40],
+  });
+  assert.deepEqual(recovered.result, retained.result);
+  assert.equal(recovered.pullRequestSince, retained.pullRequestSince);
+  assert.equal(run.launched.length, 1);
+});
