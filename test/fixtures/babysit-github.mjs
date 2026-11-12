@@ -41,7 +41,10 @@ globalThis.fetch = async (input, options) => {
       if (state.configurationFailure === "files")
         throw new Error("Fixture configuration read failed");
       const { revision } = body.variables;
-      // An unknown revision is a read failure, never optional absence.
+      // Only a full commit SHA pins the read; an unknown one is a read failure,
+      // never optional absence.
+      if (!/^[0-9a-f]{40}$/.test(revision))
+        throw new Error("Fixture file read is not pinned");
       execFileSync("git", ["cat-file", "-e", `${revision}^{commit}`], {
         stdio: "ignore",
       });

@@ -181,8 +181,9 @@ process.stdout.write(JSON.stringify(result));
   };
 }
 
-// Run both commands where a valid configuration would post a fix request, so
-// an empty request log shows that each command stopped before writing.
+// Run both commands where a valid configuration would make request.mjs post a
+// fix request, so an empty request log shows that it stopped before writing.
+// wait.mjs never posts; its exit status and diagnostic carry the stop.
 function assertBothStopBeforeRequest(
   gh: ReturnType<typeof github>,
   status: number,
