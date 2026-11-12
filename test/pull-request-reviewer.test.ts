@@ -181,6 +181,23 @@ process.stdout.write(JSON.stringify(result));
   };
 }
 
+// Run both commands where a valid configuration would post a fix request, so
+// an empty request log shows that each command stopped before writing.
+function assertBothStopBeforeRequest(
+  gh: ReturnType<typeof github>,
+  status: number,
+  diagnostic: RegExp,
+) {
+  gh.push("2".repeat(40));
+  const results = [gh.run("request.mjs", "--fixes-review"), gh.run("wait.mjs")];
+  for (const result of results) {
+    assert.equal(result.status, status, result.stderr);
+    assert.match(result.stderr, diagnostic);
+  }
+  assert.deepEqual(gh.requests(), []);
+  return results;
+}
+
 function assertSkipped(result: ReturnType<typeof spawnSync>) {
   assert.ok(result.status === 0 || result.status === 6, String(result.stderr));
   assert.match(String(result.stdout), /checks passed/);
@@ -331,14 +348,14 @@ for (const path of [
       const gh = github(t, "owner");
       gh.configuration(path, text);
       gh.snapshot();
-      for (const command of ["request.mjs", "wait.mjs"]) {
-        const result = gh.run(command);
-        assert.equal(result.status, 7, result.stderr);
-        assert.match(result.stderr, /Owner handoff required: invalid trusted/);
+      for (const result of assertBothStopBeforeRequest(
+        gh,
+        7,
+        /Owner handoff required: invalid trusted/,
+      )) {
         assert.ok(result.stderr.includes(path));
         assert.ok(result.stderr.includes(gh.git("rev-parse", "main").trim()));
       }
-      assert.deepEqual(gh.requests(), []);
     });
   }
 }
@@ -348,15 +365,11 @@ for (const stage of ["revision", "files"] as const) {
     const gh = github(t, "owner");
     gh.state.configurationFailure = stage;
     gh.save();
-    for (const command of ["request.mjs", "wait.mjs"]) {
-      const result = gh.run(command);
-      assert.equal(result.status, 1, result.stderr);
-      assert.match(
-        result.stderr,
-        /Could not read trusted review configuration/,
-      );
-    }
-    assert.deepEqual(gh.requests(), []);
+    assertBothStopBeforeRequest(
+      gh,
+      1,
+      /Could not read trusted review configuration/,
+    );
   });
 }
 
@@ -369,18 +382,14 @@ for (const [kind, blob] of [
   ["non-blob", { __typename: "Tree" }],
 ] as const) {
   test(`${kind} configuration is a read error rather than optional absence`, (t) => {
-    const gh = github(t);
+    const gh = github(t, "owner");
     gh.state.fileResponses[".github/factory-review-policy.json"] = blob;
     gh.save();
-    for (const command of ["request.mjs", "wait.mjs"]) {
-      const result = gh.run(command);
-      assert.equal(result.status, 1, result.stderr);
-      assert.match(
-        result.stderr,
-        /Could not read complete .github\/factory-review-policy.json/,
-      );
-    }
-    assert.deepEqual(gh.requests(), []);
+    assertBothStopBeforeRequest(
+      gh,
+      1,
+      /Could not read complete .github\/factory-review-policy.json/,
+    );
   });
 }
 
@@ -415,7 +424,9 @@ test("proposed and dirty configuration cannot override the committed default bra
   assert.equal(request.status, 0, request.stderr);
   assert.ok(request.stdout.includes(revision));
   assertSkipped(gh.wait());
-  for (const read of gh.reads().filter((read) => read.variables?.revision)) {
+  const reads = gh.reads().filter((read) => read.variables?.revision);
+  assert.ok(reads.length > 0);
+  for (const read of reads) {
     assert.equal(read.variables!.revision, revision);
     for (const [alias, expression] of Object.entries(read.variables!)) {
       if (["owner", "name", "revision"].includes(alias)) continue;
@@ -461,7 +472,16 @@ for (const [kind, text] of [
       gh.snapshot();
       const request = gh.run("request.mjs");
       assert.equal(request.status, 0, request.stderr);
-      assert.ok(gh.reads().every((read) => !read.variables?.requiredChecks));
+      assert.ok(
+        gh
+          .reads()
+          .flatMap((read) => Object.values(read.variables ?? {}))
+          .every(
+            (value) =>
+              typeof value !== "string" ||
+              !value.endsWith(":.github/required-checks.json"),
+          ),
+      );
       const wait = gh.wait();
       assert.equal(wait.status, 7, wait.stderr);
       assert.match(
@@ -609,17 +629,13 @@ for (const failure of [
           created_at: "invalid",
         });
       gh.save();
-      for (const command of ["request.mjs", "wait.mjs"]) {
-        const result = gh.run(command);
-        assert.equal(result.status, 1, result.stderr);
-        assert.match(
-          result.stderr,
-          failure === "unreadable later page"
-            ? /GitHub could not be reached/
-            : /Could not read a ready-for-review time/,
-        );
-      }
-      assert.deepEqual(gh.requests(), []);
+      assertBothStopBeforeRequest(
+        gh,
+        1,
+        failure === "unreadable later page"
+          ? /GitHub could not be reached/
+          : /Could not read a ready-for-review time/,
+      );
     },
   );
 }

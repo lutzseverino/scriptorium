@@ -40,10 +40,15 @@ globalThis.fetch = async (input, options) => {
     ) {
       if (state.configurationFailure === "files")
         throw new Error("Fixture configuration read failed");
+      const { revision } = body.variables;
+      // An unknown revision is a read failure, never optional absence.
+      execFileSync("git", ["cat-file", "-e", `${revision}^{commit}`], {
+        stdio: "ignore",
+      });
       const blob = (expression) => {
-        if (!expression.startsWith(`${body.variables.revision}:`))
+        if (!expression.startsWith(`${revision}:`))
           throw new Error("Fixture file read is not pinned");
-        const path = expression.slice(41);
+        const path = expression.slice(revision.length + 1);
         if (Object.hasOwn(state.fileResponses ?? {}, path))
           return state.fileResponses[path];
         try {
@@ -60,7 +65,7 @@ globalThis.fetch = async (input, options) => {
         }
       };
       data = {
-        commit: { __typename: "Commit", oid: body.variables.revision },
+        commit: { __typename: "Commit", oid: revision },
         ...Object.fromEntries(
           [...body.query.matchAll(/(\w+): object\(expression: \$(\w+)\)/g)].map(
             ([, alias, variable]) => [alias, blob(body.variables[variable])],
