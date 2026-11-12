@@ -56,7 +56,7 @@ In a repository the host serves, a maintainer marks an issue ready and picks
 its model:
 
 ```sh
-gh issue edit 42 --add-label ready-for-agent --add-label model:claude-opus-5-5
+gh issue edit 42 --add-label state:ready --add-label model:claude-opus-5-5
 ```
 
 On its next pass the factory labels the issue `factory:running`, runs the

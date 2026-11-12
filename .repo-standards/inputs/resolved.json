@@ -26,6 +26,18 @@
       "exact": ".github/ISSUE_TEMPLATE/bug-report.yml"
     },
     {
+      "id": "comments",
+      "checks": [],
+      "fixes": [],
+      "kind": "repository",
+      "guidance": "guidance/comments.md",
+      "rules": "rules/comments.md",
+      "targets": {
+        "paths": [],
+        "directories": []
+      }
+    },
+    {
       "id": "contribution-guidance",
       "checks": [],
       "fixes": [],
@@ -75,10 +87,12 @@
           "docs/adr/0005-default-the-factorys-own-comment-wording.md",
           "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
           "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
+          "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md",
           "docs/adr/README.md",
           "docs/development/README.md",
           "docs/development/release.md",
           "docs/usage/README.md",
+          "docs/usage/body-contracts.md",
           "docs/usage/factory-configuration.md",
           "docs/usage/host.md",
           "docs/usage/sandbox-image.md"
@@ -99,17 +113,24 @@
       "checks": [],
       "fixes": [],
       "kind": "file",
-      "target": ".factory/config.json",
-      "exact": ".factory/config.json"
+      "target": ".scriptorium/config.json",
+      "exact": ".scriptorium/config.json"
     },
     {
       "id": "factory-sandbox-image",
       "checks": [],
       "fixes": [],
-      "kind": "file",
-      "target": ".factory/Dockerfile",
+      "kind": "repository",
       "guidance": "guidance/factory-sandbox-image.md",
-      "rules": "rules/factory-sandbox-image.md"
+      "rules": "rules/factory-sandbox-image.md",
+      "targets": {
+        "paths": [
+          ".scriptorium/Dockerfile",
+          ".factory/Dockerfile",
+          ".factory/config.json"
+        ],
+        "directories": []
+      }
     },
     {
       "id": "factory-sandbox-image-workflow",
@@ -121,7 +142,26 @@
     },
     {
       "id": "factory-workflow",
-      "checks": [],
+      "checks": [
+        {
+          "id": "factory-model-policy",
+          "run": {
+            "executable": "node",
+            "script": "operations/check-factory-model-policy.mjs",
+            "resources": [
+              "operations/lib/factory-model-policy.mjs"
+            ],
+            "arguments": []
+          },
+          "prerequisite": {
+            "version-arguments": [
+              "--version"
+            ],
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+          },
+          "timeout-seconds": 30
+        }
+      ],
       "fixes": [],
       "kind": "repository",
       "guidance": "guidance/factory-workflow.md",
@@ -152,12 +192,30 @@
       "id": "github-repository-configuration",
       "checks": [
         {
+          "id": "required-checks",
+          "run": {
+            "executable": "node",
+            "script": "operations/check-required-checks.mjs",
+            "resources": [
+              ".agents/skills/babysit/required-checks.mjs"
+            ],
+            "arguments": []
+          },
+          "prerequisite": {
+            "version-arguments": [
+              "--version"
+            ],
+            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
+          },
+          "timeout-seconds": 30
+        },
+        {
           "id": "pull-request-reviewer",
           "run": {
             "executable": "node",
             "script": "operations/check-pull-request-reviewer.mjs",
             "resources": [
-              "operations/lib/pull-request-reviewer.mjs"
+              ".agents/skills/babysit/pull-request-reviewer.mjs"
             ],
             "arguments": []
           },
@@ -175,7 +233,7 @@
             "executable": "node",
             "script": "operations/check-factory-review-policy.mjs",
             "resources": [
-              "operations/lib/review-policy.mjs"
+              ".agents/skills/babysit/review-policy.mjs"
             ],
             "arguments": []
           },
@@ -316,12 +374,36 @@
       "exact": ".github/ISSUE_TEMPLATE/implementation-ticket.yml"
     },
     {
+      "id": "issue-contract-cutoff",
+      "checks": [],
+      "fixes": [],
+      "kind": "file",
+      "target": "scripts/issue-contract-cutoff.mjs",
+      "exact": "scripts/issue-contract-cutoff.mjs"
+    },
+    {
+      "id": "issue-contract-sources",
+      "checks": [],
+      "fixes": [],
+      "kind": "file",
+      "target": "scripts/issue-contract-sources.mjs",
+      "exact": "scripts/issue-contract-sources.mjs"
+    },
+    {
+      "id": "issue-contract-store",
+      "checks": [],
+      "fixes": [],
+      "kind": "file",
+      "target": "scripts/issue-contract-store.mjs",
+      "exact": "scripts/issue-contract-store.mjs"
+    },
+    {
       "id": "issue-contract-validator",
       "checks": [],
       "fixes": [],
       "kind": "file",
-      "target": "scripts/validate-issue-contract.mjs",
-      "exact": "scripts/validate-issue-contract.mjs"
+      "target": "vendor/repo-canon/validate-issue-contract.mjs",
+      "exact": "vendor/repo-canon/validate-issue-contract.mjs"
     },
     {
       "id": "issue-contract-workflow",
@@ -584,6 +666,14 @@
       "source": ".agents/skills/domain-modeling"
     },
     {
+      "id": "skill-factory",
+      "checks": [],
+      "fixes": [],
+      "kind": "skill",
+      "name": "factory",
+      "source": ".agents/skills/factory"
+    },
+    {
       "id": "skill-grill-with-docs",
       "checks": [],
       "fixes": [],
@@ -616,14 +706,6 @@
       "source": ".agents/skills/improve-codebase-architecture"
     },
     {
-      "id": "skill-orchestrate",
-      "checks": [],
-      "fixes": [],
-      "kind": "skill",
-      "name": "orchestrate",
-      "source": ".agents/skills/orchestrate"
-    },
-    {
       "id": "skill-pr",
       "checks": [],
       "fixes": [],
@@ -646,6 +728,14 @@
       "kind": "skill",
       "name": "research",
       "source": ".agents/skills/research"
+    },
+    {
+      "id": "skill-review",
+      "checks": [],
+      "fixes": [],
+      "kind": "skill",
+      "name": "review",
+      "source": ".agents/skills/review"
     },
     {
       "id": "skill-tdd",
@@ -782,8 +872,8 @@
       "checks": [],
       "fixes": [],
       "kind": "file",
-      "target": "scripts/validate.mjs",
-      "exact": "scripts/validate.mjs"
+      "target": "vendor/repo-canon/validate.mjs",
+      "exact": "vendor/repo-canon/validate.mjs"
     }
   ]
 }
