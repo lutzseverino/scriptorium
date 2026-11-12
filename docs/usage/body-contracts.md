@@ -11,7 +11,15 @@ facts hold publication and pickup with recovery diagnostics.
 ## Publication and admission
 
 In prepared mode, successful triage retains its separate immutable brief
-comment. In body mode, the read-only agent supplies a complete Agent Brief,
+comment. A valid intake may have no validator result at all: verified prepared
+mode permits publishing the first brief without one. Publication then waits for
+the configured validator's supported notice naming that exact immutable
+comment revision before requesting readiness. A notice for another source or
+revision grants nothing. Admission separately requires approval of the exact
+current readiness event and every existing authorization and scheduling gate.
+A present unreadable or unsupported result holds before publication writes.
+
+In body mode, the read-only agent supplies a complete Agent Brief,
 including applicable Seams and notes, without a disclaimer or Original request.
 The host preserves original intake bytes and author independently in Canon's
 ledger, appends that original once at the body's end, and publishes the body.
@@ -99,3 +107,44 @@ activate anything. [Repo Canon #920](https://github.com/lutzseverino/repo-canon/
 owns release, adoption, host and actual pickup evidence. Follow Canon's
 [public protocol](https://github.com/lutzseverino/repo-canon/blob/94484bebc2b40b45759fa1d031bc289151520138/docs/development/issue-contract-v2.md)
 for inventory/cutoff operations.
+
+## Retained unpublished results
+
+After a separately authorized upgrade to a fixed compatible host, preserve the
+existing run records and let normal passes resume settlement. Startup also
+reloads unsettled results. A result with only a prepared-mode checkpoint resumes
+publication in that mode; one with no publication checkpoint first verifies the
+current trusted mode and then publishes. Both retain the original run identity,
+result and claim. Interrupted evidence or readiness writes recover their saved
+identities without posting another brief or applying another readiness event.
+A retained stop publishes its original question and requested state through the
+ordinary result-comment route, without converting it into a brief or requiring
+contract-publication proof.
+
+A pending publication or issue-specific protocol hold keeps its own result and
+claim for retry. Its run comment shows the wait or failure and recovery action;
+other completed outcomes can settle and independently eligible issues can reach
+admission under the existing capacity, usage, blocker and authorization gates.
+Repository-wide platform read failures, including mode access, authentication,
+rate limits and issue-list reads, still pause the repository. Repair shared
+access before expecting settlement or pickup to resume.
+
+Distinguish these recovery actions:
+
+- For a published brief awaiting its matching notice, restore automatic
+  issue-contract evaluation and its runners; normal passes retry the retained
+  result. Publication is not validator approval or implementation admission.
+- For an unknown, unsupported or conflicting validator result, restore the
+  compatible configured validator and evaluate the actual source. For missing,
+  edited, deleted or authentication-conflicting evidence, recover authenticated
+  history or obtain fresh independent triage/review of the current revision;
+  never reconstruct proof from a mutable report.
+- If the publication mode or cutoff changed while a result was retained, keep
+  publication frozen and obtain fresh triage in the current mode. A prepared
+  checkpoint never falls back to legacy publication after body-mode cutoff.
+
+No hand-editing or deleting run records, fabricated notices, copied result
+comments, manual readiness changes or forced replacement workers are needed to
+retry a retained result. Source delivery and this recovery procedure do not
+install a release or prove live publication and pickup: release, authorized host
+upgrade and live acceptance are separate work.

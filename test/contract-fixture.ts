@@ -119,6 +119,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     originalHistory: true,
     deletion: null as string | null,
     before: undefined as (() => void) | undefined,
+    result: {} as Record<string, unknown>,
   };
   const at = () =>
     `2026-10-08T01:${String(Math.floor(clock++ / 60)).padStart(2, "0")}:${String(clock % 60).padStart(2, "0")}Z`;
@@ -142,6 +143,50 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     } satisfies Comment);
   const evaluate = () => {
     if (!controls.evaluation) return;
+    if (controls.mode === "prepared") {
+      const evidence = comments.find(
+        (c) =>
+          c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+      );
+      const ready = changes.findLast((c) => c.label === "state:ready");
+      const kind = "triaged Agent Brief";
+      state = {
+        format: controls.format ?? "repo-canon/issue-contract-state/v1",
+        kind,
+        status: evidence
+          ? ready?.action === "added"
+            ? "approved"
+            : "awaiting-review"
+          : "no-contract",
+        source: evidence
+          ? {
+              type: "comment",
+              id: String(evidence.id),
+              editedAt: evidence.updatedAt,
+            }
+          : null,
+        revision: evidence
+          ? digest(
+              JSON.stringify({
+                format: "repo-canon/issue-contract-revision/v1",
+                kind,
+                source: {
+                  type: "comment",
+                  id: evidence.nodeId,
+                  editedAt: evidence.updatedAt,
+                },
+                body: evidence.body,
+              }),
+            )
+          : null,
+        publishedAt: evidence?.createdAt ?? null,
+        label: ready?.action === "added" ? "state:ready" : null,
+        reviewEventId: ready ? String(ready.id) : null,
+        factoryTriage: null,
+        ...controls.result,
+      };
+      return;
+    }
     const categories = issue.labels.filter((label) =>
       ["type:bug", "type:enhancement"].includes(label),
     );
@@ -265,13 +310,13 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
         fail("comment");
         const time = at();
         const c: Comment = {
-          id: comments.length + 100,
-          nodeId: `C_${comments.length + 100}`,
+          id: comments.length + number * 1000,
+          nodeId: `C_${comments.length + number * 1000}`,
           body,
           author,
           createdAt: time,
           updatedAt: time,
-          url: `https://github.com/comment/${comments.length + 100}`,
+          url: `https://github.com/comment/${comments.length + number * 1000}`,
         };
         writes.push(
           body.includes("triage-attestation") ? "attestation" : "report",

@@ -26,6 +26,7 @@ import {
 } from "./contract-protocol.ts";
 import {
   currentBodyDecision,
+  preparedContractNotice,
   requirePreparedProtocol,
 } from "./contract-result.ts";
 
@@ -85,6 +86,9 @@ export async function publishContract(
   if (mode.mode === "prepared") {
     const tracker = connection.issueTracker;
     requirePreparedProtocol(await tracker.comments(number), configuration);
+    const ready = configuration.labels.ready;
+    const ordinary = post.add.filter((label) => label !== ready);
+    if (ordinary.length) await tracker.addLabels(number, ordinary);
     await evidenceComment(
       connection,
       number,
@@ -99,8 +103,51 @@ export async function publishContract(
       return hold(
         "Cutoff changed before legacy readiness; hold and re-triage in body mode",
       );
-    requirePreparedProtocol(await tracker.comments(number), configuration);
-    if (post.add.length) await tracker.addLabels(number, post.add);
+    const comments = await tracker.comments(number);
+    const evidence = comments.find((c) => c.id === state!.evidence!.id);
+    if (
+      !evidence ||
+      evidence.body !== state.evidence!.body ||
+      !sameLogin(evidence.author?.login, post.triage.author) ||
+      !same(
+        (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
+        state.evidence!.edit,
+      )
+    )
+      return hold("Legacy evidence was deleted or edited before readiness");
+    const notice = preparedContractNotice(comments, configuration, evidence);
+    if (!notice) return null;
+    if (!state.readyRequested) {
+      const issue = await tracker.issue(number);
+      if (issue.labels.includes(ready)) {
+        const applied = (await tracker.labelChanges(number)).findLast(
+          (c) => c.label === ready,
+        );
+        if (
+          !applied ||
+          applied.action !== "added" ||
+          !sameLogin(applied.actor?.login, post.triage.author) ||
+          Date.parse(applied.time) <=
+            Math.max(
+              Date.parse(notice.result.publishedAt as string),
+              Date.parse(evidence.createdAt),
+            )
+        )
+          return hold(
+            "Readiness predates the matching prepared notice or belongs to another reviewer",
+          );
+      } else {
+        if (
+          Math.floor((progress.now?.() ?? new Date()).getTime() / 1000) *
+            1000 <=
+          Date.parse(notice.result.publishedAt as string)
+        )
+          return null;
+        if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
+      }
+      state.readyRequested = true;
+      save();
+    }
     for (const label of post.remove)
       if ((await tracker.issue(number)).labels.includes(label))
         await tracker.removeLabel(number, label);

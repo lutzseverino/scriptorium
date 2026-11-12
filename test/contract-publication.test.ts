@@ -77,6 +77,37 @@ function setup(configuration = contractConfiguration) {
   };
 }
 
+test("notice-free prepared intake publishes evidence before waiting for evaluation", async () => {
+  const { decideIssueContract } = await import(
+    new URL("../vendor/repo-canon/validate-issue-contract.mjs", import.meta.url)
+      .href
+  );
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  s.fixture.issue.labels = ["type:bug", "state:triage"];
+  s.fixture.issue.body =
+    "### Steps to reproduce\n\nRun the factory.\n\n### Expected behavior\n\nPublish the brief.\n\n### Actual behavior\n\nPublication holds.\n";
+  const decision = decideIssueContract({
+    issue: {
+      ...s.fixture.issue,
+      labels: s.fixture.issue.labels.map((name) => ({ name })),
+    },
+    comments: [],
+    issueEvents: [],
+    permissions: {},
+    event: { kind: "opened", actor: "owner" },
+  });
+  assert.equal(decision.message, "Valid bug report.");
+  assert.equal(decision.feedback, null);
+  s.fixture.controls.missingResult = decision.feedback === null;
+  assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+  assert.equal(s.fixture.comments.length, 1);
+  assert.match(s.fixture.comments[0].body, /Agent Brief/);
+  assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+  assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+  assert.equal(s.fixture.comments.length, 1);
+});
+
 for (const boundary of [
   "ledger",
   "body",
@@ -206,6 +237,9 @@ test("same or unknown factory intake writer holds, while independent authenticat
 test("prepared publication remains immutable alongside report progress, and a cutoff holds its retry", async () => {
   const s = setup();
   s.fixture.controls.mode = "prepared";
+  s.fixture.controls.missingResult = true;
+  assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+  s.fixture.controls.missingResult = false;
   assert.ok(await s.platform().postResult(4, post(), s.resume()));
   const evidence = structuredClone(s.fixture.comments[0]);
   const platform = s.platform();
@@ -373,7 +407,7 @@ test("body evidence survives the report's implement/review, stop/resume and repl
   assert.equal(s.fixture.result!.status, "approved");
 });
 
-test("prepared publication holds missing, unknown and conflicting validator protocols", async () => {
+test("prepared publication permits absent results but holds unknown and conflicting validator protocols", async () => {
   for (const format of [
     undefined,
     "repo-canon/issue-contract-state/v2",
@@ -383,12 +417,17 @@ test("prepared publication holds missing, unknown and conflicting validator prot
     s.fixture.controls.mode = "prepared";
     if (format) s.fixture.controls.format = format;
     else s.fixture.controls.missingResult = true;
-    await assert.rejects(
-      s.platform().postResult(4, post(), s.resume()),
-      /protocol/,
-    );
+    if (!format) {
+      assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+      assert.equal(s.fixture.comments.length, 1);
+    } else {
+      await assert.rejects(
+        s.platform().postResult(4, post(), s.resume()),
+        /protocol/,
+      );
+      assert.equal(s.fixture.comments.length, 0);
+    }
     assert.equal(s.fixture.writes.includes("attestation"), false);
-    assert.equal(s.fixture.comments.length, 0);
     assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
   }
 });
@@ -613,4 +652,96 @@ test("prepared evidence with unavailable creation history is held instead of ado
   );
   assert.equal(evidence.body, bytes);
   assert.equal(s.fixture.comments.length, 1);
+});
+
+for (const mismatch of ["source", "revision", "status"] as const)
+  test(`prepared publication waits when a supported notice has another ${mismatch}`, async () => {
+    const s = setup();
+    s.fixture.controls.mode = "prepared";
+    s.fixture.controls.missingResult = true;
+    assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+    s.fixture.controls.missingResult = false;
+    s.fixture.controls.result =
+      mismatch === "source"
+        ? {
+            source: {
+              type: "comment",
+              id: "98765",
+              editedAt: s.fixture.comments[0].updatedAt,
+            },
+          }
+        : mismatch === "revision"
+          ? { revision: `sha256:${"0".repeat(64)}` }
+          : { status: "needs-attention" };
+    assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+    assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+    assert.equal(s.fixture.comments.length, 1);
+    s.fixture.controls.result = {};
+    assert.ok(await s.platform().postResult(4, post(), s.resume()));
+    assert.equal(
+      s.fixture.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+  });
+
+test("a present unreadable prepared result holds before any publication write", async () => {
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  s.fixture.comments.push({
+    id: 100000,
+    nodeId: "BAD_RESULT",
+    author: { login: "github-actions[bot]", bot: true },
+    body: "<!-- repo-canon:issue-contract-state {unreadable} -->",
+    url: "bad",
+    createdAt: "2026-10-08T01:00:00Z",
+    updatedAt: "2026-10-08T01:00:00Z",
+  });
+  await assert.rejects(
+    s.platform().postResult(4, post(), s.resume()),
+    /unreadable/,
+  );
+  assert.deepEqual(s.fixture.writes, []);
+});
+
+for (const boundary of ["after-comment", "labels", "ready-checkpoint"])
+  test(`prepared publication resumes ${boundary} partial success without duplicate evidence or readiness`, async () => {
+    const s = setup();
+    s.fixture.controls.mode = "prepared";
+    if (boundary !== "ready-checkpoint") s.fixture.controls.fail = boundary;
+    const progress = s.resume();
+    const save = progress.save;
+    progress.save = (state) => {
+      if (boundary === "ready-checkpoint" && state.readyRequested)
+        throw new Error("lost readiness checkpoint");
+      save(state);
+    };
+    await assert.rejects(s.platform().postResult(4, post(), progress));
+    assert.ok(await s.platform().postResult(4, post(), s.resume()));
+    assert.equal(s.fixture.comments.length, 1);
+    assert.equal(
+      s.fixture.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+    assert.equal(s.checkpoint?.readyRequested, true);
+  });
+
+test("prepared publication holds an unauthorized carried readiness event", async () => {
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  s.fixture.controls.missingResult = true;
+  assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+  s.fixture.controls.missingResult = false;
+  s.fixture.issue.labels.push("state:ready");
+  s.fixture.changes.push({
+    id: 99,
+    action: "added",
+    label: "state:ready",
+    actor: { login: "outsider", bot: false },
+    time: "2026-10-08T03:00:00Z",
+  });
+  await assert.rejects(
+    s.platform().postResult(4, post(), s.resume()),
+    /belongs to another reviewer/,
+  );
+  assert.equal(s.checkpoint?.readyRequested, undefined);
 });

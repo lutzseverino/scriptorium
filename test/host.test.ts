@@ -9506,3 +9506,330 @@ test("body triage publication survives host restarts and admits implement throug
     [],
   );
 });
+
+// Several issue protocols on one connection, behind the host's real platform.
+function publicationConnection(
+  protocols: ReturnType<typeof contractFixture>[],
+) {
+  return (
+    connection: ConnectionWithLinkAdditions,
+  ): ConnectionWithLinkAdditions => {
+    const wrapped = protocols.map((p) => p.wrap(connection));
+    const byNumber = (number: number) =>
+      protocols.findIndex((p) => p.issue.number === number);
+    return {
+      ...connection,
+      issueTracker: new Proxy(connection.issueTracker, {
+        get(target, property) {
+          const key = property as keyof typeof connection.issueTracker;
+          if (key === "issues")
+            return async (filter: { state?: string; label?: string } = {}) => {
+              const issues = await target.issues({
+                state: filter.state as IssueState,
+              });
+              return issues
+                .map((issue) => {
+                  const i = byNumber(issue.number);
+                  return i < 0 ? issue : structuredClone(protocols[i].issue);
+                })
+                .filter(
+                  (issue) =>
+                    !filter.label || issue.labels.includes(filter.label),
+                );
+            };
+          const method = target[key];
+          if (typeof method !== "function") return method;
+          return (...args: any[]) => {
+            const i =
+              key === "updateComment"
+                ? protocols.findIndex((p) =>
+                    p.comments.some((c) => c.id === args[0]),
+                  )
+                : byNumber(args[0]);
+            const tracker = i < 0 ? target : wrapped[i].issueTracker;
+            return (tracker[key] as (...args: any[]) => unknown)(...args);
+          };
+        },
+      }),
+      access: {
+        ...connection.access,
+        request(input) {
+          const body = input.body as any;
+          const number = Number(
+            input.path.match(/issues\/(\d+)/)?.[1] ?? body?.variables?.number,
+          );
+          let i = byNumber(number);
+          if (i < 0 && body?.variables?.ids)
+            i = protocols.findIndex((p) =>
+              body.variables.ids.some((id: string) => p.edits[id]),
+            );
+          return wrapped[Math.max(0, i)].access.request(input);
+        },
+      },
+    };
+  };
+}
+
+for (const blocked of ["notice", "protocol"] as const)
+  test(`a ${blocked} publication wait retains its run while sibling results settle and independent work starts`, async (t) => {
+    const protocols = [4, 5, 6].map((number) => contractFixture(number));
+    for (const p of protocols) p.controls.mode = "prepared";
+    const [waiting, ready, stopped] = protocols;
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [4, 5, 6]
+          .map((number) => ({ number, labels: ["state:triage"] }))
+          .concat([{ number: 7, labels: ["state:owner"] }]),
+      },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...kindsFiles,
+          ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+        }),
+      },
+      caps: { "claude-code": 4, codex: 1 },
+      wrapConnection: publicationConnection(protocols),
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 3);
+    waiting.controls.missingResult = blocked === "notice";
+    waiting.controls.format =
+      blocked === "protocol" ? "repo-canon/issue-contract-state/v3" : undefined;
+    for (const launch of run.launched)
+      launch.finish(
+        undefined,
+        undefined,
+        launch.options.name?.endsWith("#6")
+          ? {
+              outcome: "stop",
+              state: "state:owner",
+              body: "Which behavior should be kept?",
+            }
+          : {
+              outcome: "done",
+              state: "state:ready",
+              labels: ["type:enhancement", "model:claude-sonnet-5-5"],
+              body: bodyBrief,
+            },
+      );
+    await run.drain();
+    const eligible = run.github.find("acme/widgets", 7);
+    eligible.labels = ["state:ready"];
+    eligible.timeline.push({
+      event: "labeled",
+      label: "state:ready",
+      actor: "owner",
+      at: "2026-10-09T11:00:00Z",
+    });
+    const decisions = await run.tick();
+    assert.ok(
+      decisions.some((d) => d.issue === 5 && d.kind === "release"),
+      JSON.stringify(decisions),
+    );
+    assert.ok(decisions.some((d) => d.issue === 6 && d.kind === "release"));
+    assert.ok(decisions.some((d) => d.issue === 7 && d.kind === "launch"));
+    assert.equal(run.status().repositories[0].state, "running");
+    assert.ok(waiting.issue.labels.includes("factory:running"));
+    assert.ok(ready.issue.labels.includes("state:ready"));
+    assert.ok(!ready.issue.labels.includes("factory:running"));
+    assert.ok(stopped.issue.labels.includes("state:owner"));
+    assert.ok(!stopped.issue.labels.includes("factory:running"));
+    assert.equal(
+      stopped.comments.some((c) =>
+        c.body.includes("Which behavior should be kept?"),
+      ),
+      true,
+    );
+    assert.equal(
+      stopped.comments.some(
+        (c) =>
+          c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+      ),
+      false,
+    );
+    assert.match(
+      waiting.comments.find((c) => c.body.includes('"phases":'))!.body,
+      /Publication (waits|held)/,
+    );
+    const path = join(
+      run.state,
+      "repositories/acme/widgets/runs/issue-4-attempt-1.json",
+    );
+    const checkpoint = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(checkpoint.settled, false);
+    assert.equal(checkpoint.resultPosted, undefined);
+    assert.equal(checkpoint.publication.mode, "prepared");
+    await run.tick();
+    assert.equal(
+      run.launched.filter((l) => l.options.name?.endsWith("#4")).length,
+      1,
+    );
+    assert.equal(
+      waiting.comments.filter(
+        (c) =>
+          c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+      ).length,
+      blocked === "notice" ? 1 : 0,
+    );
+    waiting.controls.missingResult = false;
+    waiting.controls.format = undefined;
+    await run.tick();
+    assert.equal(waiting.issue.labels.includes("state:ready"), true);
+    assert.equal(
+      waiting.comments.filter(
+        (c) =>
+          c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+      ).length,
+      1,
+    );
+    assert.equal(
+      waiting.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+  });
+
+for (const checkpoint of ["mode", "none", "stop"] as const)
+  test(`host restart resumes a retained ${checkpoint} publication without a replacement run`, async (t) => {
+    const protocol = contractFixture();
+    protocol.controls.mode = "prepared";
+    let unavailable = false;
+    const wrap = protocol.wrap;
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [{ number: 4, labels: ["state:triage"] }],
+      },
+      remotes: {
+        "acme/widgets": remote(t, {
+          ...kindsFiles,
+          ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+        }),
+      },
+      wrapConnection(connection) {
+        const wrapped = wrap(connection);
+        const request = wrapped.access.request;
+        wrapped.access.request = (input) => {
+          if (unavailable && input.path === "/repos/acme/widgets")
+            throw new PlatformError(
+              "unavailable",
+              "Shared repository mode read unavailable",
+            );
+          return request(input);
+        };
+        return wrapped;
+      },
+    });
+    await run.tick();
+    run.launched[0].finish(
+      undefined,
+      undefined,
+      checkpoint === "stop"
+        ? {
+            outcome: "stop",
+            state: "state:owner",
+            body: "Keep the original unanswered question.",
+          }
+        : {
+            outcome: "done",
+            state: "state:ready",
+            labels: ["type:enhancement"],
+            body: bodyBrief,
+          },
+    );
+    await run.drain();
+    if (checkpoint === "none") unavailable = true;
+    if (checkpoint === "mode")
+      protocol.controls.format = "repo-canon/issue-contract-state/v3";
+    if (checkpoint === "stop") protocol.controls.fail = "comment";
+    await run.tick();
+    const path = join(
+      run.state,
+      "repositories/acme/widgets/runs/issue-4-attempt-1.json",
+    );
+    const retained = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(retained.resultPosted, undefined);
+    assert.deepEqual(
+      retained.publication,
+      checkpoint === "mode" ? { mode: "prepared" } : undefined,
+    );
+    if (checkpoint === "none")
+      assert.equal(run.status().repositories[0].state, "paused");
+    unavailable = false;
+    protocol.controls.format = undefined;
+    const restarted = run.restart();
+    await restarted.tick();
+    const published = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(published.resultPosted, true);
+    assert.equal(published.settled, true);
+    assert.equal(published.provenance.id, retained.provenance.id);
+    assert.equal(run.launched.length, 1);
+    await restarted.tick();
+    assert.equal(
+      protocol.comments.filter(
+        (c) =>
+          c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+      ).length,
+      checkpoint === "stop" ? 0 : 1,
+    );
+    assert.equal(
+      protocol.changes.filter((c) => c.label === "state:ready").length,
+      checkpoint === "stop" ? 0 : 1,
+    );
+    if (checkpoint === "stop") {
+      assert.ok(protocol.issue.labels.includes("state:owner"));
+      assert.equal(
+        protocol.comments.filter((c) =>
+          c.body.includes("Keep the original unanswered question."),
+        ).length,
+        2,
+      );
+    }
+  });
+
+test("a shared issue-list failure still pauses the repository and preserves unpublished results", async (t) => {
+  const protocol = contractFixture();
+  protocol.controls.mode = "prepared";
+  let unavailable = false;
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+      }),
+    },
+    wrapConnection(connection) {
+      const wrapped = protocol.wrap(connection);
+      const issues = wrapped.issueTracker.issues;
+      wrapped.issueTracker.issues = (filter) => {
+        if (unavailable)
+          throw new PlatformError(
+            "unavailable",
+            "Shared issue list unavailable",
+          );
+        return issues(filter);
+      };
+      return wrapped;
+    },
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["type:enhancement"],
+    body: bodyBrief,
+  });
+  await run.drain();
+  unavailable = true;
+  await run.tick();
+  assert.equal(run.status().repositories[0].state, "paused");
+  assert.equal(
+    protocol.comments.some(
+      (c) => c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+    ),
+    false,
+  );
+  assert.ok(protocol.issue.labels.includes("factory:running"));
+  unavailable = false;
+  await run.tick();
+  assert.equal(protocol.issue.labels.includes("state:ready"), true);
+});

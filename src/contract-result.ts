@@ -99,22 +99,59 @@ const nullableText = (value: unknown) =>
 export function requirePreparedProtocol(
   comments: Comment[],
   configuration: PlatformConventions,
-): void {
+) {
   const posted = latestResult(comments, configuration.contractResult);
-  if (!posted)
-    return hold(
-      "No configured-validator protocol evidence is available for legacy publication; restore automatic evaluation before retrying",
-    );
+  // Prepared intake deliberately has no result until a contract is published.
+  if (!posted) return null;
   let result;
   try {
     result = JSON.parse(posted.line);
   } catch {
     return hold("Prepared validator protocol evidence is unreadable");
   }
-  if (!result || result.format !== resultFormat)
+  if (!record(result) || result.format !== resultFormat)
     return hold(
       "Prepared publication requires the supported v1 validator protocol; unknown or body-mode results must be resolved before publishing",
     );
+  return { result, comment: posted.comment };
+}
+
+// Authenticate the validator's selected revision against the immutable comment,
+// without selecting a contract or interpreting its Markdown.
+export function preparedContractNotice(
+  comments: Comment[],
+  configuration: PlatformConventions,
+  evidence: Comment,
+) {
+  const posted = requirePreparedProtocol(comments, configuration);
+  if (!posted) return null;
+  const { result } = posted;
+  if (
+    !["awaiting-review", "approved"].includes(String(result.status)) ||
+    !text(result.kind) ||
+    !same(result.source, {
+      type: "comment",
+      id: String(evidence.id),
+      editedAt: evidence.updatedAt,
+    }) ||
+    result.revision !==
+      digest(
+        JSON.stringify({
+          format: "repo-canon/issue-contract-revision/v1",
+          kind: result.kind,
+          source: {
+            type: "comment",
+            id: evidence.nodeId,
+            editedAt: evidence.updatedAt,
+          },
+          body: evidence.body,
+        }),
+      ) ||
+    typeof result.publishedAt !== "string" ||
+    !Number.isFinite(Date.parse(result.publishedAt))
+  )
+    return null;
+  return posted;
 }
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
