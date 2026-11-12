@@ -2,12 +2,32 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test, type TestContext } from "node:test";
 import { directory } from "./fakes.ts";
 
 // Drive both the CLI-backed and Postern-backed installed skill commands,
 // observing requests separately from the check/reviewer wait's exit status.
 const skill = resolve(import.meta.dirname, "../.agents/skills/babysit");
+const platform = await import(pathToFileURL(join(skill, "platform.mjs")).href);
+const pinnedChecks = {
+  skip:
+    typeof platform.pinnedFiles === "function"
+      ? false
+      : "installed platform.mjs lacks the pinnedFiles contract",
+};
+const readiness = {
+  skip:
+    typeof platform.readyForReviewTime === "function"
+      ? false
+      : "installed platform.mjs lacks the readyForReviewTime contract",
+};
+
+type TransportRead = {
+  operation: string;
+  variables?: Record<string, string>;
+  page: string | null;
+};
 const reviewer = JSON.parse(
   readFileSync(
     new URL("../.github/pull-request-reviewer.json", import.meta.url),
@@ -46,10 +66,20 @@ function github(t: TestContext, author = "app/lz-scriptorium") {
     join(root, ".github/factory-review-policy.json"),
     JSON.stringify(policy),
   );
+  writeFileSync(
+    join(root, ".github/required-checks.json"),
+    JSON.stringify({ version: 1, checks: ["Test"] }),
+  );
   snapshot();
   const opened = new Date(Date.now() - 1000).toISOString();
   const state = {
     author: { login: author },
+    isDraft: false,
+    configurationFailure: null as "revision" | "files" | null,
+    advanceDefaultTo: null as string | null,
+    fileResponses: {} as Record<string, unknown>,
+    timelinePages: [[]] as Record<string, unknown>[][],
+    timelineFailurePage: null as number | null,
     headRefOid: "1".repeat(40),
     headRefName: "factory/issue-47",
     createdAt: opened,
@@ -74,6 +104,7 @@ function github(t: TestContext, author = "app/lz-scriptorium") {
     writeFileSync(join(root, "state.json"), JSON.stringify(state));
   save();
   writeFileSync(join(root, "requests.json"), "[]");
+  writeFileSync(join(root, "transport.json"), "[]");
   writeFileSync(
     join(root, "gh"),
     `#!/usr/bin/env node
@@ -124,6 +155,13 @@ process.stdout.write(JSON.stringify(result));
     );
   return {
     root,
+    git,
+    configuration(path: string, text: string | null) {
+      if (text === null) rmSync(join(root, path));
+      else writeFileSync(join(root, path), text);
+    },
+    reads: (): TransportRead[] =>
+      JSON.parse(readFileSync(join(root, "transport.json"), "utf8")),
     state,
     save,
     push(head: string) {
@@ -141,6 +179,24 @@ process.stdout.write(JSON.stringify(result));
     requests: () =>
       JSON.parse(readFileSync(join(root, "requests.json"), "utf8")),
   };
+}
+
+// Run both commands where a valid configuration would make request.mjs post a
+// fix request, so an empty request log shows that it stopped before writing.
+// wait.mjs never posts; its exit status and diagnostic carry the stop.
+function assertBothStopBeforeRequest(
+  gh: ReturnType<typeof github>,
+  status: number,
+  diagnostic: RegExp,
+) {
+  gh.push("2".repeat(40));
+  const results = [gh.run("request.mjs", "--fixes-review"), gh.run("wait.mjs")];
+  for (const result of results) {
+    assert.equal(result.status, status, result.stderr);
+    assert.match(result.stderr, diagnostic);
+  }
+  assert.deepEqual(gh.requests(), []);
+  return results;
 }
 
 function assertSkipped(result: ReturnType<typeof spawnSync>) {
@@ -269,3 +325,354 @@ test("app review exception is opt-in and does not convert arriving reviews to ap
   gh.save();
   assert.equal(gh.wait().status, 5);
 });
+
+test("a push alone neither requests review nor starts a reviewer wait for the new head", (t) => {
+  const gh = github(t, "owner");
+  gh.push("2".repeat(40));
+  const request = gh.run("request.mjs");
+  assert.equal(request.status, 0, request.stderr);
+  assert.deepEqual(gh.requests(), []);
+  const wait = gh.wait();
+  assert.equal(wait.status, 4, wait.stderr);
+  assert.match(wait.stdout, /review not requested for this head/);
+});
+
+for (const path of [
+  ".github/factory-review-policy.json",
+  ".github/pull-request-reviewer.json",
+]) {
+  for (const [kind, text] of [
+    ["invalid JSON", "{"],
+    ["invalid declaration", '{"version":999}'],
+  ] as const) {
+    test(`${path} with ${kind} stops both commands before requesting review`, (t) => {
+      const gh = github(t, "owner");
+      gh.configuration(path, text);
+      gh.snapshot();
+      for (const result of assertBothStopBeforeRequest(
+        gh,
+        7,
+        /Owner handoff required: invalid trusted/,
+      )) {
+        assert.ok(result.stderr.includes(path));
+        assert.ok(result.stderr.includes(gh.git("rev-parse", "main").trim()));
+      }
+    });
+  }
+}
+
+for (const stage of ["revision", "files"] as const) {
+  test(`unreadable trusted configuration ${stage} stops both commands before requesting review`, (t) => {
+    const gh = github(t, "owner");
+    gh.state.configurationFailure = stage;
+    gh.save();
+    assertBothStopBeforeRequest(
+      gh,
+      1,
+      /Could not read trusted review configuration/,
+    );
+  });
+}
+
+for (const [kind, blob] of [
+  [
+    "truncated",
+    { __typename: "Blob", text: JSON.stringify(policy), isTruncated: true },
+  ],
+  ["incomplete metadata", { __typename: "Blob", text: JSON.stringify(policy) }],
+  ["non-blob", { __typename: "Tree" }],
+] as const) {
+  test(`${kind} configuration is a read error rather than optional absence`, (t) => {
+    const gh = github(t, "owner");
+    gh.state.fileResponses[".github/factory-review-policy.json"] = blob;
+    gh.save();
+    assertBothStopBeforeRequest(
+      gh,
+      1,
+      /Could not read complete .github\/factory-review-policy.json/,
+    );
+  });
+}
+
+test("explicit optional-file absence retains checks-only behavior", (t) => {
+  const gh = github(t, "owner");
+  gh.configuration(".github/factory-review-policy.json", null);
+  gh.configuration(".github/pull-request-reviewer.json", null);
+  gh.snapshot();
+  const request = gh.run("request.mjs");
+  assert.equal(request.status, 0, request.stderr);
+  assert.match(request.stdout, /no reviewer configured/);
+  const wait = gh.wait();
+  assert.equal(wait.status, 0, wait.stderr);
+  assert.match(wait.stdout, /checks passed/);
+  assert.doesNotMatch(wait.stdout, /reviewer reviewed|external review skipped/);
+  assert.deepEqual(gh.requests(), []);
+});
+
+test("proposed and dirty configuration cannot override the committed default branch", (t) => {
+  const gh = github(t);
+  const revision = gh.git("rev-parse", "main").trim();
+  gh.git("checkout", "-b", "proposed");
+  gh.configuration(".github/factory-review-policy.json", '{"version":999}');
+  gh.configuration(".github/pull-request-reviewer.json", "{");
+  gh.configuration(
+    ".github/required-checks.json",
+    '{"version":1,"checks":["Proposed"]}',
+  );
+  gh.snapshot();
+  gh.configuration(".github/factory-review-policy.json", "{");
+  const request = gh.run("request.mjs");
+  assert.equal(request.status, 0, request.stderr);
+  assert.ok(request.stdout.includes(revision));
+  assertSkipped(gh.wait());
+  const reads = gh.reads().filter((read) => read.variables?.revision);
+  assert.ok(reads.length > 0);
+  for (const read of reads) {
+    assert.equal(read.variables!.revision, revision);
+    for (const [alias, expression] of Object.entries(read.variables!)) {
+      if (["owner", "name", "revision"].includes(alias)) continue;
+      assert.ok(expression.startsWith(`${revision}:`));
+    }
+  }
+  assert.deepEqual(gh.requests(), []);
+});
+
+test("a default-branch advance during resolution keeps every configuration file at the selected SHA", (t) => {
+  const gh = github(t);
+  const revision = gh.git("rev-parse", "main").trim();
+  gh.git("checkout", "-b", "next-default");
+  gh.configuration(".github/factory-review-policy.json", "{");
+  gh.configuration(".github/pull-request-reviewer.json", "{");
+  gh.configuration(".github/required-checks.json", "{");
+  gh.snapshot();
+  gh.state.advanceDefaultTo = gh.git("rev-parse", "HEAD").trim();
+  gh.save();
+  const wait = gh.wait();
+  assertSkipped(wait);
+  assert.ok(wait.stdout.includes(revision));
+  const reads = gh.reads().filter((read) => read.variables?.revision);
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0]!.variables!.revision, revision);
+  const next = gh.run("request.mjs");
+  assert.equal(next.status, 7, next.stderr);
+  assert.ok(next.stderr.includes(gh.state.advanceDefaultTo));
+  assert.deepEqual(gh.requests(), []);
+});
+
+for (const [kind, text] of [
+  ["missing", null],
+  ["invalid JSON", "{"],
+  ["invalid declaration", '{"version":1,"checks":[]}'],
+] as const) {
+  test(
+    `wait requires a valid pinned check declaration: ${kind}`,
+    pinnedChecks,
+    (t) => {
+      const gh = github(t);
+      gh.configuration(".github/required-checks.json", text);
+      gh.snapshot();
+      const request = gh.run("request.mjs");
+      assert.equal(request.status, 0, request.stderr);
+      assert.ok(
+        gh
+          .reads()
+          .flatMap((read) => Object.values(read.variables ?? {}))
+          .every(
+            (value) =>
+              typeof value !== "string" ||
+              !value.endsWith(":.github/required-checks.json"),
+          ),
+      );
+      const wait = gh.wait();
+      assert.equal(wait.status, 7, wait.stderr);
+      assert.match(
+        wait.stderr,
+        /Owner handoff required: invalid trusted .github\/required-checks.json/,
+      );
+      assert.deepEqual(gh.requests(), []);
+    },
+  );
+}
+
+test(
+  "every declared check needs positive success even for a matching app author",
+  pinnedChecks,
+  (t) => {
+    const gh = github(t);
+    gh.configuration(
+      ".github/required-checks.json",
+      '{"version":1,"checks":["Test","Security"]}',
+    );
+    gh.snapshot();
+    let wait = gh.wait();
+    assert.equal(wait.status, 5, wait.stderr); // Test succeeds; Security is absent.
+    assert.match(wait.stdout, /still waiting on checks/);
+    assert.doesNotMatch(wait.stdout, /reviewer reviewed|checks passed/);
+    const security = {
+      ...gh.state.statusCheckRollup[0]!,
+      name: "Security",
+      conclusion: "SKIPPED",
+    };
+    gh.state.statusCheckRollup.push(security);
+    gh.save();
+    wait = gh.wait();
+    assert.equal(wait.status, 2, wait.stderr); // Skipping fails the positive-success requirement.
+    security.status = "IN_PROGRESS";
+    gh.save();
+    assert.equal(gh.wait().status, 5);
+    security.status = "COMPLETED";
+    security.conclusion = "FAILURE";
+    gh.save();
+    wait = gh.wait();
+    assert.equal(wait.status, 2, wait.stderr);
+    assert.match(wait.stdout, /1 check failed/);
+    security.conclusion = "SUCCESS";
+    gh.save();
+    assertSkipped(gh.wait());
+    assert.deepEqual(gh.requests(), []);
+  },
+);
+
+function transition(event: string, time: number) {
+  return { event, created_at: new Date(time).toISOString() };
+}
+
+test(
+  "the latest ready event on a later page supplies automatic request timing after re-drafting",
+  readiness,
+  (t) => {
+    const gh = github(t, "owner");
+    const now = Date.now();
+    const opened = now - 60 * 60_000;
+    const pushed = now - 10 * 60_000;
+    gh.state.createdAt = new Date(opened).toISOString();
+    gh.state.pushedAt = new Date(pushed).toISOString();
+    gh.state.isDraft = true;
+    gh.state.timelinePages = [
+      [
+        transition("ready_for_review", opened + 60_000),
+        transition("convert_to_draft", pushed),
+      ],
+      [
+        transition("ready_for_review", now - 1000),
+        transition("convert_to_draft", now),
+      ],
+      [transition("ready_for_review", opened + 120_000)], // Older entry cannot replace latest.
+    ];
+    gh.save();
+    const request = gh.run("request.mjs", "--fixes-review");
+    assert.equal(request.status, 0, request.stderr);
+    assert.match(request.stdout, /review already requested for this head/);
+    assert.deepEqual(gh.requests(), []);
+    const wait = gh.wait();
+    assert.equal(wait.status, 5, wait.stderr);
+    assert.match(wait.stdout, /still waiting on reviewer/);
+    assert.deepEqual(
+      gh
+        .reads()
+        .filter((read) => read.operation.endsWith("/timeline"))
+        .map((read) => read.page),
+      [null, "2", "3", null, "2", "3"],
+    );
+  },
+);
+
+test(
+  "readiness transitions do not consume additional total-request slots",
+  readiness,
+  (t) => {
+    const gh = github(t, "owner");
+    gh.configuration(
+      ".github/pull-request-reviewer.json",
+      JSON.stringify({
+        ...reviewer,
+        bounds: { ...reviewer.bounds, reviewRequests: 2 },
+      }),
+    );
+    gh.snapshot();
+    for (let index = 0; index < 4; index++) {
+      gh.state.timelinePages[0]!.push(
+        transition("ready_for_review", Date.now()),
+      );
+      gh.save();
+      const request = gh.run("request.mjs");
+      assert.equal(request.status, 0, request.stderr);
+      assert.deepEqual(gh.requests(), []);
+    }
+    gh.push("2".repeat(40));
+    assert.equal(gh.run("request.mjs", "--fixes-review").status, 0);
+    assert.equal(gh.requests().length, 1); // Opening plus explicit request reaches two.
+    gh.push("3".repeat(40));
+    const bounded = gh.run("request.mjs", "--fixes-review");
+    assert.equal(bounded.status, 0, bounded.stderr);
+    assert.match(bounded.stdout, /review request bound reached/);
+    assert.equal(gh.requests().length, 1);
+  },
+);
+
+for (const failure of [
+  "unreadable later page",
+  "malformed ready-event timestamp",
+] as const) {
+  test(
+    `${failure} fails both commands instead of falling back to opening time`,
+    readiness,
+    (t) => {
+      const gh = github(t, "owner");
+      gh.state.timelinePages = [
+        [transition("ready_for_review", Date.now())],
+        [],
+      ];
+      if (failure === "unreadable later page") gh.state.timelineFailurePage = 2;
+      else
+        gh.state.timelinePages[1]!.push({
+          event: "ready_for_review",
+          created_at: "invalid",
+        });
+      gh.save();
+      assertBothStopBeforeRequest(
+        gh,
+        1,
+        failure === "unreadable later page"
+          ? /GitHub could not be reached/
+          : /Could not read a ready-for-review time/,
+      );
+    },
+  );
+}
+
+for (const mode of ["explicit-only reviewer", "matching app policy"] as const) {
+  test(
+    `${mode} does not depend on automatic readiness timing`,
+    readiness,
+    (t) => {
+      const gh = github(t, mode === "matching app policy" ? app : "owner");
+      if (mode === "explicit-only reviewer") {
+        gh.configuration(
+          ".github/pull-request-reviewer.json",
+          JSON.stringify({
+            ...reviewer,
+            request: { ...reviewer.request, onOpen: false },
+          }),
+        );
+        gh.snapshot();
+      }
+      gh.state.timelineFailurePage = 1;
+      gh.save();
+      const request = gh.run("request.mjs");
+      assert.equal(request.status, 0, request.stderr);
+      const wait = gh.wait();
+      if (mode === "matching app policy") {
+        assertSkipped(wait);
+        assert.deepEqual(gh.requests(), []);
+      } else {
+        assert.equal(wait.status, 5, wait.stderr);
+        assert.match(wait.stdout, /still waiting on reviewer/);
+        assert.deepEqual(gh.requests(), [reviewer.request.comment]);
+      }
+      assert.ok(
+        gh.reads().every((read) => !read.operation.endsWith("/timeline")),
+      );
+    },
+  );
+}
