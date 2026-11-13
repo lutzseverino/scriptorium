@@ -23,9 +23,20 @@ _Avoid_: Comment prompt, agent-written comment
 
 **Run comment**:
 The factory's one issue comment per pass through the pipeline, from triage or
-readiness to merge or failure, edited in place with each run kind's phase and
-result; a retry after failure starts a new one.
+readiness to merge or failure, edited in place with each phase's state and,
+by default, the lead line of its run result, which it links rather than copies;
+a retry after failure starts a new one.
 _Avoid_: Status comment, progress comment
+
+**Lead line**:
+The first visible line of a factory comment or of a run result's text: its
+state or outcome behind a status marker, and who must act when a person must.
+_Avoid_: Headline, summary, disclaimer line
+
+**Action comment**:
+The factory's fresh one-line issue comment, posted only when a person must act,
+mentioning that person and linking the run comment.
+_Avoid_: Notification comment, ping
 
 **Run result**:
 The file a run's agent leaves for the host at exit, holding its outcome, the
