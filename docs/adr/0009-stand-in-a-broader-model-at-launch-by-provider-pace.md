@@ -6,12 +6,14 @@ provider's allowance went unspent. The owner settled the remedy on
 2026-11-13: the host configuration declares which models are narrower than
 others (such as `gpt-6.1-sol` narrower than `claude-opus-5-5`), and the
 factory decides at launch, in code, whether to run the broader model as a
-stand-in, from the providers' usage at that moment. A stand-in runs when the
-broader model's provider has spare usage, judged by pace: its longest usage
-window is used less than the share of that window already elapsed, with every
-shorter window below the drain threshold. It also runs when the narrower
-model's provider cannot launch and the broader one's can. `scriptorium status`
-prints the same choice, so hand launches and the factory never disagree.
+stand-in, from the providers' usage at that moment. A stand-in runs only when
+the broader model's provider can launch right now and either has spare usage
+or, when the narrower model's provider cannot launch, has a fresh usage reading
+below its drain threshold. Spare usage is judged by pace: the longest reported
+window with a length and a reset is used less than the share of that window
+already elapsed, with every shorter window below the drain threshold. A window
+without a length or a reset gives no pace. `scriptorium status` prints the same
+choice, so hand launches and the factory never disagree.
 
 ## Considered options
 
@@ -32,9 +34,10 @@ prints the same choice, so hand launches and the factory never disagree.
 
 - The only setting is the narrower-than pair. A host that declares none
   behaves as before; there is no pace margin and no switch.
-- A label names the narrowest model that fits. A broader label is never
-  moved down to a narrower model, so a fitting model never gives way to one
-  that may not fit.
+- A label names a model by fit: where several fit and the host declares one
+  narrower, label the narrower model; otherwise the cheaper one. A broader
+  label is never moved down to a narrower model, so a fitting model never gives
+  way to one that may not fit.
 - A stand-in needs a fresh usage reading; unknown usage keeps the labelled
   model. A recorded relaunch keeps its model, and a review never stands in
   onto the provider that implemented its change, so provider diversity holds.

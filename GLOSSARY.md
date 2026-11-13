@@ -143,14 +143,16 @@ _Avoid_: Weaker model, cheaper model, lower-ranked model
 
 **Stand-in**:
 A launch that runs a broader model in place of the narrower model chosen for
-it, because the broader model's provider has spare usage, or because the
-narrower model's provider cannot launch and the broader one's can.
+it. The broader model's provider must be able to launch now and either have
+spare usage or, when the narrower model's provider cannot launch, have a fresh
+usage reading below its drain threshold.
 _Avoid_: Upgrade, fallback, substitution
 
 **Spare usage**:
-A provider's usage that runs below its pace: its longest reported usage window
-is used less than the share of that window already elapsed, and every shorter
-window it reports is below the drain threshold.
+A provider's fresh usage reading that runs below its pace: its longest
+reported usage window with a length and a reset is used less than the share of
+that window already elapsed, and every shorter window it reports is below the
+drain threshold. A window without a length or a reset gives no pace.
 _Avoid_: Headroom, underused usage
 
 **Sandbox image pair**:
