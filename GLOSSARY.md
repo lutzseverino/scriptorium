@@ -130,9 +130,30 @@ _Avoid_: Vendor, worker
 
 **Model guidance**:
 The host owner's short statement of which work a model in the host's catalog
-suits, from which every launcher chooses a model by fit, the cheaper one where
-several fit.
+suits, from which every launcher chooses a model by fit: where several fit,
+the narrower model when the host declares one, otherwise the cheaper one.
 _Avoid_: Model profile, model card
+
+**Narrower model**:
+A model the host configuration declares suits a subset of the work another
+model in its catalog suits, so a launch chosen for it may run that broader
+model instead. Each such pair is declared on its own; the host declares no
+ranking of its models.
+_Avoid_: Weaker model, cheaper model, lower-ranked model
+
+**Stand-in**:
+A launch that runs a broader model in place of the narrower model chosen for
+it. The broader model's provider must be able to launch now and either have
+spare usage or, when the narrower model's provider cannot launch, have a fresh
+usage reading below its drain threshold.
+_Avoid_: Upgrade, fallback, substitution
+
+**Spare usage**:
+A provider's fresh usage reading that runs below its pace: its longest
+reported usage window with a length and a reset is used less than the share of
+that window already elapsed, and every shorter window it reports is below the
+drain threshold. A window without a length or a reset gives no pace.
+_Avoid_: Headroom, underused usage
 
 **Sandbox image pair**:
 The agent image a repository's runs start from and the toolchain image it is
