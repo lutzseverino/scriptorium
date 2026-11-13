@@ -265,7 +265,7 @@ function assertOrphanReaping(
       "143",
     );
   } finally {
-    run(["rm", "--force", container]);
+    spawnSync("docker", ["rm", "--force", container]);
     rmSync(workspace, { recursive: true, force: true });
   }
 }
@@ -366,10 +366,10 @@ test(
     await t.test(
       "the previous sleep startup fails the orphan-reaping regression",
       () => {
-        assert.throws(
-          () => assertOrphanReaping(image, 2345, 3456, true),
-          /orphan was not reaped/,
-        );
+        // Match the probe's stderr: the error message also quotes the script.
+        assert.throws(() => assertOrphanReaping(image, 2345, 3456, true), {
+          stderr: /^orphan was not reaped$/m,
+        });
       },
     );
     assertProviderPolicy(image);
