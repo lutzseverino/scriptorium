@@ -1251,14 +1251,25 @@ function host(
     instances.push(instance);
     return {
       ...instance,
-      async tick() {
+      async tick(startOrder?: "forward" | "reverse") {
         const decisions = await instance.tick();
         // The production pass returns before Sandcastle records a launch.
         // Fixtures wait here for every launch it requested, including retries
         // and relaunches, without waiting for the agents to finish.
         const pending = starts.splice(0);
         const count = launched.length + pending.length;
-        for (const start of pending) start();
+        if (startOrder) {
+          // Release one gate at a time and observe its launch before the next,
+          // so asynchronous provider startup cannot undo the requested order.
+          if (startOrder === "reverse") pending.reverse();
+          for (const start of pending) {
+            const next = launched.length + 1;
+            start();
+            await until(() => launched.length === next);
+          }
+        } else {
+          for (const start of pending) start();
+        }
         await until(() => launched.length === count);
         return decisions;
       },
@@ -7476,66 +7487,77 @@ const factoryHoldFiles = {
 const holdComments = (comments: string[]) =>
   comments.filter((c) => c.includes("scriptorium:hold:factory-hold"));
 
-test("a factory hold set mid-run lets the run finish, stops pickup and its merge, and resumes both once removed across restart", async (t) => {
-  const name = "acme/widgets";
-  const bare = remote(t, factoryHoldFiles);
-  const run = host(t, {
-    repositories: { [name]: [{ number: 4 }, { number: 5, labels: [] }] },
-    remotes: { [name]: bare },
+for (const startOrder of ["forward", "reverse"] as const)
+  test(`a factory hold set mid-run lets the run finish, stops pickup and its merge, and resumes both once removed across restart (${startOrder} startup)`, async (t) => {
+    const name = "acme/widgets";
+    const bare = remote(t, factoryHoldFiles);
+    const run = host(t, {
+      repositories: { [name]: [{ number: 4 }, { number: 5, labels: [] }] },
+      remotes: { [name]: bare },
+    });
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    const prompt = run.launched[0].options.prompt!;
+    assert.doesNotMatch(prompt, /factory-hold:|before any merge/);
+    run.github.factoryHolds[name] = { issues: [9], pullRequests: [] };
+    const ready = run.github.find(name, 5);
+    ready.labels = ["ready-for-agent"];
+    ready.timeline.push(labelled("owner"));
+    await run.tick();
+    assert.equal(run.launched.length, 1, "no new pickup while held");
+    assert.equal(
+      run.launched[0].options.signal?.aborted,
+      false,
+      "the running sandbox keeps running",
+    );
+    assert.equal(holdComments(ready.comments).length, 1);
+    assert.match(
+      holdComments(ready.comments)[0],
+      /factory hold \(#9 carries `factory:hold`\)/,
+    );
+    assert.deepEqual(
+      (run.status() as { repositories: { state: string; reason?: string }[] })
+        .repositories[0].state,
+      "paused",
+    );
+    const issue = run.github.find(name, 4);
+    issue.branchPullRequests.push(publishedPR(bare));
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    assert.equal(run.launched.length, 1, "the deferred merge waits");
+    assert.equal(holdComments(issue.comments).length, 1);
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, 1, "the hold survives a restart");
+    run.github.factoryHolds[name] = { issues: [], pullRequests: [] };
+    await restarted.tick(startOrder);
+    const resumed = run.launched.slice(1);
+    assert.deepEqual(
+      resumed.map((launch) => launch.options.name),
+      startOrder === "forward"
+        ? [`${name}#4`, `${name}#5`]
+        : [`${name}#5`, `${name}#4`],
+      "the fixture records the requested startup arrival order",
+    );
+    assert.deepEqual(
+      resumed.map((launch) => launch.options.name).sort(),
+      [`${name}#4`, `${name}#5`],
+      "the current PR gets its deferred merge relaunch and pickup resumes",
+    );
+    const merge = resumed.find(({ options }) => options.name === `${name}#4`);
+    assert.ok(merge, "the deferred merge relaunch exists");
+    assert.match(merge.options.prompt!, /Merge relaunch: bring PR #40\b/);
+    for (const comments of [issue.comments, ready.comments]) {
+      assert.equal(holdComments(comments).length, 1);
+      assert.match(holdComments(comments)[0], /Resolved/);
+    }
+    assert.equal(
+      (run.status() as { repositories: { state: string }[] }).repositories[0]
+        .state,
+      "running",
+    );
   });
-  await run.tick();
-  assert.equal(run.launched.length, 1);
-  const prompt = run.launched[0].options.prompt!;
-  assert.doesNotMatch(prompt, /factory-hold:|before any merge/);
-  run.github.factoryHolds[name] = { issues: [9], pullRequests: [] };
-  const ready = run.github.find(name, 5);
-  ready.labels = ["ready-for-agent"];
-  ready.timeline.push(labelled("owner"));
-  await run.tick();
-  assert.equal(run.launched.length, 1, "no new pickup while held");
-  assert.equal(
-    run.launched[0].options.signal?.aborted,
-    false,
-    "the running sandbox keeps running",
-  );
-  assert.equal(holdComments(ready.comments).length, 1);
-  assert.match(
-    holdComments(ready.comments)[0],
-    /factory hold \(#9 carries `factory:hold`\)/,
-  );
-  assert.deepEqual(
-    (run.status() as { repositories: { state: string; reason?: string }[] })
-      .repositories[0].state,
-    "paused",
-  );
-  const issue = run.github.find(name, 4);
-  issue.branchPullRequests.push(publishedPR(bare));
-  run.launched[0].finish();
-  await run.drain();
-  await run.tick();
-  assert.equal(run.launched.length, 1, "the deferred merge waits");
-  assert.equal(holdComments(issue.comments).length, 1);
-  const restarted = run.restart();
-  await restarted.tick();
-  assert.equal(run.launched.length, 1, "the hold survives a restart");
-  run.github.factoryHolds[name] = { issues: [], pullRequests: [] };
-  await restarted.tick();
-  assert.deepEqual(
-    run.launched.slice(1).map((launch) => launch.options.name),
-    [`${name}#4`, `${name}#5`],
-    "the current PR gets its deferred merge relaunch and pickup resumes",
-  );
-  assert.match(run.launched[1].options.prompt!, /Merge relaunch: bring PR #40/);
-  for (const comments of [issue.comments, ready.comments]) {
-    assert.equal(holdComments(comments).length, 1);
-    assert.match(holdComments(comments)[0], /Resolved/);
-  }
-  assert.equal(
-    (run.status() as { repositories: { state: string }[] }).repositories[0]
-      .state,
-    "running",
-  );
-});
 
 for (const others of [[], [6]])
   test(`a factory PR that alone carries the hold gets its merge relaunch, and its merge ends the hold, other labelled items: ${others.length}`, async (t) => {
