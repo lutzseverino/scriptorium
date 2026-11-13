@@ -39,3 +39,10 @@ This directory records consequential decisions local to the factory.
   the default run comment shows each run result's lead line and link instead of a copy,
   the result's disclosure moves to a footer, and the action comment mentions
   the person who must act.
+- [Own the formats the factory reads, and import Repo Canon's contract module](0011-own-the-formats-the-factory-reads.md):
+  the configuration, model policy and run-result footer are Scriptorium's; the
+  model policy moves to `.scriptorium/model-policy.json`; the contract
+  protocol is imported from Repo Canon's installed module, not copied.
+- [Run Release as a run kind with the repository's release skill](0012-run-release-as-a-run-kind.md):
+  the factory and a person releasing by hand follow one skill; the release
+  hold label goes once releases run as this kind.
