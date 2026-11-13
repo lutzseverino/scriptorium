@@ -31,3 +31,7 @@ This directory records consequential decisions local to the factory.
 - [Split work into run kinds handed off by the host](0008-split-work-into-run-kinds-handed-off-by-the-host.md):
   triage, implement and review run kinds, each optional, hand off through
   labels and artifacts, and the host posts every run's result.
+- [Stand in a broader model at launch by provider pace](0009-stand-in-a-broader-model-at-launch-by-provider-pace.md):
+  the host declares narrower-than pairs, and the factory runs the broader model
+  at launch while its provider has spare usage or the narrower one's cannot
+  launch.
