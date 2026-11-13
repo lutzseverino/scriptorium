@@ -85,8 +85,13 @@ test("a Codex launch with a login that is not JSON is refused before Sandcastle 
 });
 
 // A stand-in for `codex app-server` that records the Codex home it was given,
-// writes state there as Codex does, and answers, refuses, or never replies.
-function fakeCodex(root: string, behavior: "answer" | "refuse" | "hang") {
+// writes state there as Codex does, and answers, refuses, or never replies,
+// after an optional startup delay.
+function fakeCodex(
+  root: string,
+  behavior: "answer" | "refuse" | "hang",
+  startupMs = 0,
+) {
   const seen = join(root, `seen-${behavior}.json`);
   const executable = join(root, `fake-codex-${behavior}`);
   writeFileSync(
@@ -104,6 +109,7 @@ fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({
   auth: fs.readFileSync(auth, "utf8"),
 }));
 fs.mkdirSync(path.join(home, "sessions"));
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${startupMs});
 const reply = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -161,27 +167,26 @@ test("each Codex usage read signs in from a private copy of the current login th
   assert.equal(existsSync(fake.seen().home), false);
 });
 
-test("a Codex usage read removes its login copy after an error or a timeout", async (t) => {
+// The refusing server starts slower than the timeout test's deadline, so the
+// read reports the refusal only because it waits with the default deadline.
+test("a Codex usage read removes its login copy after a refusal", async (t) => {
   const root = directory(t);
-  for (const [behavior, message] of [
-    [
-      "refuse",
-      /^codex app-server refused the read \(code -32600\): not signed in$/,
-    ],
-    ["hang", /timed out/],
-  ] as const) {
-    const fake = fakeCodex(root, behavior);
-    const { credential } = codex(t, fake.executable);
-    await assert.rejects(
-      readCodexUsage(credential, fake.executable, 500),
-      (error: Error) => {
-        assert.match(error.message, message);
-        assert.doesNotMatch(error.message, /secret/);
-        return true;
-      },
-    );
-    assert.equal(existsSync(fake.seen().home), false, behavior);
-  }
+  const fake = fakeCodex(root, "refuse", 750);
+  const { credential } = codex(t, fake.executable);
+  await assert.rejects(readCodexUsage(credential, fake.executable), {
+    message: "codex app-server refused the read (code -32600): not signed in",
+  });
+  assert.equal(existsSync(fake.seen().home), false);
+});
+
+test("a Codex usage read removes its login copy after a timeout", async (t) => {
+  const root = directory(t);
+  const fake = fakeCodex(root, "hang");
+  const { credential } = codex(t, fake.executable);
+  await assert.rejects(readCodexUsage(credential, fake.executable, 500), {
+    message: "timed out",
+  });
+  assert.equal(existsSync(fake.seen().home), false);
 });
 
 const working = ["Reading the issue first.", "Bash(gh issue view 371)"];
