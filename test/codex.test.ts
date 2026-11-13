@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createRegistry } from "../src/providers.ts";
@@ -179,14 +186,25 @@ test("a Codex usage read removes its login copy after a refusal", async (t) => {
   assert.equal(existsSync(fake.seen().home), false);
 });
 
+// The deadline can end a slow-starting server before it records its home, so
+// the read makes its login copy in a temporary directory of its own.
 test("a Codex usage read removes its login copy after a timeout", async (t) => {
   const root = directory(t);
   const fake = fakeCodex(root, "hang");
   const { credential } = codex(t, fake.executable);
+  const temporary = join(root, "tmp");
+  mkdirSync(temporary);
+  const environment = process.env.TMPDIR;
+  process.env.TMPDIR = temporary;
+  t.after(() => {
+    if (environment === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = environment;
+  });
+
   await assert.rejects(readCodexUsage(credential, fake.executable, 500), {
     message: "timed out",
   });
-  assert.equal(existsSync(fake.seen().home), false);
+  assert.deepEqual(readdirSync(temporary), []);
 });
 
 const working = ["Reading the issue first.", "Bash(gh issue view 371)"];
