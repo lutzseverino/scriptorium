@@ -23,9 +23,9 @@ _Avoid_: Comment prompt, agent-written comment
 
 **Run comment**:
 The factory's one issue comment per pass through the pipeline, from triage or
-readiness to merge or failure, edited in place with each phase's state and the
-lead line of its run result, which it links rather than copies; a retry after
-failure starts a new one.
+readiness to merge or failure, edited in place with each phase's state and,
+by default, the lead line of its run result, which it links rather than copies;
+a retry after failure starts a new one.
 _Avoid_: Status comment, progress comment
 
 **Lead line**:
