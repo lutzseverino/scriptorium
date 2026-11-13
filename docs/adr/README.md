@@ -35,3 +35,7 @@ This directory records consequential decisions local to the factory.
   the host declares narrower-than pairs, and the factory runs the broader model
   at launch while its provider has spare usage or the narrower one's cannot
   launch.
+- [Link run results and mention whoever must act](0010-link-run-results-and-mention-whoever-must-act.md):
+  the run comment shows each run result's lead line and link instead of a copy,
+  the result's disclosure moves to a footer, and the action comment mentions
+  the person who must act.
