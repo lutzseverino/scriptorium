@@ -12,9 +12,9 @@ moves the AI disclosure to a footer with the run facts, so a result's first
 visible line is its own lead line.
 
 Every run result is already posted as its own comment on the same issue, so
-the copy doubled the run comment (7,600 of
+the copy made up about 7,600 of
 [Repo Canon #881](https://github.com/lutzseverino/repo-canon/issues/881)'s
-8,149 characters on 2026-11-13) and hid
+8,149 characters on 2026-11-13 and hid
 [Repo Canon #796](https://github.com/lutzseverino/repo-canon/issues/796)'s
 owner decision at the bottom of a collapsed block that changed without
 notifying anyone. Mentions reverse the 2026-11-03 decision that the factory
