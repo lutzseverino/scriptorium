@@ -92,8 +92,14 @@ per-architecture asset, so the two always share a version.
 
 The layer creates or updates `agent` with the host's UID and GID, prepares a
 writable `/home/agent`, and sets `HOME=/home/agent`, `USER agent`,
-`WORKDIR /home/agent`, and `ENTRYPOINT ["sleep", "infinity"]`. Sandcastle
-mounts a run's worktree and starts its agent within this long-running container.
+`WORKDIR /home/agent`, and
+`ENTRYPOINT ["/usr/bin/tini", "--", "sleep", "infinity"]`. The distribution's
+Tini package supplies PID 1: it reaps exited orphaned descendants throughout
+each triage, implement and review run and forwards stop signals to `sleep`.
+Sandcastle mounts a run's worktree and starts its agent within this
+long-running container. Reaping requires no repository toolchain change or
+operator opt-in. Existing containers keep their startup until removed; the
+agent-layer version change selects rebuilt images for new containers.
 
 The layer also installs the provider policy, each provider's system policy,
 owned by root and readable but not writable by `agent`:

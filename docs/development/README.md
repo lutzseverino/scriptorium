@@ -68,7 +68,16 @@ is required; local runs skip them when Docker is unavailable. On all three
 bases, they run `ps -axo pgid=,stat=` as `agent` and check usable process-group
 and state output. The minimal Debian case verifies factory provision of `ps`;
 the Node bases may already include it. Acceptance requires a passing
-Docker-equipped CI or owner run; local skips are not acceptance. Run them alone
+Docker-equipped CI or owner run; local skips are not acceptance.
+On each base, the suite also starts the production Tini entrypoint without
+Docker's `--init`, then creates three orphans in the same running container.
+Each child stays alive until the test observes its adoption by PID 1; after
+release, its `/proc` entry must disappear within a bounded wait. A control with
+the previous `sleep infinity` entrypoint must fail the same reaping probe.
+The suite then verifies agent identity, home, working directory, a writable
+bind mount and command execution, and stops the container with TERM without
+requiring KILL. No Node.js or Python is needed inside the minimal image for
+this probe. Run the image suite alone
 with `node --test test/sandbox-image-build.test.ts`. Run the tag tests, which
 also drive both builders' commands against a fake Docker CLI, with
 `node --test test/sandbox-image.test.ts`. Image builds download the pinned
@@ -94,6 +103,7 @@ The fast `test/agent-layer.test.ts` guard executes the install commands with
 spies, without Docker, network access, package installation or root access.
 It executes the actual distribution-package RUN with `apt-get` and cleanup
 spies and glob expansion disabled, asserting that the install requests `procps`.
+It also asserts that the layer installs `tini` for PID 1 reaping.
 For both architectures, it rejects
 missing or malformed pins and extraction or installation before verification.
 `test/agent-layer-upstream.test.ts` compares all ten pins against upstream

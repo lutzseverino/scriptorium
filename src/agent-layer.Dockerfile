@@ -8,7 +8,7 @@ ARG AGENT_GID
 # Every edit to this layer requires an AGENT_LAYER_VERSION bump.
 # Release binaries keep the repository's toolchain independent of Node.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl tar gzip passwd libatomic1 procps \
+    ca-certificates curl tar gzip passwd libatomic1 procps tini \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eu; \
@@ -105,4 +105,5 @@ ENV HOME=/home/agent \
     DISABLE_AUTOUPDATER=1
 USER agent
 WORKDIR /home/agent
-ENTRYPOINT ["sleep", "infinity"]
+# Reap adopted orphans while keeping the container available for agent commands.
+ENTRYPOINT ["/usr/bin/tini", "--", "sleep", "infinity"]

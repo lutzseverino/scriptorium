@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   pruneSandboxCache,
@@ -166,6 +168,108 @@ function assertProcessCensus(image: string): void {
     assert.match(row, /^\s*[1-9]\d*\s+[A-Za-z][<NLsl+]*\s*$/);
 }
 
+// No init is supplied by docker run: the image must provide its production
+// startup. The sleep override is only the negative control for the old layer.
+function assertOrphanReaping(
+  image: string,
+  uid: number,
+  gid: number,
+  previousEntrypoint = false,
+): void {
+  const workspace = mkdtempSync(join(tmpdir(), "factory-reaping-"));
+  chmodSync(workspace, 0o777);
+  const container = `factory-reaping-${randomUUID()}`;
+  const run = (args: string[]) =>
+    execFileSync("docker", args, { encoding: "utf8", timeout: 30_000 }).trim();
+  try {
+    run([
+      "run",
+      "--detach",
+      "--name",
+      container,
+      "--mount",
+      `type=bind,src=${workspace},dst=/workspace`,
+      ...(previousEntrypoint ? ["--entrypoint", "sleep"] : []),
+      image,
+      ...(previousEntrypoint ? ["infinity"] : []),
+    ]);
+    assert.equal(run(["exec", container, "pwd"]), "/home/agent");
+    const output = run([
+      "exec",
+      "--workdir",
+      "/workspace",
+      container,
+      "sh",
+      "-ec",
+      `
+        test "$(id -un)" = agent
+        test "$(id -u)" = ${uid}
+        test "$(id -g)" = ${gid}
+        test "$HOME" = /home/agent
+        test -w "$HOME"
+        test "$PWD" = /workspace
+        for attempt in 1 2 3; do
+          gate="/workspace/exit-$attempt"
+          # The intermediate shell exits without waiting. Redirect all child
+          # streams so command substitution cannot wait on an inherited pipe.
+          pid=$(sh -c '
+            (while [ ! -e "$1" ]; do sleep 0.05; done) </dev/null >/dev/null 2>&1 &
+            echo $!
+          ' sh "$gate")
+          adopted=false
+          for poll in $(seq 1 100); do
+            if grep -Eq '^PPid:[[:space:]]+1$' "/proc/$pid/status"; then
+              adopted=true
+              break
+            fi
+            sleep 0.05
+          done
+          test "$adopted" = true
+          if grep -Eq '^State:[[:space:]]+Z' "/proc/$pid/status"; then
+            echo "orphan exited before adoption was observed" >&2
+            exit 1
+          fi
+          : > "$gate"
+          for poll in $(seq 1 100); do
+            if [ ! -e "/proc/$pid" ]; then break; fi
+            sleep 0.05
+          done
+          if [ -e "/proc/$pid" ]; then
+            echo "orphan was not reaped" >&2
+            cat "/proc/$pid/status" >&2
+            exit 1
+          fi
+          echo "reaped orphan $attempt"
+        done
+        test "$(id -un)" = agent
+        test "$HOME" = /home/agent
+        test "$PWD" = /workspace
+        printf 'still available\\n' > /workspace/available
+      `,
+    ]);
+    assert.equal(output, "reaped orphan 1\nreaped orphan 2\nreaped orphan 3");
+    assert.equal(
+      readFileSync(join(workspace, "available"), "utf8"),
+      "still available\n",
+    );
+    assert.equal(
+      run(["inspect", "--format", "{{.State.Running}}", container]),
+      "true",
+    );
+    assert.equal(run(["exec", container, "id", "-u"]), String(uid));
+    // Tini forwards TERM to sleep and exits with its status, without Docker
+    // needing to escalate to KILL (137) after the stop grace period.
+    run(["stop", "--time", "5", container]);
+    assert.equal(
+      run(["inspect", "--format", "{{.State.ExitCode}}", container]),
+      "143",
+    );
+  } finally {
+    spawnSync("docker", ["rm", "--force", container]);
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
 // Asserts as agent that Codex finds its code-mode host, without which the
 // factory's code-mode-only Codex models have no tools. Codex looks for the host
 // beside its own resolved executable and reports code mode before the turn
@@ -253,6 +357,21 @@ test(
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
     assert.match(output, /codex-cli 0\.162\.1/);
     assertProcessCensus(image);
+    await t.test(
+      "production startup reaps repeated orphans on minimal Debian",
+      () => {
+        assertOrphanReaping(image, 2345, 3456);
+      },
+    );
+    await t.test(
+      "the previous sleep startup fails the orphan-reaping regression",
+      () => {
+        // Match the probe's stderr: the error message also quotes the script.
+        assert.throws(() => assertOrphanReaping(image, 2345, 3456, true), {
+          stderr: /^orphan was not reaped$/m,
+        });
+      },
+    );
     assertProviderPolicy(image);
     assertCodeModeHost(image);
     // The relocatable Git release must find its HTTPS helper, not just print a version.
@@ -280,7 +399,12 @@ test(
     )[0].Config;
     assert.equal(config.User, "agent");
     assert.equal(config.WorkingDir, "/home/agent");
-    assert.deepEqual(config.Entrypoint, ["sleep", "infinity"]);
+    assert.deepEqual(config.Entrypoint, [
+      "/usr/bin/tini",
+      "--",
+      "sleep",
+      "infinity",
+    ]);
     assert.equal(
       await buildSandboxImage({
         dockerfile: "FROM debian:bookworm-slim\n",
@@ -425,6 +549,12 @@ for (const major of [24, 26]) {
       assert.match(output, /codex-cli 0\.162\.1/);
       assert.match(output, new RegExp(`^v${major}\\.`, "m"));
       assertProcessCensus(image);
+      await t.test(
+        `production startup reaps repeated orphans on Node ${major}`,
+        () => {
+          assertOrphanReaping(image, 1000, 1000);
+        },
+      );
       assertProviderPolicy(image);
       assertCodeModeHost(image);
     },

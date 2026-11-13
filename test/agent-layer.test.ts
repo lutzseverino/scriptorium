@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { agentLayer, verifiedDownloads } from "./agent-layer-fixture.ts";
 
-test("the factory layer installs procps for the agent's process census", () => {
+test("the factory layer installs process census and init packages", () => {
   const runs = agentLayer.replaceAll(/\\\n/g, "").match(/^RUN .*$/gm)!;
   const packages = runs.filter((run) => /\bapt-get\s+/.test(run));
   assert.equal(packages.length, 1, "distribution packages share one RUN");
@@ -26,6 +26,10 @@ test("the factory layer installs procps for the agent's process census", () => {
   assert.ok(
     installs.some((args) => args.includes("procps")),
     "the actual apt-get install must request procps",
+  );
+  assert.ok(
+    installs.some((args) => args.includes("tini")),
+    "the actual apt-get install must request tini",
   );
 });
 
