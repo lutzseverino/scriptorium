@@ -2,6 +2,7 @@
 // Literal positive and negative Canon decisions live beside it; this fake
 // supplies automatic evaluation timing, not an alternative policy interpreter.
 import { readFileSync } from "node:fs";
+import { seamsState } from "./contract-result-fixture.ts";
 import {
   PlatformError,
   type ConnectionWithLinkAdditions,
@@ -111,6 +112,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
   let state: Record<string, any> | null = null;
   const controls = {
     evaluation: true,
+    seams: false,
     format: undefined as string | undefined,
     mode: "body",
     fail: "",
@@ -151,6 +153,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
       const ready = changes.findLast((c) => c.label === "state:ready");
       const kind = "triaged Agent Brief";
       state = {
+        ...canonical.cases[2].state,
         format: controls.format ?? "repo-canon/issue-contract-state/v1",
         kind,
         status: evidence
@@ -185,6 +188,8 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
         factoryTriage: null,
         ...controls.result,
       };
+      if (controls.seams && state && (state.revision || state.source === null))
+        state = seamsState(state);
       return;
     }
     const categories = issue.labels.filter((label) =>
@@ -252,6 +257,8 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
       factoryTriage: association,
       observation: contractObservation(issue, comments, changes, edits),
     };
+    if (controls.seams && state && (state.revision || state.source === null))
+      state = seamsState(state);
   };
   const wrap = (
     fallback: ConnectionWithLinkAdditions,

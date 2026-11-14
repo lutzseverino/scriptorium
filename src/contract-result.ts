@@ -3,6 +3,10 @@
 // This module reads the posted result and checks it against platform facts;
 // it interprets no contract and parses no Markdown. Exact observation reads
 // arrive through Postern; the same reader serves publication and admission.
+// Repo Canon installs JavaScript without TypeScript declarations.
+// prettier-ignore
+// @ts-expect-error The installed reader owns v3 validation.
+import { issueContractResult, seamsResultFormat } from "../vendor/repo-canon/validate-issue-contract.mjs";
 import type {
   Comment,
   LabelChange,
@@ -40,6 +44,7 @@ import type { ReadinessHold } from "./readiness.ts";
 import { isFactoryComment } from "./run-comment.ts";
 
 // The legacy result format; bodyResultFormat names the supported v2 wire.
+// V3 is validated by Canon, then read under its base format below.
 // Any other format, including a line without one, holds the issue.
 export const resultFormat = "repo-canon/issue-contract-state/v1";
 
@@ -105,7 +110,7 @@ export function requirePreparedProtocol(
   if (!posted) return null;
   let result;
   try {
-    result = JSON.parse(posted.line);
+    result = readResult(posted, comments);
   } catch {
     return hold("Prepared validator protocol evidence is unreadable");
   }
@@ -340,7 +345,7 @@ export async function currentBodyDecision(
   if (!posted) return null;
   let result: Result;
   try {
-    result = JSON.parse(posted.line);
+    result = readResult(posted, facts.comments);
   } catch {
     return hold("The body-mode validator result is unreadable");
   }
@@ -388,7 +393,7 @@ export function contractResultHold(
     );
   let result: Result;
   try {
-    result = JSON.parse(posted.line);
+    result = readResult(posted, facts.comments);
   } catch {
     return unreadable;
   }
@@ -396,7 +401,7 @@ export function contractResultHold(
     return unreadable;
   if (result.format !== resultFormat && result.format !== bodyResultFormat)
     return refuse(
-      `the latest contract result from ${author} has ${typeof result.format === "string" ? `format ${result.format}` : "no format version"}, and this factory reads only ${resultFormat} and ${bodyResultFormat}`,
+      `the latest contract result from ${author} has ${typeof result.format === "string" ? `format ${result.format}` : "no format version"}, and this factory reads only ${resultFormat}, ${bodyResultFormat} and ${seamsResultFormat}`,
       "update the factory or the repository's issue-contract validator so they share a result format",
     );
 
@@ -564,7 +569,7 @@ export function triageBacked(
   let source;
   let result;
   try {
-    result = posted && JSON.parse(posted.line);
+    result = posted && readResult(posted, facts.comments);
     source = result?.source;
   } catch {
     return false;
@@ -652,4 +657,25 @@ function latestResult(
       };
   }
   return latest;
+}
+
+// Keep comment selection repository-owned. Only Canon validates the v3 wrapper;
+// its selected comment and state must be the ones our configuration selected.
+// Normalize the validated wrapper so every caller applies the existing base
+// checks to the top-level decision, never to the historical exemption.
+function readResult(
+  posted: { comment: Comment; line: string },
+  comments: Comment[],
+) {
+  const result = JSON.parse(posted.line);
+  if (result?.format !== seamsResultFormat) return result;
+  const { comment, state } = issueContractResult(comments);
+  if (
+    comment !== posted.comment ||
+    state?.format !== seamsResultFormat ||
+    !same(state, result)
+  )
+    throw new Error("The configured v3 validator result is unreadable");
+  const { baseFormat, seamsExemption: _, ...base } = state;
+  return { ...base, format: baseFormat };
 }

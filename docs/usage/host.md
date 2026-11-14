@@ -576,11 +576,18 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   issue. The factory reads, through Postern, the latest comment by the
   [configured](factory-configuration.md#contract-result) trusted author that
   carries a line `<!-- <marker> {…} -->` under the configured marker, and
-  parses that line's JSON object. It reads format
-  `repo-canon/issue-contract-state/v1`, as
+  parses that line's JSON object. It reads formats
+  `repo-canon/issue-contract-state/v1`, `repo-canon/issue-contract-state/v2` and
+  `repo-canon/issue-contract-state/v3`. Repo Canon's installed reader validates
+  a v3 Seams exemption wrapper, then the factory applies every check of its
+  v1 or v2 base to the top-level decision. The historical exemption grants no
+  readiness. V2, including v3 with a v2 base, also requires the current body
+  mode/cutoff, exact observation, selected body edit or eligible legacy source,
+  and verified factory association for factory-triage readiness; stale
+  observations wait for reevaluation. V1 follows the result
   [Repo Canon v0.21.0](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result)
-  publishes it. The ready label counts only when the result:
-  - has that format;
+  publishes. The ready label counts under v1 only when the result:
+  - has that base format;
   - is `approved`, names the ready label, and names the current ready-label
     event as its `reviewEventId`;
   - is newer than every comment created or edited on the issue, its body's
