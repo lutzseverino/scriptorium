@@ -32,7 +32,9 @@ for (const failing of [false, true])
           cwd: new URL("..", import.meta.url),
           env,
           encoding: "utf8",
-          timeout: 30_000,
+          // Let the nested lifecycle tests finish under CPU contention while
+          // still bounding a hung subprocess.
+          timeout: 180_000,
         },
       );
       assert.ifError(result.error);
