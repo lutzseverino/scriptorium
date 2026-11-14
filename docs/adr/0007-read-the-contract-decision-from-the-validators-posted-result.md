@@ -1,5 +1,10 @@
 # Read the contract decision from the validator's posted result
 
+Status: its rejection of importing a shared Repo Canon module is superseded by
+[ADR 0011](0011-own-the-formats-the-factory-reads.md), which imports the
+issue-contract module Repo Canon installs; reading the validator's posted
+result instead of interpreting contracts stands.
+
 The factory no longer interprets implementation contracts. It reads the
 decision that the repository's issue-contract validator posts on the issue, a
 state line with a format version, the approval status, the Agent Brief

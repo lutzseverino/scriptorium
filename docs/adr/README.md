@@ -27,7 +27,8 @@ This directory records consequential decisions local to the factory.
   authorize.
 - [Read the contract decision from the validator's posted result](0007-read-the-contract-decision-from-the-validators-posted-result.md):
   the factory checks the issue-contract validator's versioned result against
-  platform facts and no longer interprets Agent Briefs itself.
+  platform facts and no longer interprets Agent Briefs itself. Its rejection
+  of importing a shared Repo Canon module is superseded by ADR 0011.
 - [Split work into run kinds handed off by the host](0008-split-work-into-run-kinds-handed-off-by-the-host.md):
   triage, implement and review run kinds, each optional, hand off through
   labels and artifacts, and the host posts every run's result.
