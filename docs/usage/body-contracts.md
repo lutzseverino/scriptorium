@@ -1,6 +1,7 @@
 # Body-backed triage contracts
 
-Scriptorium's bridge reads Repo Canon's public v1 and v2 contract decisions.
+Scriptorium's bridge reads Repo Canon's public v1 and v2 contract decisions,
+including v3 Seams exemption wrappers under their base format's rules.
 Installing the bridge does not activate body publication. The repository's
 trusted default-branch `.github/issue-contracts.json` and immutable cutoff
 receipt select publication mode; no label, app author, timestamp or body marker
@@ -95,9 +96,11 @@ An old host paired with an active v2 validator holds on the unsupported format:
 keep publication frozen, install the bridge and reevaluate; do not bypass
 readiness or roll back the recorded cutoff. A bridge with an old/prepared v1
 validator retains legacy publication/pickup. A body-mode repository reporting
-v1 must repair its compatible validator before continuing. V3 and all other
-unknown formats hold; [#156](https://github.com/lutzseverino/scriptorium/issues/156)
-tracks Seams wrapper compatibility separately.
+v1 must repair its compatible validator before continuing. A v3 Seams exemption
+result follows its v1 or v2 base's publication, readiness, freshness and
+factory-proof rules. Repo Canon's installed
+reader validates the wrapper; its historical exemption never authorizes
+readiness. Unknown formats continue to hold.
 
 If a self-hosted delivery lane cannot operate in an intermediate state, keep
 its publication hold and arrange an authorized manual source/release delivery

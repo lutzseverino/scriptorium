@@ -3790,7 +3790,7 @@ test("pickup, retries and parent readiness follow the validator's current result
         posted(2, []),
         posted(3, [
           postedResult(3, resultAt, {
-            format: "repo-canon/issue-contract-state/v3",
+            format: "repo-canon/issue-contract-state/v4",
           }),
         ]),
         posted(4, [postedResult(4, resultAt)], {
@@ -3829,7 +3829,7 @@ test("pickup, retries and parent readiness follow the validator's current result
   assert.match(held(run, 2)!, /no contract result from @github-actions\[bot\]/);
   assert.match(
     held(run, 3)!,
-    /has format repo-canon\/issue-contract-state\/v3/,
+    /has format repo-canon\/issue-contract-state\/v4/,
   );
   assert.match(
     held(run, 4)!,
@@ -9644,7 +9644,7 @@ for (const blocked of ["notice", "protocol"] as const)
     assert.equal(run.launched.length, 3);
     waiting.controls.missingResult = blocked === "notice";
     waiting.controls.format =
-      blocked === "protocol" ? "repo-canon/issue-contract-state/v3" : undefined;
+      blocked === "protocol" ? "repo-canon/issue-contract-state/v4" : undefined;
     for (const launch of run.launched)
       launch.finish(
         undefined,
@@ -9805,7 +9805,7 @@ for (const checkpoint of ["mode", "none", "stop", "unreadable"] as const)
     await run.drain();
     if (checkpoint === "none") unavailable = true;
     if (checkpoint === "mode" || checkpoint === "unreadable")
-      protocol.controls.format = "repo-canon/issue-contract-state/v3";
+      protocol.controls.format = "repo-canon/issue-contract-state/v4";
     if (checkpoint === "stop") protocol.controls.fail = "comment";
     await run.tick();
     const path = join(
@@ -10066,7 +10066,7 @@ for (const wait of ["protocol", "notice"] as const)
     assert.equal(run.launched.length, 3);
     for (const p of protocols) {
       p.controls.format =
-        wait === "protocol" ? "repo-canon/issue-contract-state/v3" : undefined;
+        wait === "protocol" ? "repo-canon/issue-contract-state/v4" : undefined;
       p.controls.missingResult = wait === "notice";
     }
     for (const launch of run.launched)

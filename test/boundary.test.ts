@@ -4,8 +4,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 
 // The package's boundary with Repo Canon and the hosting platform: it imports
-// nothing from outside itself but Node.js, Sandcastle and Postern, so no
-// Markdown parser, and decides readiness without reading an issue's body.
+// Node.js, Sandcastle, Postern and Canon's installed result reader. The
+// factory decides readiness without reading an issue's body or parsing Markdown.
 const source = resolve(import.meta.dirname, "../src");
 
 test("the package's modules import only each other and their declared runtime boundaries", () => {
@@ -18,7 +18,9 @@ test("the package's modules import only each other and their declared runtime bo
       /^(?:import|export)\b[^;]*?\bfrom\s+"([^"]+)"/gms,
     )) {
       const where = `${relative(source, file)} imports ${specifier}`;
-      if (specifier.startsWith("."))
+      if (specifier === "../vendor/repo-canon/validate-issue-contract.mjs")
+        assert.equal(relative(source, file), "contract-result.ts", where);
+      else if (specifier.startsWith("."))
         assert.ok(
           !relative(source, resolve(dirname(file), specifier)).startsWith(".."),
           where,

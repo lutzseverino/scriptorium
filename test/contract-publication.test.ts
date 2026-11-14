@@ -353,7 +353,7 @@ test("a selected evidence identity resembling a report is never a report upsert 
 test("body mode refuses an old or unknown validator before replacing intake", async () => {
   for (const format of [
     "repo-canon/issue-contract-state/v1",
-    "repo-canon/issue-contract-state/v3",
+    "repo-canon/issue-contract-state/v4",
   ]) {
     const s = setup();
     s.fixture.controls.format = format;
@@ -411,7 +411,7 @@ test("prepared publication permits absent results but holds unknown and conflict
   for (const format of [
     undefined,
     "repo-canon/issue-contract-state/v2",
-    "repo-canon/issue-contract-state/v3",
+    "repo-canon/issue-contract-state/v4",
   ]) {
     const s = setup();
     s.fixture.controls.mode = "prepared";
@@ -539,7 +539,7 @@ test("a recovered body intent rechecks protocol compatibility before its mutatio
     /interrupted body/,
   );
   assert.ok(s.checkpoint?.original);
-  s.fixture.controls.format = "repo-canon/issue-contract-state/v3";
+  s.fixture.controls.format = "repo-canon/issue-contract-state/v4";
   s.fixture.evaluate();
   await assert.rejects(
     s.platform().postResult(4, post(), s.resume()),
@@ -841,4 +841,24 @@ test("the real validator's first prepared notice permits readiness in a later se
     s.fixture.changes.filter((c) => c.label === "state:ready").length,
     1,
   );
+});
+
+test("prepared publication completes the handshake under v3 base-v1 results", async () => {
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  s.fixture.controls.seams = true;
+  await s.platform().postResult(4, post(), s.resume());
+  assert.equal(s.fixture.result!.format, "repo-canon/issue-contract-state/v3");
+  assert.equal(s.fixture.result!.status, "approved");
+  assert.equal(s.fixture.issue.labels.includes("state:ready"), true);
+});
+
+test("body publication completes the handshake and migrated proof under v3 base-v2 results", async () => {
+  const s = setup();
+  s.fixture.controls.seams = true;
+  await s.platform().postResult(4, post(), s.resume());
+  assert.equal(s.fixture.result!.format, "repo-canon/issue-contract-state/v3");
+  assert.equal(s.fixture.result!.status, "approved");
+  assert.equal(s.fixture.result!.factoryTriage.run, "triage-7");
+  assert.equal(s.fixture.issue.labels.includes("state:ready"), true);
 });
