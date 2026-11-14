@@ -137,7 +137,7 @@ and nothing comes from environment variables.
 | `platforms.<name>`                      | One entry per [hosting platform](#hosting-platform) the served repositories are on; `github` is the only one. A repository on a platform without an entry isn't served.                                                                              |
 | `platforms.<name>.tokenCommand`         | The executable and leading arguments that print a token for a repository on that platform. See [token command](#token-command).                                                                                                                      |
 | `platforms.<name>.authorizedRoles`      | The platform's role names whose holders' [readiness](#readiness) the factory accepts. On `github`: `admin`, `maintain`, `write`, `triage` or `read`.                                                                                                 |
-| `platforms.<name>.neverAuthorize`       | Accounts whose readiness never counts under [person-applied authorization](#readiness), whatever their role. Factory-triage readiness uses its verified proof instead. Optional where the platform marks bots; required where it doesn't.            |
+| `platforms.<name>.neverAuthorize`       | Accounts, by the login the platform reports, whose readiness never counts, whatever their role, outside the [factory-triage exception](#readiness). Optional where the platform marks bots, as GitHub does; required where it doesn't.               |
 | `unpushablePaths`                       | Path prefixes inside a repository that the factory's GitHub App can't push, such as `.github/workflows/`. Unpushed commits under these paths fail without a retry, naming the paths; see [run outcomes](#run-outcomes).                              |
 | `stateDirectory`                        | The absolute path of the directory the process owns.                                                                                                                                                                                                 |
 | `gitIdentity`                           | The `name` and `email` that commits made from the clones carry.                                                                                                                                                                                      |
@@ -635,11 +635,13 @@ stale result waits instead of failing. Parent link-time and native-blocker
 checks still apply.
 
 With the version 3 triage run kind on, the factory writes the ready label only
-when applying a triage run's done result, as `triageResult.author`, together with
-the posted brief, as [Run results](#run-results) describes. It writes the ready
-label in no other case. Under version 2, and under version 3 without
-`runKinds.triage`, readiness comes only from an authorized person and the factory
-never writes the ready label.
+when applying a triage run's done result, together with the posted brief, as
+[Run results](#run-results) describes, and in no other case. With
+`triageResult` configured, it writes the label as `triageResult.author`;
+without it, the factory-triage exception doesn't apply, so the person-applied
+rule decides that readiness. Under version 2, and under version 3 without
+`runKinds.triage`, readiness comes only from an authorized person and the
+factory never writes the ready label.
 
 Refused readiness is a skip with its reason in the process log and the
 [status file](#status-file).
