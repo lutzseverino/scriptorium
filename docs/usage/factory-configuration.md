@@ -532,6 +532,10 @@ run and parent-close comments:
     "needsInput": "question",
     "paused": "waiting"
   },
+  "contractResult": {
+    "marker": "contract:result",
+    "author": "validator[bot]"
+  },
   "modelLabelPrefix": "agent:",
   "skill": "ship",
   "arguments": "#{issue}",
