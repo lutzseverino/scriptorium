@@ -152,8 +152,14 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
       );
       const ready = changes.findLast((c) => c.label === "state:ready");
       const kind = "triaged Agent Brief";
+      // A v1 result carries Canon's core fields, never v2's selection or observation.
+      const {
+        selection: _,
+        observation: __,
+        ...core
+      } = canonical.cases[2].state;
       state = {
-        ...canonical.cases[2].state,
+        ...core,
         format: controls.format ?? "repo-canon/issue-contract-state/v1",
         kind,
         status: evidence

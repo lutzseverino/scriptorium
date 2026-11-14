@@ -450,6 +450,8 @@ The result is the latest comment by `author`, ignoring case, with a line
 `repo-canon/issue-contract-state/v3`. V3 is a Seams exemption wrapper validated
 by Repo Canon's installed result reader and follows its v1 or v2 base's rules.
 The exemption is historical evidence, never authorization for readiness.
+A v3 result counts only when that reader selects the same comment, which needs
+the Repo Canon values above; otherwise the factory refuses it as unreadable.
 The factory reads readiness, selected source and current-event approval. V2
 also binds the repository's explicit cutoff, exact observation and verified
 factory association; the host checks their platform identities without parsing
