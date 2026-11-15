@@ -49,7 +49,7 @@ This directory records consequential decisions local to the factory.
   the factory and a person releasing by hand follow one skill; the release
   hold label goes once releases run as this kind.
 - [Detect GitHub quota exhaustion in the host](0013-detect-github-quota-exhaustion-in-the-host.md):
-  the host reads each repository's quota after a run ends unfinished or its
+  the host reads each repository's quota at every run exit or when its
   own read is rate-limited, holds the exhausted repositories, and relaunches
   the run as a paused run.
 - [Give each run a private Git directory](0014-give-each-run-a-private-git-directory.md):

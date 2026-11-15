@@ -4,17 +4,20 @@ Status: amends [ADR 0003](0003-hold-each-provider-and-never-override-the-pause-t
 whose paused runs and holds named only a provider's usage.
 
 The host, not the run, decides that the hosting platform's request quota stopped
-a run. When a run ends without finishing, or one of the host's own platform
+a run. At every run exit, or when one of the host's own platform
 reads is refused as rate-limited, the host reads each served repository's quota
 with that repository's own credential, a read the quota does not count. Every
 repository whose quota reads exhausted gets a quota hold, which claims and
 launches nothing there until the reset the platform stated, else the reset the
-quota read reports, else 15 minutes later. A run that ended while its
+quota read reports, else the fallback deadline specified in
+[#231](https://github.com/lutzseverino/scriptorium/issues/231). A non-`done`
+run ending while its
 repository was held becomes a paused run with the cause "GitHub rate limit":
 it keeps its repository's configured paused label and the existing fixed
 paused comment, and relaunches as the same attempt on the same model, spending
-no retry. An attempt relaunches this way at most three times; its next such
-ending is an ordinary failure, never an owner stop. A permission refusal still
+no retry. Same-attempt relaunches for a GitHub rate limit have the bound in
+#231; the next such ending is an ordinary failure, never an owner stop.
+A permission refusal still
 stops for the owner.
 
 Ten of 43 factory stops counted on 2026-11-14 were runs that hit the shared

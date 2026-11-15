@@ -10,7 +10,12 @@ obtain one. Its run-result comment on the issue lists every finding filed,
 linked or left unfiled, naming the unfiled finding's target repository.
 Until the host files findings, a run whose finding write is refused lists the
 finding as unfiled and continues its delivery instead of stopping; that
-interim is removed once host filing lands.
+interim lands only after
+[repo-canon#1087](https://github.com/lutzseverino/repo-canon/issues/1087)
+splits the Credentials sentence. The interim's
+[#229](https://github.com/lutzseverino/scriptorium/issues/229) names its
+deletion by the host-filing ticket,
+[#234](https://github.com/lutzseverino/scriptorium/issues/234).
 
 The sandbox credentials of implement and review runs can only read issues, so
 eleven of 43 factory stops counted on 2026-11-14 were a refused finding write

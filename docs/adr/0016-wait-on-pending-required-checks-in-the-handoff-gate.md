@@ -4,12 +4,18 @@ Where an issue's pull requests go to review, an implement run ends done once
 its pull request head is pushed, and the host's required-check gate
 ([#138](https://github.com/lutzseverino/scriptorium/issues/138)) decides the
 rest. While that head's required checks are pending, the run is awaiting
-checks: the factory keeps the claim and launches nothing. On a pass it starts
+checks: the factory keeps the claim and launches nothing, with no bound on
+already-pending results. On a pass it starts
 review with no further implement launch; on a failure it hands the pull
-request back to implement as the same attempt, spending no retry, at most three
-times, after which the next failure is an ordinary failure. When no required
-check has appeared 60 minutes after the push, the factory posts a hold and
-keeps waiting, rather than stopping for the owner.
+request back to implement through the existing merge-relaunch mechanism as the
+same attempt, spending no retry. Same-attempt relaunches for failed required
+checks have the bound in #138; the next failure is an ordinary failure.
+When no required result has appeared after the silent-wait bound measured from
+the push, the factory posts a hold naming the missing checks and keeps waiting,
+rather than stopping for the owner. It keeps the claim, and the hold clears
+itself once results appear. This bound is the same single host value as the
+readiness-read wait's bound, not a second setting; the values stay in #138 and
+[#232](https://github.com/lutzseverino/scriptorium/issues/232).
 
 Three implement runs stopped for the owner on checks that were queued or not
 yet created when their bounded wait ended, and every one of those checks later
