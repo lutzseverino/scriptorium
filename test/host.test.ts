@@ -8877,7 +8877,10 @@ test("a carried triage result cites its carrier quietly and removing its label s
   const carried = "settled-elsewhere";
   const run = host(t, {
     repositories: {
-      "acme/widgets": [{ number: 4, labels: ["state:triage"] }],
+      "acme/widgets": [
+        { number: 4, labels: ["state:triage"] },
+        { number: 5, labels: [carried] },
+      ],
     },
     remotes: {
       "acme/widgets": remote(t, {
@@ -8918,9 +8921,23 @@ test("a carried triage result cites its carrier quietly and removing its label s
   const restarted = run.restart();
   await restarted.tick();
   issue.labels = [];
+  const alreadyCarried = run.github.find("acme/widgets", 5);
+  alreadyCarried.labels = [];
   await restarted.tick();
   assert.equal(run.launched.length, 1);
   assert.deepEqual(issue.labels, []);
+  // A later trusted trigger can deliberately return it to triage.
+  run.clock.now = new Date("2026-10-09T12:03:00Z");
+  alreadyCarried.labels = ["state:triage"];
+  alreadyCarried.timeline.push({
+    event: "labeled",
+    label: "state:triage",
+    actor: "owner",
+    at: "2026-10-09T12:02:00Z",
+  });
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(invocation(run.launched[1].options.prompt), "/triage #5");
 });
 
 test("only a new reporter author reply starts triage after a restart", async (t) => {

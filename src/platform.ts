@@ -663,12 +663,16 @@ export function repositoryPlatform(
       const actor = actorLookup();
       const issues: OpenIssue[] = [];
       for (const issue of await issueTracker.issues()) {
+        const triggers = labels.triage !== undefined;
         // Changes arrive in platform order, so the last match is the latest.
-        const changes = configured(labels, (role) => role.applied).some(
-          (label) => issue.labels.includes(label),
-        )
-          ? await issueTracker.labelChanges(issue.number)
-          : [];
+        // Carried history also suppresses old triggers after label removal.
+        const changes =
+          (triggers && labels.carried) ||
+          configured(labels, (role) => role.applied).some((label) =>
+            issue.labels.includes(label),
+          )
+            ? await issueTracker.labelChanges(issue.number)
+            : [];
         const latest = (label: string | undefined) =>
           label !== undefined && issue.labels.includes(label)
             ? changes.findLast(
@@ -678,7 +682,12 @@ export function repositoryPlatform(
         const ready = latest(labels.ready);
         const triage = latest(labels.triage);
         const reporter = latest(labels.reporter);
-        const triggers = labels.triage !== undefined;
+        const carried = labels.carried
+          ? changes.findLast(
+              (change) =>
+                change.action === "added" && change.label === labels.carried,
+            )
+          : undefined;
         const author = triggers ? await actor(issue.author) : undefined;
         const replies = reporter
           ? await issueTracker.comments(issue.number)
@@ -712,6 +721,7 @@ export function repositoryPlatform(
           title: issue.title,
           url: issue.url,
           createdAt: issue.createdAt,
+          ...(carried && { carriedAt: carried.time }),
           ...(author && { author, filingRun: filingRun(issue) }),
           ...(reporter && {
             reporter: { at: reporter.time, actor: await actor(reporter.actor) },

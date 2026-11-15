@@ -63,7 +63,8 @@ export function triageTrigger(
   policy: Policy,
 ): Trigger | null {
   const newer = (at: string) =>
-    !issue.lastTriageAt || Date.parse(at) > Date.parse(issue.lastTriageAt);
+    (!issue.lastTriageAt || Date.parse(at) > Date.parse(issue.lastTriageAt)) &&
+    (!issue.carriedAt || Date.parse(at) > Date.parse(issue.carriedAt));
   if (labels.reporter && issue.labels.includes(labels.reporter)) {
     return issue.reporter &&
       issue.authorReply &&
