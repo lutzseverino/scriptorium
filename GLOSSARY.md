@@ -120,6 +120,8 @@ A run paused by its provider's usage limit or pause threshold, or by its
 repository's quota hold (cause: GitHub rate limit), awaiting automatic relaunch
 as the same attempt instead of ending with a run outcome. Unlike a paused
 repository, a paused run belongs to one issue and is marked on that issue.
+GitHub rate limits permit at most three same-attempt relaunches; the next such
+ending is an ordinary failure. Provider pauses have no such bound.
 _Avoid_: Limited run, held run, failed run
 
 **Quota hold**:
@@ -127,6 +129,10 @@ The factory's automatic hold on claims and launches in one served repository
 whose hosting-platform quota is exhausted, lasting until the reset.
 Repositories sharing a quota are held together, unlike a usage hold's scope of
 one provider.
+The host probes each served repository with its own token at every run exit
+and on its own rate-limited platform reads. Held repositories are not read
+again before their deadline: the stated retry/reset time, else the quota
+reading's reset, else 15 minutes after observation.
 _Avoid_: Rate-limit pause, installation hold
 
 **Hosting platform**:

@@ -199,6 +199,12 @@ export function issueComments(
   evidenceIds?: (issue: number, comments: Comment[]) => Promise<Set<string>>,
 ) {
   const templates = configuration.comments;
+  // Quota pauses can write the current run notice without another platform
+  // read. These facts came from this writer's last successful observation.
+  const remembered = new Map<
+    number,
+    { comments: Comment[]; evidence: Set<string> }
+  >();
   // Implement and merge always show, review once it is on, and triage once
   // it ran in the pass.
   function render(state: State, phase: Phase, result: string | undefined) {
@@ -234,11 +240,17 @@ export function issueComments(
       issue: number,
       update: RunUpdate,
       action?: Action,
+      options?: { cached: true },
     ): Promise<void> {
-      const comments = await tracker.comments(issue);
-      const evidence = evidenceIds
-        ? await evidenceIds(issue, comments)
-        : contractEvidenceIds(comments, configuration.contractResult);
+      const cached = options?.cached ? remembered.get(issue) : undefined;
+      if (options?.cached && !cached)
+        throw new Error("the run comment has no cached observation");
+      const comments = cached?.comments ?? (await tracker.comments(issue));
+      const evidence =
+        cached?.evidence ??
+        (evidenceIds
+          ? await evidenceIds(issue, comments)
+          : contractEvidenceIds(comments, configuration.contractResult));
       const latest = latestPass(
         comments.filter((comment) => !evidence.has(String(comment.id))),
       );
@@ -284,6 +296,10 @@ export function issueComments(
         pass?.comment,
         `${render(state, update.phase, result)}\n<!-- scriptorium:run ${encode(state)} -->`,
       );
+      remembered.set(issue, {
+        comments: [...comments.filter((comment) => comment.id !== run.id), run],
+        evidence,
+      });
       if (!action) return;
       const { key, ...values } = action;
       const marker = `<!-- scriptorium:action ${encode({ run: run.id, occasion: key })} -->`;

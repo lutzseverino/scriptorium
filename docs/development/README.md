@@ -160,6 +160,11 @@ sandbox removal, and real Git clones of local bare remotes, so they need Git. Th
 `test/factory.test.ts` drive it with snapshots, and `test/run-kinds.test.ts`
 drives version 3's run kinds, handoffs, trusted triggers and model resolution
 through the same entry point over placeholder providers and models.
+The host tests also drive repository quota holds through fake `/rate_limit`
+responses and Postern `rateLimited` reads: cross-repository admission,
+per-repository credentials and deadlines, no polling while held, restart
+recovery, cached pause notices, three same-attempt relaunches and permission
+refusals that still stop for the owner.
 `test/triggers.test.ts` checks machine finding citations against host launch
 provenance; platform tests verify current author roles, reporter comment
 identity and creation times, complete PR inventories, ready PRs' return to draft and installation filing
