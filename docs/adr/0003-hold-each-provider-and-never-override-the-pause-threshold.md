@@ -1,5 +1,9 @@
 # Hold each provider, and never override the pause threshold
 
+Status: its paused runs, caused only by a provider's usage, are amended by
+[ADR 0013](0013-detect-github-quota-exhaustion-in-the-host.md), which adds
+the hosting platform's quota as a cause and its own quota hold.
+
 The factory's response to a provider's usage is scoped to that provider and has
 two levels, both set in host configuration: at the drain threshold it claims no
 new issue for the provider, and at the pause threshold it also kills that

@@ -53,7 +53,8 @@ _Avoid_: Stage, phase, mode
 **Stop**:
 An issue's wait on an answer from whoever its state names (triage, its
 reporter, a grill or the owner), which releases the factory's claim and keeps
-the work and pull request until the issue is ready again.
+the work and pull request until the issue is ready again. A person answers it
+by applying the issue's next state, which replaces the stop.
 _Avoid_: Needs input, question label
 
 **Gate**:
@@ -113,14 +114,26 @@ reported reset, and never moves the pause threshold or releases a paused run.
 _Avoid_: Override, threshold bypass
 
 **Paused run**:
-A run whose agent exited on its provider's usage limit, or whose sandbox the
-factory stopped at its provider's pause threshold, which the factory labels
-paused and relaunches by itself as the same attempt once the provider's usage
-reads below every threshold, or once its deadline passes while the usage is
-unknown and no usage hold applies, instead of ending with a run outcome.
-Unlike a paused repository, which claims and launches nothing for a pass,
-a paused run is one issue's run, marked on that issue.
+A run stopped by a limit outside its work, which the factory labels paused and
+relaunches by itself as the same attempt instead of ending with a run outcome.
+Its agent exited on its provider's usage limit, or the factory stopped its
+sandbox at its provider's pause threshold, and it relaunches once the
+provider's usage reads below every threshold, or once its deadline passes while
+the usage is unknown and no usage hold applies; or it ended without finishing
+while a quota hold held its repository (cause: GitHub rate limit), and it
+relaunches when that hold ends. Unlike a paused repository, which claims and
+launches nothing for a pass, a paused run is one issue's run, marked on that
+issue.
 _Avoid_: Limited run, held run, failed run
+
+**Quota hold**:
+The factory's hold on one served repository while the hosting platform reports
+that repository's request quota exhausted, during which it claims and launches
+nothing there until the quota resets. Repositories that share one platform
+credential share its quota, so they are held together. Unlike a usage hold, it
+follows the platform rather than a provider; unlike a paused repository, it
+ends by itself.
+_Avoid_: Rate-limit pause, installation hold
 
 **Hosting platform**:
 Where a served repository's issues, labels, roles and pull requests live, such
@@ -182,6 +195,19 @@ _Avoid_: Build cache, default builder
 
 **Run outcome**:
 How a factory run ended, read from its run result first and otherwise from
-the hosting platform and the run's branch: done, awaiting merge, stopped, or
-failed.
+the hosting platform and the run's branch: done, awaiting checks, awaiting
+merge, stopped, or failed.
 _Avoid_: Result, status
+
+**Awaiting checks**:
+The run outcome of an implement run that finished with its pull request head
+pushed while that head's required checks are still pending: the factory keeps
+the claim, continues to review once they pass, and hands the pull request back
+to implement if they fail.
+_Avoid_: Check wait, pending handoff
+
+**Run clone**:
+A run's own Git directory and working tree, cloned for that run alone, in which
+its sandbox works. No other run's clone or the repository's shared clone is
+visible to it, and it lasts as long as the run's attempt.
+_Avoid_: Shared clone, worktree
