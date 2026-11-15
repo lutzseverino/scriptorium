@@ -351,7 +351,7 @@ export function createHost(
       paused: {
         cause: "GitHub rate limit",
         reset: hold.until,
-        at: hold.since,
+        at: run.exitedAt?.toISOString() ?? hold.since,
         until: hold.until,
       },
     };
@@ -1768,6 +1768,9 @@ export function createHost(
     }
     await quota.refresh();
     for (const run of runs.filter((run) => run.exited)) {
+      // Exit observation includes reading the result and finishing the log.
+      // Never classify an in-flight exit before a possible `done` is known.
+      await run.finished;
       pauseForQuota(run);
       await announceQuotaPause(run);
     }
