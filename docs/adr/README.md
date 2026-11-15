@@ -10,7 +10,8 @@ This directory records consequential decisions local to the factory.
   release stream continues here from `scriptorium-v1.0.6`.
 - [Hold each provider, and never override the pause threshold](0003-hold-each-provider-and-never-override-the-pause-threshold.md):
   the drain and pause thresholds hold only the provider that reached them, and
-  no owner action lifts the pause threshold.
+  no owner action lifts the pause threshold. Its provider-only paused runs
+  are amended by ADR 0013.
 - [Retain sandbox images the factory can prove it owns](0004-retain-sandbox-images-the-factory-can-prove-it-owns.md):
   automatic bounded retention of sandbox image pairs, and, for hosts that opt
   in, build cache isolated in the factory's own builder so only that cache is
@@ -47,3 +48,16 @@ This directory records consequential decisions local to the factory.
 - [Run Release as a run kind with the repository's release skill](0012-run-release-as-a-run-kind.md):
   the factory and a person releasing by hand follow one skill; the release
   hold label goes once releases run as this kind.
+- [Detect GitHub quota exhaustion in the host](0013-detect-github-quota-exhaustion-in-the-host.md):
+  the host reads each repository's quota at every run exit or when its
+  own read is rate-limited, holds the exhausted repositories, and relaunches
+  the run as a paused run.
+- [Give each run a private Git directory](0014-give-each-run-a-private-git-directory.md):
+  each sandbox works in its own run clone and sees no shared Git state, and
+  host Git treats a run clone as untrusted.
+- [File a run's findings from its run result](0015-file-a-runs-findings-from-its-run-result.md):
+  the host files the findings a run lists, keeping the per-kind sandbox
+  credentials narrow.
+- [Wait on pending required checks in the handoff gate](0016-wait-on-pending-required-checks-in-the-handoff-gate.md):
+  an implement run hands off a pushed head, and the host's gate waits on its
+  pending required checks.

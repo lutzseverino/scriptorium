@@ -53,7 +53,8 @@ _Avoid_: Stage, phase, mode
 **Stop**:
 An issue's wait on an answer from whoever its state names (triage, its
 reporter, a grill or the owner), which releases the factory's claim and keeps
-the work and pull request until the issue is ready again.
+the work and pull request while the answer is outstanding. A person answers it
+by applying the issue's next state or closing the issue.
 _Avoid_: Needs input, question label
 
 **Gate**:
@@ -113,14 +114,18 @@ reported reset, and never moves the pause threshold or releases a paused run.
 _Avoid_: Override, threshold bypass
 
 **Paused run**:
-A run whose agent exited on its provider's usage limit, or whose sandbox the
-factory stopped at its provider's pause threshold, which the factory labels
-paused and relaunches by itself as the same attempt once the provider's usage
-reads below every threshold, or once its deadline passes while the usage is
-unknown and no usage hold applies, instead of ending with a run outcome.
-Unlike a paused repository, which claims and launches nothing for a pass,
-a paused run is one issue's run, marked on that issue.
+A run paused by its provider's usage limit or pause threshold, or by its
+repository's quota hold (cause: GitHub rate limit), awaiting automatic relaunch
+as the same attempt instead of ending with a run outcome. Unlike a paused
+repository, a paused run belongs to one issue and is marked on that issue.
 _Avoid_: Limited run, held run, failed run
+
+**Quota hold**:
+The factory's automatic hold on claims and launches in one served repository
+whose hosting-platform quota is exhausted, lasting until the reset.
+Repositories sharing a quota are held together, unlike a usage hold's scope of
+one provider.
+_Avoid_: Rate-limit pause, installation hold
 
 **Hosting platform**:
 Where a served repository's issues, labels, roles and pull requests live, such
@@ -182,6 +187,19 @@ _Avoid_: Build cache, default builder
 
 **Run outcome**:
 How a factory run ended, read from its run result first and otherwise from
-the hosting platform and the run's branch: done, awaiting merge, stopped, or
-failed.
+the hosting platform and the run's branch: done, awaiting checks, awaiting
+merge, stopped, or failed.
 _Avoid_: Result, status
+
+**Awaiting checks**:
+The run outcome of an implement run that finished with its pull request head
+pushed while that head's required checks are still pending: the factory keeps
+the claim, continues to review once they pass, and hands the pull request back
+to implement if they fail.
+_Avoid_: Check wait, pending handoff
+
+**Run clone**:
+A run's own Git directory and working tree, cloned for that run alone, in which
+its sandbox works. No other run's clone or the repository's shared clone is
+visible to it, and it lasts as long as the run's attempt.
+_Avoid_: Shared clone, worktree
