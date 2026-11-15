@@ -58,8 +58,7 @@ test("a Codex launch runs the model and effort and mounts the login read-only in
     ],
   });
   assert.deepEqual(run.branchStrategy, {
-    type: "branch",
-    branch: request.branch,
+    type: "head",
   });
 });
 

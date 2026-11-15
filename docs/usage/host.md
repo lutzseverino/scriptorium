@@ -1015,20 +1015,21 @@ process redacted its own logs as it wrote them.
 
 The process owns everything under `stateDirectory`:
 
-| Path                                             | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status.json`                                    | The status file.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `events.jsonl`                                   | The append-only [operational event stream](#operational-events) for external delivery.                                                                                                                                                                                                                                                                                                                                                            |
-| `events-state.json`                              | The process-owned event checkpoint and pending append, including its related usage or owner policy write. Keep it with the event stream across restarts.                                                                                                                                                                                                                                                                                          |
-| `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                                                                                                                                                              |
-| `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                                                                                                                      |
-| `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                                                                                                             |
-| `usage.json`                                     | Each provider's last good usage reading with when it was read, its reset and every window the provider reported, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                     |
-| `quota.json`                                     | Each repository quota hold with its observation time and reset deadline. Held repositories make no further reads before that deadline, including after a restart.                                                                                                                                                                                                                                                                                 |
-| `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                                                                                                                  |
-| `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                     |
-| `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline, its run result as read and whether its comment and labels landed, and whether the host settled it. What the issue was told lives in its [run comment](#run-comments). |
-| `repositories/<owner>/<name>/sandboxes/`         | The private directories of runs whose agents are still running: each run's token directory, result directory and raw log.                                                                                                                                                                                                                                                                                                                         |
+| Path                                                | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status.json`                                       | The status file.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `events.jsonl`                                      | The append-only [operational event stream](#operational-events) for external delivery.                                                                                                                                                                                                                                                                                                                                                            |
+| `events-state.json`                                 | The process-owned event checkpoint and pending append, including its related usage or owner policy write. Keep it with the event stream across restarts.                                                                                                                                                                                                                                                                                          |
+| `repositories/<owner>/<name>/clone/`                | The shared clone. Each pass resets it to the remote's default branch; sandboxes never mount it.                                                                                                                                                                                                                                                                                                                                                   |
+| `repositories/<owner>/<name>/clone/.sandcastle/`    | Legacy Sandcastle linked worktrees kept after upgrade for inspection; first-launch recovery copies their work into run clones and leaves them untouched.                                                                                                                                                                                                                                                                                          |
+| `repositories/<owner>/<name>/run-clones/issue-<n>/` | The claim's private run clone, made with `git clone --no-hardlinks`, without alternates or shared objects. The sandbox works directly in this clone on `factory/issue-<n>` using Sandcastle's `head` strategy.                                                                                                                                                                                                                                    |
+| `repositories/<owner>/<name>/logs/`                 | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `usage.json`                                        | Each provider's last good usage reading with when it was read, its reset and every window the provider reported, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                     |
+| `quota.json`                                        | Each repository quota hold with its observation time and reset deadline. Held repositories make no further reads before that deadline, including after a restart.                                                                                                                                                                                                                                                                                 |
+| `owner.json`                                        | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                                                                                                                  |
+| `requests/`                                         | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                     |
+| `repositories/<owner>/<name>/runs/`                 | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline, its run result as read and whether its comment and labels landed, and whether the host settled it. What the issue was told lives in its [run comment](#run-comments). |
+| `repositories/<owner>/<name>/sandboxes/`            | The private directories of runs whose agents are still running: each run's token directory, result directory and raw log.                                                                                                                                                                                                                                                                                                                         |
 
 Scriptorium v4 reads no `repositories/<owner>/<name>/claims/` directory, which
 earlier releases kept for awaiting-merge notices and stop continuations, and an
@@ -1312,9 +1313,15 @@ the branch, its commit (`head`), and any registered worktree. This inspection
 also covers launcher errors that return no metadata. A recovery-inspection
 failure is reported; keep the clone for inspection.
 
-Committed work remains on `factory/issue-<n>`. Sandcastle preserves dirty
-worktrees, including staged, unstaged and untracked changes, and reuses them
-on retry without resetting those changes. Before each launch the host reads
+Each sandbox mounts only its run clone's working tree and Git directory.
+Temporary `git worktree add`, `remove` and `prune` operations touch that clone
+alone. Its `origin` names the upstream repository, so fetches and delivery
+never write through the shared clone.
+
+Committed work remains on `factory/issue-<n>`. The host reuses the same run
+clone on retries, paused and interrupted relaunches, and review handoffs,
+including staged, unstaged and untracked changes, without resetting them.
+Before each launch the host reads
 the preserved state again and tells the agent to continue from it and revalidate
 before publication, following the [delivery procedure](#delivery-from-the-current-default-branch).
 Continuing preserves work and existing PR, review and handoff context; it does
@@ -1323,17 +1330,36 @@ request to reconstruct the issue's changes on a current base. Recovery
 performs no push or PR creation and grants no
 readiness. Pauses and interruptions retain their existing relaunch rules.
 
-For manual recovery after a final failure, retain the repository's clone and
-`.sandcastle/` directory together. Inspect the run record and use
-`git -C <clone> worktree list --porcelain` to locate its worktree. Review the
-branch's commits and the worktree's `git status`, including its index and
-untracked files. Continue in that worktree, or let the factory reuse it after
+On the first launch after upgrading from linked worktrees, the host copies
+that issue's preserved branch, working files and staging index from the shared
+clone into its new run clone. The legacy checkout remains untouched for
+inspection; subsequent launches use only the run clone.
+
+The run clone belongs to the issue's claim. Retries, attempts, implement and
+review runs, pauses, interruptions, failures and owner stops reuse it, keeping
+committed, staged, unstaged and untracked work while the issue remains open.
+A completed claim removes its clone. Each successful host pass also removes
+retained clones whose issue is closed or no longer open (deleted or
+transferred), even after a failure or owner stop left no live run record, and
+after host restart. Removal always waits for any sandbox still running in the
+clone to exit. Failed or inconclusive platform reads keep the clone.
+
+An interrupted clone creation can leave a temporary `issue-<n>-<suffix>/`
+directory; the next launch of that claim removes it. A leftover
+`issue-<n>/` directory without its Git directory is replaced on that launch.
+Legacy `clone/.sandcastle/` worktrees stay untouched after their first-launch
+copy, so upgraded hosts retain them for inspection.
+
+For manual recovery after a final failure, retain
+`repositories/<owner>/<name>/run-clones/issue-<n>/`. Inspect the run record and
+that clone's branch commits and `git status`, including its index and
+untracked files. Continue in that clone, or let the factory reuse it after
 removing the failed label when the failure has been addressed. Revalidate the
 recovered work before delivering it. An owner-directed reconstruction follows
 the same preservation and history checks above, handing back preserved work
-when ownership is uncertain or conflicts arise. Do not remove the clone or force-remove
-the worktree while it holds work you need. A captured session is diagnostic
-context; the factory does not resume a live session or a background process.
+when ownership is uncertain or conflicts arise. Do not remove the run clone
+while it holds work you need. A captured session is diagnostic context; the
+factory does not resume a live session or a background process.
 
 ## Paused runs
 

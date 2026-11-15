@@ -957,6 +957,11 @@ function fakePlatform(
   return {
     connect,
     find,
+    remove(repository: string, number: number) {
+      state[repository] = state[repository].filter(
+        (issue) => issue.number !== number,
+      );
+    },
     refused,
     failedRemovals,
     failedRequests,
@@ -1364,6 +1369,8 @@ function host(
     state,
     configuration: resolved,
     clone: (name: string) => join(state, "repositories", name, "clone"),
+    runClone: (name: string, issue: number) =>
+      join(state, "repositories", name, "run-clones", `issue-${issue}`),
     status: () => JSON.parse(readFileSync(join(state, "status.json"), "utf8")),
   };
 }
@@ -1481,10 +1488,10 @@ test("one process launches each repository's ready issues from that repository's
     [
       {
         name: "acme/gadgets#3",
-        cwd: run.clone("acme/gadgets"),
+        cwd: run.runClone("acme/gadgets", 3),
         agent: "codex",
         prompt: "$implement #3",
-        branch: { type: "branch", branch: "factory/issue-3" },
+        branch: { type: "head" },
         log: join(
           run.state,
           "repositories/acme/gadgets/sandboxes/issue-3-*/agent.log",
@@ -1493,10 +1500,10 @@ test("one process launches each repository's ready issues from that repository's
       },
       {
         name: "acme/widgets#4",
-        cwd: run.clone("acme/widgets"),
+        cwd: run.runClone("acme/widgets", 4),
         agent: "claude-code",
         prompt: "/implement #4",
-        branch: { type: "branch", branch: "factory/issue-4" },
+        branch: { type: "head" },
         log: join(
           run.state,
           "repositories/acme/widgets/sandboxes/issue-4-*/agent.log",
@@ -1517,6 +1524,414 @@ test("one process launches each repository's ready issues from that repository's
   );
   assert.equal(record.continuation.attempt, 1);
   assert.equal(record.exited, false);
+});
+
+test("run clones isolate Git state and allow temporary worktrees", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    caps: { "claude-code": 2, codex: 1 },
+  });
+  await run.tick();
+  const [first, second] = [4, 5].map(
+    (number) =>
+      run.launched.find(
+        ({ options }) => options.name === `acme/widgets#${number}`,
+      )!.options.cwd!,
+  );
+  const shared = run.clone("acme/widgets");
+  assert.notEqual(first, shared);
+  assert.notEqual(second, shared);
+  assert.notEqual(first, second);
+  assert.equal(
+    git(first, ["branch", "--show-current"]).trim(),
+    "factory/issue-4",
+  );
+  assert.ok(fs.statSync(join(first, ".git")).isDirectory());
+  assert.equal(existsSync(join(first, ".git/objects/info/alternates")), false);
+  assert.equal(
+    git(first, ["remote", "get-url", "origin"]),
+    git(shared, ["remote", "get-url", "origin"]),
+  );
+  const snapshot = (path: string): Record<string, string> =>
+    Object.fromEntries(
+      readdirSync(path, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => [
+          join(entry.parentPath, entry.name).slice(path.length),
+          readFileSync(join(entry.parentPath, entry.name)).toString("base64"),
+        ]),
+    );
+  const before = snapshot(join(shared, ".git"));
+  const fixture = join(first, "temporary-worktree");
+  git(first, ["worktree", "add", "--quiet", "--detach", fixture]);
+  git(first, ["worktree", "remove", fixture]);
+  git(first, ["worktree", "prune", "--expire=now"]);
+  assert.equal(git(first, ["status", "--porcelain"]), "");
+  assert.equal(git(second, ["status", "--porcelain"]), "");
+  const object = git(first, ["rev-parse", "HEAD"]).trim();
+  writeFileSync(
+    join(first, ".git/objects", object.slice(0, 2), object.slice(2)),
+    "corrupted by sandbox",
+  );
+  assert.deepEqual(snapshot(join(shared, ".git")), before);
+  assert.equal(git(second, ["log", "-1", "--format=%s"]).trim(), "base");
+});
+
+test("a launch recovers temporary and Git-less run clone directories left by a crash", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  const checkout = run.runClone("acme/widgets", 4);
+  const temporary = `${checkout}-aBc123`;
+  write(temporary, { "partial.txt": "interrupted clone" });
+  write(checkout, { "partial.txt": "interrupted removal" });
+  await run.tick();
+  assert.equal(run.launched.length, 1, run.reports.join("\n"));
+  assert.equal(run.launched[0].options.cwd, checkout);
+  assert.equal(git(checkout, ["status", "--porcelain"]), "");
+  assert.equal(existsSync(temporary), false);
+});
+
+test("legacy linked-worktree recovery carries committed and dirty work into the private run clone", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  run.usage["claude-code"] = 100;
+  await run.tick();
+  const shared = run.clone("acme/widgets");
+  const legacy = join(shared, ".sandcastle/worktrees/factory-issue-4");
+  git(shared, ["worktree", "add", "--quiet", "-b", "factory/issue-4", legacy]);
+  write(legacy, {
+    "README.md": "unpushed legacy work\n",
+    ".gitignore": "ignored.txt\n",
+  });
+  fs.symlinkSync("README.md", join(legacy, "readme-link"));
+  git(legacy, ["add", "."]);
+  git(legacy, ["commit", "--quiet", "-am", "legacy implementation"]);
+  const head = git(legacy, ["rev-parse", "HEAD"]);
+  write(legacy, { "README.md": "staged legacy work\n" });
+  git(legacy, ["add", "README.md"]);
+  git(legacy, ["rm", "--quiet", ".github/workflows/old.yml"]);
+  write(legacy, {
+    "README.md": "unstaged legacy work\n",
+    "untracked.txt": "legacy untracked\n",
+    "ignored.txt": "legacy ignored\n",
+  });
+  const status = git(legacy, ["status", "--porcelain"]);
+  run.usage["claude-code"] = 12;
+  await run.tick();
+  const checkout = run.launched[0].options.cwd!;
+  assert.notEqual(checkout, legacy);
+  assert.ok(fs.statSync(join(checkout, ".git")).isDirectory());
+  for (const work of [checkout, legacy]) {
+    assert.equal(git(work, ["rev-parse", "HEAD"]), head);
+    assert.equal(git(work, ["status", "--porcelain"]), status);
+    assert.equal(
+      git(work, ["show", ":README.md"]).trim(),
+      "staged legacy work",
+    );
+    assert.equal(
+      readFileSync(join(work, "README.md"), "utf8"),
+      "unstaged legacy work\n",
+    );
+    assert.equal(
+      readFileSync(join(work, "untracked.txt"), "utf8"),
+      "legacy untracked\n",
+    );
+    assert.equal(existsSync(join(work, ".github/workflows/old.yml")), false);
+    assert.equal(
+      readFileSync(join(work, "ignored.txt"), "utf8"),
+      "legacy ignored\n",
+    );
+    assert.equal(fs.readlinkSync(join(work, "readme-link")), "README.md");
+  }
+  assert.ok(run.launched[0].options.prompt!.includes(head.trim()));
+  // Reopening after cleanup uses the published branch, not the old legacy
+  // checkout that remains available only for inspection.
+  git(checkout, ["add", "-A"]);
+  git(checkout, ["commit", "--quiet", "-m", "published migrated work"]);
+  git(checkout, ["push", "--quiet", "origin", "HEAD"]);
+  const published = git(checkout, ["rev-parse", "HEAD"]);
+  git(checkout, ["branch", "-m", "recovery/migrated-work"]);
+  run.launched[0].finish();
+  await run.drain();
+  const issue = run.github.find("acme/widgets", 4);
+  issue.state = "CLOSED";
+  await run.tick();
+  assert.equal(existsSync(checkout), false);
+  issue.state = "OPEN";
+  issue.labels = ["ready-for-agent"];
+  await run.restart().tick();
+  assert.equal(run.launched.at(-1)!.options.cwd, checkout);
+  assert.equal(git(checkout, ["rev-parse", "HEAD"]), published);
+  assert.equal(git(checkout, ["status", "--porcelain"]), "");
+  assert.equal(git(legacy, ["rev-parse", "HEAD"]), head);
+  assert.equal(git(legacy, ["status", "--porcelain"]), status);
+});
+
+for (const ending of ["paused", "interrupted"] as const)
+  test(`${ending} relaunches keep the run clone and dirty work until the claim completes`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const checkout = run.launched[0].options.cwd!;
+    write(checkout, { "README.md": "committed work\n" });
+    git(checkout, ["commit", "--quiet", "-am", "implementation"]);
+    const head = git(checkout, ["rev-parse", "HEAD"]);
+    write(checkout, { "README.md": "staged work\n" });
+    git(checkout, ["add", "README.md"]);
+    write(checkout, {
+      "README.md": "unstaged work\n",
+      "untracked.txt": "untracked\n",
+    });
+    const status = git(checkout, ["status", "--porcelain"]);
+    if (ending === "paused") {
+      endOnLimit(run.launched[0]);
+      run.launched[0].finish(new Error("usage limit"));
+      await run.drain();
+      await run.tick();
+      run.usage["claude-code"] = 12;
+    } else run.interrupt();
+    assert.ok(existsSync(checkout));
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, 2);
+    assert.equal(run.launched[1].options.cwd, checkout);
+    assert.equal(recordOf(run.state, 4, 1).continuation.attempt, 1);
+    assert.equal(git(checkout, ["rev-parse", "HEAD"]), head);
+    assert.equal(git(checkout, ["status", "--porcelain"]), status);
+    assert.equal(git(checkout, ["show", ":README.md"]).trim(), "staged work");
+    assert.equal(
+      readFileSync(join(checkout, "README.md"), "utf8"),
+      "unstaged work\n",
+    );
+    assert.equal(
+      readFileSync(join(checkout, "untracked.txt"), "utf8"),
+      "untracked\n",
+    );
+    assert.ok(run.launched[1].options.prompt!.includes(head.trim()));
+    run.launched[1].finish();
+    await restarted.drain();
+    const issue = run.github.find("acme/widgets", 4);
+    issue.state = "CLOSED";
+    await restarted.tick();
+    assert.equal(existsSync(checkout), false);
+    assert.ok(existsSync(join(run.clone("acme/widgets"), ".git")));
+  });
+
+for (const ending of ["failed", "owner-stopped"] as const)
+  for (const observation of ["closed", "absent"] as const)
+    for (const restart of [false, true])
+      test(`${ending === "failed" ? "a failed" : "an owner-stopped"} claim keeps its clone until its issue is ${observation}${restart ? " after restart" : ""}`, async (t) => {
+        const run = host(t, {
+          repositories: { "acme/widgets": [{ number: 4 }] },
+          remotes: { "acme/widgets": remote(t, factoryFiles) },
+        });
+        await run.tick();
+        const checkout = run.runClone("acme/widgets", 4);
+        write(checkout, { "untracked.txt": "recoverable work\n" });
+        const issue = run.github.find("acme/widgets", 4);
+        const result =
+          ending === "failed"
+            ? {
+                outcome: "failed",
+                body: "Implementation failed",
+                reason: "fixture failure",
+              }
+            : {
+                outcome: "stop",
+                state: "factory:needs-input",
+                body: "Owner answer needed",
+              };
+        run.launched[0].finish(undefined, undefined, result);
+        await run.drain();
+        await run.tick();
+        if (ending === "failed") {
+          run.launched[1].finish(undefined, undefined, result);
+          await run.drain();
+          await run.tick();
+        }
+        assert.ok(
+          issue.labels.includes(
+            ending === "failed" ? "factory:failed" : "factory:needs-input",
+          ),
+        );
+        assert.equal(
+          recordOf(run.state, 4, ending === "failed" ? 2 : 1).settled,
+          true,
+        );
+        const active = restart ? run.restart() : run;
+        await active.tick();
+        assert.equal(
+          readFileSync(join(checkout, "untracked.txt"), "utf8"),
+          "recoverable work\n",
+        );
+        if (observation === "closed") issue.state = "CLOSED";
+        else run.github.remove("acme/widgets", 4);
+        await active.tick();
+        assert.equal(existsSync(checkout), false);
+      });
+
+for (const ending of ["failed", "owner-stopped"] as const)
+  test(`resuming ${ending === "failed" ? "a failed" : "an owner-stopped"} claim reuses every work layer in its clone`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const checkout = run.runClone("acme/widgets", 4);
+    write(checkout, { "README.md": "committed work\n" });
+    git(checkout, ["commit", "--quiet", "-am", "implementation"]);
+    const head = git(checkout, ["rev-parse", "HEAD"]);
+    write(checkout, { "README.md": "staged work\n" });
+    git(checkout, ["add", "README.md"]);
+    write(checkout, {
+      "README.md": "unstaged work\n",
+      "untracked.txt": "untracked\n",
+    });
+    const status = git(checkout, ["status", "--porcelain"]);
+    const result =
+      ending === "failed"
+        ? {
+            outcome: "failed",
+            body: "Implementation failed",
+            reason: "fixture failure",
+          }
+        : {
+            outcome: "stop",
+            state: "factory:needs-input",
+            body: "Owner answer needed",
+          };
+    run.launched[0].finish(undefined, undefined, result);
+    await run.drain();
+    await run.tick();
+    if (ending === "failed") {
+      run.launched[1].finish(undefined, undefined, result);
+      await run.drain();
+      await run.tick();
+    }
+    const count = run.launched.length;
+    run.github.find("acme/widgets", 4).labels = ["ready-for-agent"];
+    await run.restart().tick();
+    assert.equal(run.launched.length, count + 1);
+    assert.equal(run.launched.at(-1)!.options.cwd, checkout);
+    assert.equal(git(checkout, ["rev-parse", "HEAD"]), head);
+    assert.equal(git(checkout, ["status", "--porcelain"]), status);
+    assert.equal(git(checkout, ["show", ":README.md"]).trim(), "staged work");
+    assert.equal(
+      readFileSync(join(checkout, "README.md"), "utf8"),
+      "unstaged work\n",
+    );
+    assert.equal(
+      readFileSync(join(checkout, "untracked.txt"), "utf8"),
+      "untracked\n",
+    );
+  });
+
+test("an open PR keeps its run clone when review is disabled, then closure removes it", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const pr = publishedPR(bare);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: [], branchPullRequests: [pr] },
+        { number: pr.number, isPullRequest: true, labels: [] },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const checkout = run.runClone("acme/widgets", pr.number);
+  mkdirSync(dirname(checkout), { recursive: true });
+  git(dirname(checkout), [
+    "clone",
+    "--quiet",
+    "--no-hardlinks",
+    run.clone("acme/widgets"),
+    checkout,
+  ]);
+  await run.tick();
+  assert.ok(existsSync(join(checkout, ".git")));
+  pr.state = "closed";
+  await run.tick();
+  assert.equal(existsSync(checkout), false);
+});
+
+test("an inconclusive platform read retains a closed issue's clone until a successful read", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const checkout = run.runClone("acme/widgets", 4);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "factory:needs-input",
+    body: "Owner answer needed",
+  });
+  await run.drain();
+  await run.tick();
+  run.github.find("acme/widgets", 4).state = "CLOSED";
+  const restarted = run.restart();
+  run.github.failedRequests.set(
+    "acme/widgets issues",
+    new PlatformError("unavailable", "issue inventory unavailable"),
+  );
+  await restarted.tick();
+  assert.ok(existsSync(checkout));
+  run.github.failedRequests.delete("acme/widgets issues");
+  await restarted.tick();
+  assert.equal(existsSync(checkout), false);
+});
+
+for (const observation of ["closed", "absent", "merged"] as const)
+  test(`a running clone is removed only after exit when its issue is ${observation}`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    const checkout = run.runClone("acme/widgets", 4);
+    if (observation === "closed")
+      run.github.find("acme/widgets", 4).state = "CLOSED";
+    else if (observation === "merged") {
+      const issue = run.github.find("acme/widgets", 4);
+      issue.pullRequests = [{ ...publishedPR(bare), state: "merged" }];
+      issue.state = "CLOSED";
+    } else run.github.remove("acme/widgets", 4);
+    await run.tick();
+    assert.ok(existsSync(checkout));
+    // A later pass must also respect the retired launch's pending exit.
+    await run.tick();
+    assert.ok(existsSync(checkout));
+    run.launched[0].finish();
+    await run.drain();
+    assert.equal(existsSync(checkout), false);
+  });
+
+test("a completed claim removes its clone after the merged PR closes its issue", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": bare },
+  });
+  await run.tick();
+  const checkout = run.runClone("acme/widgets", 4);
+  run.launched[0].finish();
+  await run.drain();
+  run.github.find("acme/widgets", 4).pullRequests = [
+    { ...publishedPR(bare), state: "merged" },
+  ];
+  const decisions = await run.tick();
+  assert.ok(decisions.some(({ kind }) => kind === "complete"));
+  assert.equal(run.github.find("acme/widgets", 4).state, "CLOSED");
+  assert.equal(existsSync(checkout), false);
 });
 
 test("a failed launch record leaves no sandbox or cap slot and its orphaned claim retries next pass", async (t) => {
@@ -2956,9 +3371,8 @@ test("an incomplete run records recovery identities and a retry revalidates pres
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   await run.tick();
-  const clone = run.clone("acme/widgets");
-  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  const clone = run.runClone("acme/widgets", 4);
+  const work = clone;
   write(work, {
     "committed.txt": "finished code",
     "staged.txt": "staged",
@@ -3080,7 +3494,10 @@ test("review policy files do not add policy to prompts through retries and recov
   });
   await run.tick();
   for (const name of ["acme/widgets", "acme/gadgets"]) {
-    git(run.clone(name), ["branch", "factory/issue-4"]);
+    assert.equal(
+      git(run.runClone(name, 4), ["branch", "--show-current"]).trim(),
+      "factory/issue-4",
+    );
   }
   for (const launch of run.launched) launch.finish();
   await run.drain();
@@ -3167,9 +3584,8 @@ test("an aborted launch retains dirty recovery state across restart without publ
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   await run.tick();
-  const clone = run.clone("acme/widgets");
-  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  const clone = run.runClone("acme/widgets", 4);
+  const work = clone;
   write(work, { unfinished: "retain me" });
   run.interrupt();
   run.launched[0].finish(new Error("aborted"));
@@ -3488,10 +3904,9 @@ for (const scenario of [
       remotes: { "acme/widgets": bare },
     });
     await run.tick();
-    // The agent works in Sandcastle's worktree of the clone.
-    const clone = run.clone("acme/widgets");
-    const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-    git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+    // The agent works directly in its private run clone.
+    const clone = run.runClone("acme/widgets", 4);
+    const work = clone;
     const commit = (files: Record<string, string>, message: string) => {
       write(work, files);
       git(work, ["add", "."]);
@@ -4052,7 +4467,17 @@ test("a stop signal records the running runs as interrupted and removes their sa
   // The raw log goes with the run's private directory.
   assert.equal(existsSync(dirname(rawLog(launch.options))), false);
   const interrupted = {
-    continuation: { attempt: 1 },
+    continuation: {
+      attempt: 1,
+      recovery: {
+        branch: "factory/issue-4",
+        head: git(run.runClone("acme/widgets", 4), [
+          "rev-parse",
+          "HEAD",
+        ]).trim(),
+        worktree: run.runClone("acme/widgets", 4),
+      },
+    },
     ended: { interrupted: true },
     exited: true,
     exitedAt: "2026-10-09T12:30:00.000Z",
@@ -4113,6 +4538,7 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
           log: firstLog,
         },
         relaunch: true,
+        recovery: recordOf(run.state, 4, 2).continuation.recovery,
       },
     },
   ]);
@@ -4126,8 +4552,7 @@ test("after a restart an interrupted run relaunches as the same attempt on its b
   assert.equal(relaunched.options.agent.name, "codex");
   assert.equal(relaunched.options.prompt, retried.options.prompt);
   assert.deepEqual(relaunched.options.branchStrategy, {
-    type: "branch",
-    branch: "factory/issue-4",
+    type: "head",
   });
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "ready-for-agent",
@@ -5056,9 +5481,8 @@ test("a timed-out run fails at once when its branch has unpushable commits", asy
     remotes: { "acme/widgets": remote(t, factoryFiles) },
   });
   await run.tick();
-  const clone = run.clone("acme/widgets");
-  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-  git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+  const clone = run.runClone("acme/widgets", 4);
+  const work = clone;
   write(work, { ".github/workflows/new.yml": "changed\n" });
   git(work, ["add", "."]);
   git(work, ["commit", "--quiet", "-m", "workflow change"]);
@@ -5115,9 +5539,8 @@ for (const ended of ["timed out", "orphaned"] as const)
       remotes: { "acme/widgets": remote(t, factoryFiles) },
     });
     await run.tick();
-    const clone = run.clone("acme/widgets");
-    const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-    git(clone, ["worktree", "add", "--quiet", "-b", "factory/issue-4", work]);
+    const clone = run.runClone("acme/widgets", 4);
+    const work = clone;
     write(work, { "README.md": "work to continue\n" });
     git(work, ["commit", "--quiet", "-am", "existing work"]);
     const head = git(work, ["rev-parse", "HEAD"]).trim();
@@ -5147,8 +5570,7 @@ for (const ended of ["timed out", "orphaned"] as const)
     assert.equal(run.launched.length, 3);
     assert.equal(invocation(run.launched[2].options.prompt), "/implement #4");
     assert.deepEqual(run.launched[2].options.branchStrategy, {
-      type: "branch",
-      branch: "factory/issue-4",
+      type: "head",
     });
     assert.equal(git(work, ["rev-parse", "HEAD"]).trim(), head);
     assert.equal(recordOf(run.state, 4, 1).continuation.attempt, 1);
@@ -5934,7 +6356,18 @@ for (const ended of [
           provider: "claude-code",
           model: "claude-sonnet-5-5",
           effort: "high",
-          continuation: { attempt: 1, relaunch: true },
+          continuation: {
+            attempt: 1,
+            relaunch: true,
+            recovery: {
+              branch: "factory/issue-4",
+              head: git(run.runClone("acme/widgets", 4), [
+                "rev-parse",
+                "HEAD",
+              ]).trim(),
+              worktree: run.runClone("acme/widgets", 4),
+            },
+          },
         },
       ],
     );
@@ -6319,6 +6752,7 @@ test("an overdue legacy paused record relaunches after a restart with usage stil
             ),
           },
           relaunch: true,
+          recovery: recordOf(run.state, 4, 2).continuation.recovery,
         },
       },
     ],
@@ -6328,8 +6762,7 @@ test("an overdue legacy paused record relaunches after a restart with usage stil
   const resumed = run.launched[2];
   assert.equal(resumed.options.prompt, retried.options.prompt);
   assert.deepEqual(resumed.options.branchStrategy, {
-    type: "branch",
-    branch: "factory/issue-4",
+    type: "head",
   });
   assert.equal(
     recordOf(run.state, 4, 2).log,
@@ -7335,18 +7768,10 @@ test("a merge relaunch preserves the recorded retry, dirty work, PR history and 
   const pr = publishedPR(bare);
   run.github.find("acme/widgets", 4).branchPullRequests.push(pr);
   advanceDefault(bare);
-  const clone = run.clone("acme/widgets");
+  const clone = run.runClone("acme/widgets", 4);
   git(clone, ["fetch", "--quiet", "origin", pr.headCommit]);
-  const worktree = join(clone, ".sandcastle", "preserved");
-  git(clone, [
-    "worktree",
-    "add",
-    "--quiet",
-    "-b",
-    pr.headBranch,
-    worktree,
-    pr.headCommit,
-  ]);
+  git(clone, ["reset", "--hard", pr.headCommit]);
+  const worktree = clone;
   write(worktree, { "staged.txt": "staged\n" });
   git(worktree, ["add", "staged.txt"]);
   write(worktree, {
@@ -7554,10 +7979,7 @@ for (const reason of ["conflict", "failed checks", "permission refusal"])
     await run.tick();
     const prompt = run.launched[0].options.prompt!;
     assert.match(prompt, /owner handoff/);
-    const clone = run.clone("acme/widgets");
-    git(clone, ["branch", pr.headBranch, pr.headCommit]);
-    const worktree = join(clone, ".sandcastle", "handoff");
-    git(clone, ["worktree", "add", "--quiet", worktree, pr.headBranch]);
+    const worktree = run.runClone("acme/widgets", 4);
     write(worktree, { "unfinished.txt": `${reason}\n` });
     const issue = run.github.find("acme/widgets", 4);
     // The fake agent records the prescribed handoff. This tests host settlement,
@@ -7732,17 +8154,9 @@ test("an ended run resumes its PR with committed and dirty work and retains PR h
     remotes: { "acme/widgets": bare },
   });
   await run.tick();
-  const clone = run.clone("acme/widgets");
-  const work = join(clone, ".sandcastle/worktrees/factory-issue-4");
-  git(clone, [
-    "worktree",
-    "add",
-    "--quiet",
-    "-b",
-    "factory/issue-4",
-    work,
-    "origin/factory/issue-4",
-  ]);
+  const clone = run.runClone("acme/widgets", 4);
+  const work = clone;
+  git(work, ["reset", "--hard", "origin/factory/issue-4"]);
   write(work, { "committed.txt": "local commit\n" });
   git(work, ["add", "."]);
   git(work, ["commit", "--quiet", "-m", "preserved work"]);
@@ -11131,11 +11545,21 @@ for (const legacy of [false, true])
     });
     const fresh = launchesOf(await run.tick())[0];
     assert.deepEqual(fresh.continuation, { attempt: 1 });
-    assert.deepEqual(
-      recordOf(run.state, 4, 1).continuation,
-      fresh.continuation,
+    assert.deepEqual(recordOf(run.state, 4, 1).continuation, {
+      ...fresh.continuation,
+      recovery: {
+        branch: "factory/issue-4",
+        head: git(run.runClone("acme/widgets", 4), [
+          "rev-parse",
+          "HEAD",
+        ]).trim(),
+        worktree: run.runClone("acme/widgets", 4),
+      },
+    });
+    assert.equal(
+      git(run.runClone("acme/widgets", 4), ["branch", "--show-current"]).trim(),
+      "factory/issue-4",
     );
-    git(run.clone("acme/widgets"), ["branch", "factory/issue-4"]);
     writeFileSync(
       rawLog(run.launched[0].options),
       "host-read retry evidence\n",

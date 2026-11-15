@@ -207,9 +207,10 @@ to implement if they fail.
 _Avoid_: Check wait, pending handoff
 
 **Run clone**:
-A run's own Git directory and working tree, cloned for that run alone, in which
-its sandbox works. No other run's clone or the repository's shared clone is
-visible to it, and it lasts as long as the run's attempt.
+A claim's own Git directory and working tree, isolated from other claims and
+the repository's shared clone. It lasts across retries, run kinds, pauses,
+interruptions, failures and owner stops until the claim completes or its issue
+is closed or no longer open.
 _Avoid_: Shared clone, worktree
 
 **Credential health**:
