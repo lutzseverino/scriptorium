@@ -33,8 +33,9 @@ import {
 import type { PullRequestState } from "./run-ending.ts";
 import {
   contractResultHold,
+  missingReadinessHold,
   triageBacked,
-  type ContractFacts,
+  type ContractReadinessFacts,
   bodyContractFacts,
 } from "./contract-result.ts";
 import {
@@ -162,10 +163,12 @@ export function repositoryPlatform(
   // comments when they could be read.
   async function readContractResult(
     number: number,
-    facts: Omit<ContractFacts, "comments" | "latestDeletion">,
+    facts: Omit<ContractReadinessFacts, "comments" | "latestDeletion">,
+    now: Date,
   ): Promise<{
     hold: ReadinessHold | null;
     triage: boolean;
+    missingReady?: boolean;
     comments?: Comment[];
   }> {
     try {
@@ -192,9 +195,16 @@ export function repositoryPlatform(
         latestDeletion,
         ...(sourceFacts && { body: sourceFacts }),
       };
+      const missing = missingReadinessHold(all, configuration, now);
       return {
-        hold: contractResultHold(all, configuration),
-        triage: triageBacked(all, configuration),
+        missingReady: missing !== null,
+        hold:
+          missing ??
+          (facts.ready ? contractResultHold(all, configuration) : null),
+        triage:
+          missing === null &&
+          all.ready !== null &&
+          triageBacked({ ...all, ready: all.ready }, configuration),
         comments,
       };
     } catch (error) {
@@ -204,10 +214,12 @@ export function repositoryPlatform(
       )
         throw error;
       return {
-        hold: {
-          reason: `waits: the issue-contract validator's result or trusted history/mode could not be read this pass; restore access and retry${error instanceof ContractPublicationHold ? `: ${error.message}` : ""}`,
-          waiting: true,
-        },
+        hold: facts.ready
+          ? {
+              reason: `waits: the issue-contract validator's result or trusted history/mode could not be read this pass; restore access and retry${error instanceof ContractPublicationHold ? `: ${error.message}` : ""}`,
+              waiting: true,
+            }
+          : null,
         triage: false,
       };
     }
@@ -658,7 +670,7 @@ export function repositoryPlatform(
     // The repository's open issues. The role of each ready label's latest
     // actor is read once per account per call, which a pass makes once. A
     // time the platform doesn't offer is null, never invented.
-    async readIssues(): Promise<OpenIssue[]> {
+    async readIssues(now = new Date()): Promise<OpenIssue[]> {
       const { capabilities } = issueTracker;
       const actor = actorLookup();
       const issues: OpenIssue[] = [];
@@ -679,7 +691,7 @@ export function repositoryPlatform(
                 (change) => change.action === "added" && change.label === label,
               )
             : undefined;
-        const ready = latest(labels.ready);
+        let ready = latest(labels.ready);
         const triage = latest(labels.triage);
         const reporter = latest(labels.reporter);
         const carried = labels.carried
@@ -706,16 +718,23 @@ export function repositoryPlatform(
             .map((comment) => comment.createdAt)
             .sort()
             .at(-1) ?? null;
-        const readyActor = ready && (await actor(ready.actor));
-        const contract = ready
-          ? await readContractResult(issue.number, {
-              ready,
-              labelChanges: changes,
-              bodyEditTime: capabilities.bodyEditTime
-                ? issue.bodyEditTime
-                : undefined,
-            })
+        const contract = issue.labels.includes(labels.ready)
+          ? await readContractResult(
+              issue.number,
+              {
+                ready: ready ?? null,
+                labelChanges: changes,
+                bodyEditTime: capabilities.bodyEditTime
+                  ? issue.bodyEditTime
+                  : undefined,
+              },
+              now,
+            )
           : null;
+        // An older application cannot authorize while the approved re-add is
+        // missing. Its actor and parent timings do not describe that event.
+        if (contract?.missingReady) ready = undefined;
+        const readyActor = ready && (await actor(ready.actor));
         issues.push({
           number: issue.number,
           title: issue.title,

@@ -399,6 +399,85 @@ test("a failed role lookup holds the issue for that pass only", () => {
   ]);
 });
 
+test("a validator-approved missing ready event keeps retries and parent release waiting without a hold", () => {
+  const contractHold = {
+    reason:
+      "waits: the validator approved event `42`, but the factory's read of the issue's events doesn't show it yet",
+    waiting: true,
+  };
+  const missing = { ready: null, contractHold };
+  for (const input of [
+    { issues: [issue(4, undefined, missing)] },
+    { issues: [issue(4, claimed, missing)], runs: [run(4, { ended: none })] },
+    { issues: [parent(released, missing), ...tickets()] },
+  ]) {
+    const decisions = decide(input);
+    assert.deepEqual(launches(decisions), []);
+    assert.ok(decisions.some((decision) => decision.kind === "skip"));
+    assert.ok(
+      decisions.every(
+        (decision) => decision.kind !== "fail" && decision.kind !== "release",
+      ),
+    );
+    assert.ok(
+      decisions.every(
+        (decision) => decision.kind !== "skip" || decision.hold === undefined,
+      ),
+    );
+  }
+  const resumed = decide({
+    issues: [issue(4, claimed)],
+    runs: [run(4, { ended: none })],
+  });
+  assert.equal(launches(resumed)[0]?.continuation.attempt, 2);
+});
+
+test("a missing approved re-add keeps the retry until the event arrives or the backstop holds it", () => {
+  // The platform hides the older ready event while the approved re-add is absent.
+  const waiting = issue(4, claimed, {
+    ready: null,
+    contractHold: {
+      reason:
+        "waits: the validator approved event `44`, but the factory's read of the issue's events doesn't show it yet",
+      waiting: true,
+    },
+  });
+  const runs = [run(4, { ended: none })];
+  const decisions = decide({ issues: [waiting], runs });
+  assert.deepEqual(launches(decisions), []);
+  assert.ok(decisions.some((decision) => decision.kind === "skip"));
+  assert.ok(
+    decisions.every(
+      (decision) =>
+        decision.kind !== "fail" &&
+        (decision.kind !== "skip" || decision.hold === undefined),
+    ),
+  );
+  const held = decide({
+    issues: [
+      {
+        ...waiting,
+        contractHold: {
+          reason:
+            "is held: the validator approved event `44`, but the factory's read of the issue's events doesn't show it after 60 minutes; check the platform's event history before re-applying readiness",
+          waiting: false,
+        },
+      },
+    ],
+    runs,
+  });
+  assert.ok(
+    held.some(
+      (decision) =>
+        decision.kind === "fail" &&
+        /retry did not launch:.*is held/.test(decision.failure),
+    ),
+  );
+
+  const caughtUp = decide({ issues: [issue(4, claimed)], runs });
+  assert.equal(launches(caughtUp)[0]?.continuation.attempt, 2);
+});
+
 // Whether a body edit cancels a running issue's readiness is the validator's
 // decision, which reaches the core as its contract hold.
 test("a body edit after readiness leaves the decision to the contract result", () => {

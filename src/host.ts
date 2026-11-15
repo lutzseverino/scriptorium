@@ -536,7 +536,7 @@ export function createHost(
       record(run);
     }
     try {
-      const open = await platform.readIssues();
+      const open = await platform.readIssues(ports.now());
       const owner =
         pass.configuration.version === 3
           ? pass.configuration.labels.owner

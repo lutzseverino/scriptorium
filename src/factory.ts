@@ -86,6 +86,8 @@ export type Issue = {
   editedAt: string | null;
   // Why the issue-contract validator's posted result doesn't approve the
   // current readiness, or null when it does or the issue isn't ready.
+  // With no ready event, only a verified approval's bounded wait/hold is
+  // projected here; otherwise readiness uses its ordinary missing-event refusal.
   contractHold: ReadinessHold | null;
   // Its parent, or null when it has none.
   nativeParent: IssueId | null;

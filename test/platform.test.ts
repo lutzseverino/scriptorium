@@ -157,11 +157,15 @@ async function resultIssues(
     events = [],
     deletion = null,
     role = "admin",
+    missingReady = false,
+    now = new Date(),
   }: {
     details?: Readonly<Record<string, unknown>>;
     events?: readonly unknown[];
     deletion?: string | null | number;
     role?: string;
+    missingReady?: boolean;
+    now?: Date;
   } = {},
 ) {
   const { connection } = github((request) => {
@@ -206,7 +210,9 @@ async function resultIssues(
         status: 200,
         data: [
           labeled(40, user("owner"), "2026-10-01T00:00:00Z", "bug"),
-          labeled(42, user("owner"), "2026-10-05T00:00:00Z"),
+          ...(!missingReady
+            ? [labeled(42, user("owner"), "2026-10-05T00:00:00Z")]
+            : []),
           ...events,
         ],
       };
@@ -220,7 +226,7 @@ async function resultIssues(
         ? { status: comments, data: { message: "Comments unavailable" } }
         : { status: 200, data: comments.map(restComment) };
   });
-  return repositoryPlatform(connection, configuration).readIssues();
+  return repositoryPlatform(connection, configuration).readIssues(now);
 }
 
 const policy = {
@@ -244,6 +250,223 @@ function assertHold(
   assert.match(actual.reason, expected.reason, message);
   assert.equal(actual.waiting, expected.waiting, message);
 }
+
+test("a missing ready event approved by the validator waits silently until the backstop", async () => {
+  for (const [now, waiting] of [
+    ["2026-10-05T00:00:01Z", true],
+    ["2026-10-05T01:00:00Z", true],
+    ["2026-10-05T01:00:01Z", false],
+    ["2026-10-05T02:00:01Z", false],
+  ] as const) {
+    const issues = await resultIssues([briefComment, resultComment()], {
+      missingReady: true,
+      now: new Date(now),
+    });
+    assert.equal(issues[0].ready, null);
+    const hold = readinessExclusion(issues[0], issues, policy);
+    assert.ok(hold);
+    assert.equal(hold.waiting, waiting);
+    assert.equal(hold.key, waiting ? undefined : holdKeys.readiness);
+    assert.equal(
+      hold.reason,
+      waiting
+        ? "its readiness waits: the validator approved event `42`, but the factory's read of the issue's events doesn't show it yet"
+        : "its readiness is held: the validator approved event `42`, but the factory's read of the issue's events doesn't show it after 60 minutes; check the platform's event history before re-applying readiness",
+    );
+  }
+});
+
+test("a validator-approved re-add missing from the read waits despite an older ready event", async () => {
+  const comments = [
+    briefComment,
+    resultComment(resultState({ reviewEventId: "44" })),
+  ];
+  const removal = {
+    ...labeled(
+      43,
+      { login: "github-actions[bot]", type: "Bot" },
+      "2026-10-05T00:00:00Z",
+    ),
+    event: "unlabeled",
+  };
+  for (const [now, waiting] of [
+    ["2026-10-05T00:10:00Z", true],
+    ["2026-10-05T01:00:01Z", false],
+  ] as const) {
+    const issues = await resultIssues(comments, {
+      events: [removal],
+      role: "read",
+      now: new Date(now),
+    });
+    assert.equal(issues[0].ready, null);
+    const hold = readinessExclusion(issues[0], issues, policy);
+    assert.ok(hold);
+    assert.equal(hold.waiting, waiting);
+    assert.equal(hold.key, waiting ? undefined : holdKeys.readiness);
+    assert.equal(
+      hold.reason,
+      waiting
+        ? "its readiness waits: the validator approved event `44`, but the factory's read of the issue's events doesn't show it yet"
+        : "its readiness is held: the validator approved event `44`, but the factory's read of the issue's events doesn't show it after 60 minutes; check the platform's event history before re-applying readiness",
+    );
+  }
+  const caughtUp = [
+    removal,
+    labeled(44, user("owner"), "2026-10-05T00:00:00Z"),
+  ];
+  for (const role of ["read", "admin"]) {
+    const issues = await resultIssues(comments, {
+      events: caughtUp,
+      role,
+      now: new Date("2026-10-05T00:10:00Z"),
+    });
+    assert.ok(issues[0].ready);
+    assert.equal(issues[0].contractHold, null);
+    const hold = readinessExclusion(issues[0], issues, policy);
+    if (role === "admin") assert.equal(hold, null);
+    else {
+      assert.ok(hold);
+      assert.equal(hold.waiting, false);
+      assert.match(hold.reason, /role read is not authorized/);
+    }
+  }
+});
+
+test("a missing ready event without a current authenticated approval keeps the ordinary refusal", async () => {
+  const now = new Date("2026-10-05T00:30:00Z");
+  for (const [name, comments, options] of [
+    ["no result", [], {}],
+    ["unreadable comments", 502, {}],
+    ["unreadable history", [briefComment, resultComment()], { deletion: 502 }],
+    [
+      "untrusted author",
+      [
+        briefComment,
+        resultComment(resultState(), {
+          author: { login: "other[bot]", bot: true },
+        }),
+      ],
+      {},
+    ],
+    [
+      "unknown format",
+      [briefComment, resultComment(resultState({ format: "unknown" }))],
+      {},
+    ],
+    [
+      "no approved event",
+      [briefComment, resultComment(resultState({ reviewEventId: null }))],
+      {},
+    ],
+    [
+      "empty approved event",
+      [briefComment, resultComment(resultState({ reviewEventId: "" }))],
+      {},
+    ],
+    [
+      "wrong label",
+      [briefComment, resultComment(resultState({ label: "other" }))],
+      {},
+    ],
+    [
+      "latest result disapproves",
+      [
+        briefComment,
+        resultComment(),
+        resultComment(resultState({ status: "needs-attention" }), { id: 12 }),
+      ],
+      {},
+    ],
+    [
+      "new discussion",
+      [
+        briefComment,
+        resultComment(),
+        { ...briefComment, id: 12, updatedAt: "2026-10-05T00:10:00Z" },
+      ],
+      {},
+    ],
+    [
+      "body changed",
+      [briefComment, resultComment()],
+      { details: { lastEditedAt: "2026-10-05T00:10:00Z" } },
+    ],
+    [
+      "comment deleted",
+      [briefComment, resultComment()],
+      { deletion: "2026-10-05T00:10:00Z" },
+    ],
+    ["source missing", [resultComment()], {}],
+    [
+      "source edited",
+      [{ ...briefComment, updatedAt: "2026-10-03T00:00:00Z" }, resultComment()],
+      {},
+    ],
+    [
+      "unreadable source",
+      [briefComment, resultComment(resultState({ source: null }))],
+      {},
+    ],
+  ] as const) {
+    const issues = await resultIssues(
+      typeof comments === "number" ? comments : [...comments],
+      {
+        ...options,
+        missingReady: true,
+        now,
+      },
+    );
+    assert.equal(issues[0].contractHold, null, name);
+    assert.deepEqual(
+      readinessExclusion(issues[0], issues, policy),
+      {
+        reason:
+          "its readiness is refused: no event applying ready-for-agent was found; remove and re-apply ready-for-agent",
+        waiting: false,
+        key: holdKeys.readiness,
+      },
+      name,
+    );
+  }
+});
+
+test("a lagging parent read waits without holding its sub-issues", async () => {
+  for (const [now, waiting] of [
+    ["2026-10-05T00:30:00Z", true],
+    ["2026-10-05T01:00:01Z", false],
+  ] as const) {
+    for (const events of [
+      [],
+      [labeled(41, user("owner"), "2026-10-04T00:00:00Z")],
+    ]) {
+      const [parent] = await resultIssues([briefComment, resultComment()], {
+        missingReady: true,
+        events,
+        now: new Date(now),
+      });
+      parent.subIssues = [{ number: 2, state: "open" }];
+      const child = {
+        ...parent,
+        number: 2,
+        nativeParent: 1,
+        subIssues: [],
+        contractHold: null,
+        ready: {
+          at: "2026-10-05T00:00:00Z",
+          actor: { kind: "user" as const, login: "owner", role: "admin" },
+        },
+      };
+      const hold = readinessExclusion(child, [parent, child], policy);
+      assert.ok(hold);
+      assert.equal(hold.waiting, waiting);
+      assert.equal(hold.key, waiting ? undefined : holdKeys.parentReadiness);
+      assert.match(
+        hold.reason,
+        /^sub-issue of #1, whose readiness (waits|is held): the validator approved event `42`/,
+      );
+    }
+  }
+});
 
 test("a current result approving the ready-label event lets readiness count, for a Brief or an issue body", async () => {
   const issues = await resultIssues([briefComment, resultComment()]);
@@ -382,15 +605,21 @@ test("a current result that does not approve the ready-label event holds with a 
     { status: "needs-attention" },
     { status: "no-contract" },
     { label: "ready-for-human" },
-    { reviewEventId: "43" },
+    { reviewEventId: "40" },
     { reviewEventId: 42 },
-    { reviewEventId: "opened:1" },
   ])
     assertHold(
       await held([briefComment, resultComment(resultState(fields))]),
       refused(/does not approve the current ready-for-agent event/),
       JSON.stringify(fields),
     );
+  // An approval of a visible older application is not evidence of a missing re-add.
+  assertHold(
+    await held([briefComment, resultComment()], {
+      events: [labeled(43, user("owner"), "2026-10-05T00:00:00Z")],
+    }),
+    refused(/does not approve the current ready-for-agent event/),
+  );
   // The latest marked comment by the author is the result, not an earlier
   // approval.
   assertHold(
@@ -839,6 +1068,7 @@ test("open issues reach the core with their readiness, links and times, and with
     const commented =
       /^GET \/repos\/acme\/widgets\/issues\/(\d+)\/comments$/.exec(request);
     if (commented) {
+      if (commented[1] === "9") return { status: 200, data: [] };
       const [eventId, editedAt] = (
         {
           1: [3, "2026-10-02T00:00:00Z"],
@@ -988,9 +1218,9 @@ test("open issues reach the core with their readiness, links and times, and with
     requests.filter((request) => request !== "PosternIssues"),
     [
       "GET /repos/acme/widgets/issues/1/events",
-      "GET /repos/acme/widgets/collaborators/owner/permission",
       "GET /repos/acme/widgets/issues/1/comments",
       "FactoryCommentDeletions",
+      "GET /repos/acme/widgets/collaborators/owner/permission",
       "PosternSubIssueLinkAdditions",
       "GET /repos/acme/widgets/collaborators/casey/permission",
       "GET /repos/acme/widgets/collaborators/morgan/permission",
@@ -1007,6 +1237,8 @@ test("open issues reach the core with their readiness, links and times, and with
       "GET /repos/acme/widgets/issues/8/comments",
       "FactoryCommentDeletions",
       "GET /repos/acme/widgets/issues/9/events",
+      "GET /repos/acme/widgets/issues/9/comments",
+      "FactoryCommentDeletions",
     ],
   );
 });
