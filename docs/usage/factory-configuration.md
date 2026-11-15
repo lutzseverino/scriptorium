@@ -87,8 +87,8 @@ malformed values are invalid.
 ```
 
 Implement alone is the minimum, and behaves as a version 2 repository's one
-run does, with the state labels below in place of `needsInput`. Repo Canon's
-factory profile ships every run kind and label role:
+run does, with the state labels below in place of `needsInput`. This example
+names every run kind and label role, including the optional carried state:
 
 ```json
 {
@@ -99,6 +99,7 @@ factory profile ships every run kind and label role:
     "reporter": "state:reporter",
     "grill": "state:grill",
     "owner": "state:owner",
+    "carried": "state:carried",
     "ready": "state:ready",
     "ownerReview": "gate:owner-review",
     "majorRelease": "gate:major-release",
@@ -228,19 +229,28 @@ checks:
 - **A hand-back** starts implement on the same PR when a review ends with its
   PR still a draft, at most twice; a review that would hand back a third time
   fails the issue.
-- **A stop**: a run whose result stops in the reporter, grill or owner state,
-  or that ends with the issue in the triage, reporter, grill or owner state,
+- **A stop**: a run whose result stops in the reporter, grill, owner or carried state,
+  or that ends with the issue in the triage, reporter, grill, owner or carried state,
   releases its claim and leaves the issue there. Returning the
   issue to `labels.ready` resumes the same work and PR on a current base, with
   the same guidance version 2 gives a needs-input resume. A review that
   stopped with its PR marked ready resumes as review.
+- **Carried**: `labels.carried` is an optional stop for a request whose fate
+  another record or ticket settles: a change already on the default branch,
+  a duplicate, the ticket whose pull request closes it, or a past rejection
+  it adds nothing to. A triage result asks for that configured label with
+  `outcome: "stop"` and cites the carrier in its `body`. The run comment keeps
+  that citation, mentions nobody and posts no action comment. The issue is
+  excluded as "carried by another record or ticket" and is never claimed.
+  Removing the carried label starts nothing; a new trusted trigger is needed.
 - **A gate**: with a gate label on the issue or its PR, review stops at
   ready-to-merge and moves the issue to the owner state. Once no gate label
   remains on either, the factory claims the issue again and restarts review to
   merge, without waiting for the ready state. An unreadable gate read keeps it
   waiting.
 
-Version 3 has no needs-input label: the state labels name who must act.
+Version 3 has no needs-input label: state labels name who must act, or that
+another record carries the request's fate.
 
 ### Run results
 
@@ -274,6 +284,7 @@ writes it, what it excludes and how the factory's transitions change it.
 | Role                                            | Versions | Writer                                       | Meaning                                                               |
 | ----------------------------------------------- | -------- | -------------------------------------------- | --------------------------------------------------------------------- |
 | `triage`, `reporter`, `grill`, `owner`          | 3        | People and runs                              | Stops: the issue waits on triage, its reporter, a grill or the owner. |
+| `carried`                                       | 3        | People and runs                              | A quiet stop: another record or ticket carries the request's fate.    |
 | `ready`                                         | 2, 3     | People, or the factory's triage run          | Accepted readiness; the issue-contract validator decides its changes. |
 | `ownerReview`, `majorRelease`                   | 3        | The owner                                    | Gates that stop review at ready-to-merge.                             |
 | `running` (`0052cc`)                            | 2, 3     | The factory                                  | A run holds the issue.                                                |

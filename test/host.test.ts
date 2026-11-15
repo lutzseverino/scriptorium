@@ -8873,6 +8873,56 @@ test("trusted author openings are consumed durably and outsider text never launc
   );
 });
 
+test("a carried triage result cites its carrier quietly and removing its label starts nothing", async (t) => {
+  const carried = "settled-elsewhere";
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: ["state:triage"] }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify({
+          ...kindsConventions,
+          labels: { ...kindsConventions.labels, carried },
+        }),
+      }),
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1, run.reports.join("\n"));
+  assert.equal(invocation(run.launched[0].options.prompt), "/triage #4");
+  const body = "Carried by https://github.com/acme/widgets/issues/3.";
+  assert.match(
+    run.launched[0].options.prompt!,
+    /Use "settled-elsewhere" when another record or ticket carries the request's fate; cite that carrier in "body"/,
+  );
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: carried,
+    body,
+  });
+  await run.drain();
+  assert.deepEqual(nonSkips(await run.tick()), [
+    { kind: "release", repository: "acme/widgets", issue: 4 },
+  ]);
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, [carried]);
+  assert.ok(runComment(issue).includes(body));
+  assert.match(runComment(issue), /^\*\*Factory run: carried\*\*/);
+  assert.deepEqual(actions(issue), []);
+  for (const comment of issue.comments)
+    assert.doesNotMatch(comment, /@(?:owner|outsider|factory)\b/);
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const restarted = run.restart();
+  await restarted.tick();
+  issue.labels = [];
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  assert.deepEqual(issue.labels, []);
+});
+
 test("only a new reporter author reply starts triage after a restart", async (t) => {
   const comment = (id: number, login: string, at: string): Comment => ({
     id,

@@ -14,7 +14,7 @@ import { sameLogin } from "./contract-protocol.ts";
 
 export type RunResult = {
   outcome: "done" | "stop" | "failed";
-  // Triage's readiness when it is done, or whoever must answer a stop.
+  // Triage's readiness when it is done, or the state of a stop.
   state?: string;
   // Other labels, from the families the kind may request.
   labels?: string[];
@@ -325,7 +325,12 @@ export function resultGuidance(
       : []),
     ...(stops.length
       ? [
-          `A stop asks for "state", the label of whoever must answer: ${stops.join(", ")}.`,
+          `A stop asks for "state", ${configuration.labels.carried ? "a configured stop label" : "the label of whoever must answer"}: ${stops.join(", ")}.`,
+        ]
+      : []),
+    ...(configuration.labels.carried
+      ? [
+          `Use ${JSON.stringify(configuration.labels.carried)} when another record or ticket carries the request's fate; cite that carrier in "body". This stop asks nobody for an answer.`,
         ]
       : []),
     families.length

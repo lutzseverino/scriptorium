@@ -1596,7 +1596,10 @@ export function createHost(
               issue,
               {
                 phase: previous ? phaseOf(previous) : "implement",
-                facts: { state: "stopped", reason: `waits in \`${stop}\`` },
+                facts: {
+                  state: stop === labels.carried ? "carried" : "stopped",
+                  reason: `waits in \`${stop}\``,
+                },
                 resume: {
                   ...(since && { since }),
                   pullRequests: observation.pullRequests,

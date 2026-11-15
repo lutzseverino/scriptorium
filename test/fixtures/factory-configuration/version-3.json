@@ -5,6 +5,7 @@
     "reporter": "state:reporter",
     "grill": "state:grill",
     "owner": "state:owner",
+    "carried": "state:carried",
     "ready": "state:ready",
     "ownerReview": "gate:owner-review",
     "majorRelease": "gate:major-release",

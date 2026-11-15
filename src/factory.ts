@@ -1063,7 +1063,11 @@ function continuationExclusions(
           "no new trusted triage trigger"));
     if (reason) return skipped(next, reason);
   } else {
-    if (!issue.labels.includes(labels.ready))
+    // A carried issue reports its disposition even without readiness.
+    if (
+      !issue.labels.includes(labels.ready) &&
+      !(labels.carried && issue.labels.includes(labels.carried))
+    )
       return next.kind === "retry"
         ? [unretried(next.retry, `it no longer carries ${labels.ready}`)]
         : [];
