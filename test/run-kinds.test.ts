@@ -18,6 +18,7 @@ import type { ModelPolicy } from "../src/model-policy.ts";
 import type { MergeRelaunch } from "../src/platform.ts";
 import type { Actor } from "../src/readiness.ts";
 import { createRegistry } from "../src/providers.ts";
+import { fresh } from "../src/usage.ts";
 
 // Run kinds through the decision core, on a version 3 configuration and a
 // host whose capabilities are placeholder providers and models.
@@ -38,6 +39,7 @@ const capabilities = [
 // The host's resolver over those capabilities; a model outside them is an
 // error, as an unconfigured provider or a model outside `models.allowed` is.
 const models: Models = {
+  modelFacts: { effort: "medium", defaults: {}, catalog: [] },
   resolveModel(value) {
     const [name, effort = "medium"] = value.split("@");
     if (!capabilities.includes(name))
@@ -181,6 +183,8 @@ function decide({
   details = {},
   repositories,
   usage = {},
+  owners = {},
+  holds = {},
   resolver = models,
 }: {
   issues?: Issue[];
@@ -192,6 +196,8 @@ function decide({
   details?: Partial<Repository>;
   repositories?: Repository[];
   usage?: Snapshot["usage"];
+  owners?: Snapshot["owners"];
+  holds?: Snapshot["holds"];
   resolver?: Models;
 } = {}): Decision[] {
   const snapshot: Snapshot = {
@@ -210,8 +216,8 @@ function decide({
     ],
     runs,
     usage,
-    holds: {},
-    owners: {},
+    holds,
+    owners,
     settings: {
       defaultModel: "provider-a/model-impl",
       retryModel: "provider-b/model-retry",
@@ -236,6 +242,411 @@ function skipOf(decisions: Decision[]) {
   const skip = decisions.find((decision) => decision.kind === "skip");
   return skip?.kind === "skip" ? skip : undefined;
 }
+
+const pairSettings: Partial<Settings> = {
+  defaultModel: "gpt-narrow",
+  retryModel: "gpt-narrow",
+  reviewModel: "gpt-narrow",
+  triageModel: "gpt-narrow",
+  caps: { codex: 2, "claude-code": 2 },
+};
+
+function pairRegistry() {
+  return createRegistry(
+    {
+      codex: { credential: "/unused" },
+      "claude-code": { credential: "/unused" },
+    },
+    {
+      effort: "medium",
+      metadata: {
+        "gpt-narrow": { narrowerThan: ["claude-code/claude-broad"] },
+        "claude-broad": { effort: "high" },
+      },
+    },
+  );
+}
+
+// Half the week has elapsed at `now`, independently of either provider's use.
+function weekly(used: number) {
+  const reset = "2026-10-13T00:00:00Z";
+  return { used, at: now, reset, windows: [{ used, reset, minutes: 10080 }] };
+}
+
+test("spare usage stands in a broader model and resolves that model's effort", () => {
+  const launch = launchOf(
+    decide({
+      issues: [issue(4, [labels.ready, "model:gpt-narrow@low"])],
+      resolver: pairRegistry(),
+      settings: pairSettings,
+      usage: { codex: weekly(20), "claude-code": weekly(30) },
+    }),
+  );
+  assert.deepEqual(launch, {
+    kind: "launch",
+    ...at,
+    provider: "claude-code",
+    model: "claude-broad",
+    effort: "high",
+    selection: "stand-in",
+    standIn: {
+      chosen: "codex/gpt-narrow",
+      reason: { kind: "spare usage", used: 30, elapsed: 50 },
+    },
+    continuation: { attempt: 1 },
+  });
+});
+
+test("an unavailable chosen provider can use a fresh broader provider over pace but below drain", () => {
+  const launch = launchOf(
+    decide({
+      resolver: pairRegistry(),
+      settings: pairSettings,
+      usage: { codex: weekly(85), "claude-code": weekly(60) },
+    }),
+  );
+  assert.equal(launch?.model, "claude-broad");
+  assert.equal(launch?.selection, "stand-in");
+  assert.deepEqual(launch?.standIn, {
+    chosen: "codex/gpt-narrow",
+    reason: {
+      kind: "chosen provider cannot launch",
+      reason: "codex usage 85% is at or above the 80% drain threshold",
+    },
+  });
+});
+
+test("stand-ins respect pace, freshness, caps and every existing hold", () => {
+  const base = { resolver: pairRegistry(), settings: pairSettings };
+  // Case B: the narrower provider is over pace, but can still launch.
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        usage: { codex: weekly(65), "claude-code": weekly(30) },
+      }),
+    )?.selection,
+    "stand-in",
+  );
+  for (const broader of [
+    weekly(50),
+    weekly(60),
+    null,
+    fresh({ ...weekly(30), at: "2026-10-09T11:00:00Z" }, new Date(now)),
+  ])
+    assert.equal(
+      launchOf(
+        decide({
+          ...base,
+          usage: { codex: weekly(20), "claude-code": broader },
+        }),
+      )?.model,
+      "gpt-narrow",
+    );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        settings: { ...pairSettings, caps: { codex: 2, "claude-code": 0 } },
+        usage: { "claude-code": weekly(30) },
+      }),
+    )?.model,
+    "gpt-narrow",
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        settings: { ...pairSettings, caps: { codex: 0, "claude-code": 0 } },
+        usage: { "claude-code": weekly(30) },
+      }),
+    ),
+    undefined,
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        usage: { "claude-code": weekly(80) },
+        settings: { ...pairSettings, caps: { codex: 0, "claude-code": 2 } },
+      }),
+    ),
+    undefined,
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        usage: { "claude-code": weekly(30) },
+        owners: {
+          "claude-code": { hold: { since: now, used: 85 }, reserve: null },
+        },
+      }),
+    )?.model,
+    "gpt-narrow",
+  );
+  for (const details of [
+    { settings: { ...pairSettings, caps: { codex: 0, "claude-code": 2 } } },
+    { owners: { codex: { hold: { since: now, used: 85 }, reserve: null } } },
+    {
+      holds: {
+        codex: { used: 85, at: now, since: now, until: "2026-10-09T13:00:00Z" },
+      },
+    },
+  ]) {
+    const launch = launchOf(
+      decide({ ...base, ...details, usage: { "claude-code": weekly(60) } }),
+    );
+    assert.equal(launch?.selection, "stand-in");
+    assert.equal(launch?.standIn?.reason.kind, "chosen provider cannot launch");
+  }
+  // A reserve raise may permit launching, but cannot manufacture a reading
+  // below the configured drain threshold for case C.
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        settings: { ...pairSettings, caps: { codex: 0, "claude-code": 2 } },
+        owners: {
+          "claude-code": {
+            hold: null,
+            reserve: {
+              drainThreshold: 95,
+              since: now,
+              until: "2026-10-09T13:00:00Z",
+            },
+          },
+        },
+        usage: { "claude-code": weekly(85) },
+      }),
+    ),
+    undefined,
+  );
+});
+
+test("every fresh stage stands in, while interrupted, paused and merge relaunches keep their model", () => {
+  const base = {
+    resolver: pairRegistry(),
+    settings: pairSettings,
+    usage: { "claude-code": weekly(30) },
+  };
+  for (const details of [
+    { issues: [issue(4, [labels.triage])] },
+    { issues: [issue(4)] },
+    {
+      issues: [issue(4, claimed)],
+      runs: [
+        run({
+          provider: "codex",
+          model: "gpt-narrow",
+          ended: { timedOut: false, pullRequest: "none" },
+        }),
+      ],
+    },
+    {
+      issues: [issue(4, claimed)],
+      runs: [ended({ provider: "codex", model: "gpt-narrow" }, true)],
+    },
+  ]) {
+    const launch = launchOf(decide({ ...base, ...details }));
+    assert.equal(launch?.selection, "stand-in");
+    assert.equal(launch?.model, "claude-broad");
+  }
+  for (const previous of [
+    run({
+      provider: "codex",
+      model: "gpt-narrow",
+      ended: { interrupted: true },
+    }),
+    run({
+      provider: "codex",
+      model: "gpt-narrow",
+      ended: {
+        paused: {
+          cause: "usage limit",
+          reset: null,
+          at: "2026-10-09T11:00:00Z",
+          until: "2026-10-09T11:30:00Z",
+        },
+      },
+    }),
+    run({
+      provider: "codex",
+      model: "gpt-narrow",
+      continuation: { runKind: "review" },
+      ended: {
+        timedOut: false,
+        pullRequest: "open",
+        openPullRequest: pr,
+        mergeCandidate: pr,
+      },
+    }),
+  ]) {
+    const decisions = decide({
+      ...base,
+      issues: [
+        issue(4, [
+          ...claimed,
+          ...(previous.ended && "paused" in previous.ended
+            ? [labels.paused]
+            : []),
+        ]),
+      ],
+      runs: [previous],
+    });
+    const launch = launchOf(decisions);
+    assert.equal(
+      launch?.selection,
+      "recorded",
+      JSON.stringify({ previous, decisions }),
+    );
+    assert.equal(launch?.model, "gpt-narrow");
+  }
+});
+
+test("stand-ins run after review diversity and never return to the implementing provider", () => {
+  const resolver = pairRegistry();
+  const base = {
+    resolver,
+    settings: { ...pairSettings, reviewModel: "gpt-narrow" },
+    issues: [issue(4, claimed)],
+    kinds: { differentProvider: true },
+    usage: { codex: weekly(20), "claude-code": weekly(30) },
+  };
+  const same = launchOf(
+    decide({
+      ...base,
+      runs: [ended({ provider: "claude-code", model: "claude-broad" }, true)],
+    }),
+  );
+  assert.equal(same?.model, "gpt-narrow");
+  assert.equal(same?.selection, "host-default");
+  const other = launchOf(
+    decide({
+      ...base,
+      runs: [ended({ provider: "codex", model: "gpt-narrow" }, true)],
+    }),
+  );
+  assert.equal(other?.model, "claude-broad");
+  assert.equal(other?.selection, "stand-in");
+  assert.equal(other?.diversity, undefined);
+  // Diversity first chooses codex's host default; its broader model belongs
+  // to the implementer and must be skipped, even with spare usage.
+  const diverse = launchOf(
+    decide({
+      ...base,
+      runs: [ended({ provider: "claude-code", model: "claude-broad" }, true)],
+      policy: {
+        version: 1,
+        fallback: "host-default",
+        runKinds: {
+          review: { provider: "claude-code", model: "claude-broad" },
+        },
+      },
+    }),
+  );
+  assert.equal(diverse?.model, "gpt-narrow");
+  assert.equal(diverse?.selection, "diversity");
+});
+
+test("pairs are direct and ordered, never downgrade, and leave policy fallback in place", () => {
+  const resolver = createRegistry(
+    {
+      codex: { credential: "/unused" },
+      "claude-code": { credential: "/unused" },
+    },
+    {
+      effort: "medium",
+      metadata: {
+        "gpt-narrow": {
+          narrowerThan: ["claude-code/claude-broad", "codex/gpt-other"],
+        },
+        "claude-broad": { narrowerThan: ["codex/gpt-widest"] },
+      },
+    },
+  );
+  const base = {
+    resolver,
+    settings: pairSettings,
+    usage: { codex: weekly(20), "claude-code": weekly(30) },
+  };
+  assert.equal(launchOf(decide(base))?.model, "claude-broad");
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        settings: { ...pairSettings, caps: { codex: 2, "claude-code": 0 } },
+      }),
+    )?.model,
+    "gpt-other",
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        issues: [issue(4, [labels.ready, "model:gpt-widest"])],
+      }),
+    )?.model,
+    "gpt-widest",
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        issues: [issue(4, [labels.ready, "model:claude-broad"])],
+        usage: { "claude-code": weekly(30), codex: weekly(60) },
+      }),
+    )?.model,
+    "claude-broad",
+  );
+  // With no direct candidate available the transitive gpt-widest isn't tried.
+  const direct = createRegistry(
+    {
+      codex: { credential: "/unused" },
+      "claude-code": { credential: "/unused" },
+    },
+    {
+      effort: "medium",
+      metadata: {
+        "gpt-narrow": { narrowerThan: ["claude-code/claude-broad"] },
+        "claude-broad": { narrowerThan: ["codex/gpt-widest"] },
+      },
+    },
+  );
+  assert.equal(
+    launchOf(
+      decide({
+        ...base,
+        resolver: direct,
+        settings: { ...pairSettings, caps: { codex: 2, "claude-code": 0 } },
+      }),
+    )?.model,
+    "gpt-narrow",
+  );
+  const fallback = launchOf(
+    decide({
+      ...base,
+      resolver: direct,
+      settings: {
+        ...pairSettings,
+        defaultModel: "codex/gpt-host",
+        caps: { codex: 2, "claude-code": 0 },
+      },
+      policy: {
+        version: 1,
+        fallback: "host-default",
+        runKinds: {
+          implement: {
+            initial: { provider: "claude-code", model: "claude-broad" },
+          },
+        },
+      },
+      usage: {},
+    }),
+  );
+  assert.equal(fallback?.model, "gpt-host");
+  assert.equal(fallback?.selection, "fallback");
+});
 
 // A version 3 issue's labels while a run holds it.
 const claimed = [labels.ready, labels.running];

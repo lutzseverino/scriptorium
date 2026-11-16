@@ -66,6 +66,50 @@ const facts = {
   attempt: 1,
 };
 
+test("a stand-in launch names the chosen model, actual model and reason in the run comment", async () => {
+  const fake = tracker();
+  const { write } = issueComments(fake.tracker, configuration);
+  await write(4, {
+    phase: "implement",
+    facts: {
+      ...facts,
+      state: "running",
+      provider: "claude-code",
+      model: "claude-broad",
+      standIn: {
+        chosen: "codex/gpt-narrow",
+        reason: { kind: "spare usage", used: 31, elapsed: 45 },
+      },
+    },
+  });
+  assert.match(
+    fake.comments[0].body,
+    /chosen `codex\/gpt-narrow`; ran `claude-code\/claude-broad` as a stand-in: spare usage \(31% used, 45% elapsed\)/,
+  );
+  await write(4, {
+    phase: "implement",
+    facts: {
+      standIn: {
+        chosen: "codex/gpt-narrow",
+        reason: {
+          kind: "chosen provider cannot launch",
+          reason: "codex already runs its cap of 1 agent",
+        },
+      },
+    },
+  });
+  assert.match(
+    fake.comments[0].body,
+    /as a stand-in: chosen provider cannot launch \(codex already runs its cap of 1 agent\)/,
+  );
+  // A later fresh attempt that didn't stand in clears the earlier explanation.
+  await write(4, {
+    phase: "implement",
+    facts: { ...facts, state: "running", standIn: undefined },
+  });
+  assert.doesNotMatch(fake.comments[0].body, /stand-in|chosen|elapsed/);
+});
+
 test("a pass through every phase leaves one run comment, edited in place, and acts only when a person must", async () => {
   const fake = tracker();
   const { write } = issueComments(fake.tracker, configuration);

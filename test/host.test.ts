@@ -8973,6 +8973,59 @@ test("triage receives host model facts through the shared launch boundary, inclu
   assert.equal(recordOf(run.state, 4, 1).effort, "low");
 });
 
+test("a stand-in is recorded and explained at launch and retained across restart", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["state:ready", "model:gpt-5.5@low"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+    configuration: {
+      models: {
+        effort: "medium",
+        default: "gpt-5.5",
+        retry: "gpt-5.5",
+        metadata: {
+          "gpt-5.5": { narrowerThan: ["claude-code/claude-opus-5-5"] },
+          "claude-opus-5-5": { effort: "high" },
+        },
+      },
+    },
+    usage: {
+      "claude-code": {
+        used: 30,
+        reset: "2026-10-13T00:00:00Z",
+        windows: [{ used: 30, reset: "2026-10-13T00:00:00Z", minutes: 10080 }],
+      },
+    },
+  });
+  await run.tick();
+  const record = recordOf(run.state, 4, 1);
+  assert.equal(record.selection, "stand-in");
+  assert.equal(record.model, "claude-opus-5-5");
+  assert.equal(record.effort, "high");
+  const explanation = {
+    chosen: "codex/gpt-5.5",
+    reason: { kind: "spare usage", used: 30, elapsed: 50 },
+  };
+  assert.deepEqual(record.standIn, explanation);
+  const comment = () => run.github.find("acme/widgets", 4).comments.join("\n");
+  assert.match(
+    comment(),
+    /chosen `codex\/gpt-5\.5`; ran `claude-code\/claude-opus-5-5` as a stand-in: spare usage \(30% used, 50% elapsed\)/,
+  );
+  run.interrupt();
+  // Losing spare usage must neither reselect the model nor lose its reason.
+  run.usage["claude-code"] = 60;
+  await run.restart().tick();
+  const resumed = recordOf(run.state, 4, 1);
+  assert.equal(resumed.selection, "recorded");
+  assert.equal(resumed.model, "claude-opus-5-5");
+  assert.deepEqual(resumed.standIn, explanation);
+  assert.match(comment(), /as a stand-in: spare usage/);
+});
+
 test("concurrent triage, implement and review runs in one repository each keep their own kind's token through refresh and host reads", async (t) => {
   const bare = remote(t, kindsFiles);
   const run = host(t, {

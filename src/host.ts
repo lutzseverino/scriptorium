@@ -1161,6 +1161,7 @@ export function createHost(
       model: decision.model,
       effort: decision.effort,
       selection: decision.selection,
+      ...(decision.standIn && { standIn: decision.standIn }),
       ...(decision.diversity && { diversity: decision.diversity }),
       ...(mergeRelaunchHeads.length && { mergeRelaunchHeads }),
       holdObserved: observeHolds(holdObserved, pass),
@@ -1630,6 +1631,7 @@ export function createHost(
           effort: run.effort,
           continuation: run.continuation,
           ...(run.selection && { selection: run.selection }),
+          ...(run.standIn && { standIn: run.standIn }),
           holdObserved: run.holdObserved,
           ownedPullRequests: run.ownedPullRequests,
           ...(run.result && { result: run.result }),
@@ -1889,6 +1891,7 @@ function runFacts(run: Run) {
     provider: run.provider,
     model: run.model,
     effort: run.effort,
+    standIn: run.standIn,
     attempt: run.continuation.attempt,
     round:
       run.continuation.runKind === "review" ||
