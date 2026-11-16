@@ -13,7 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { RunOptions, RunResult } from "@ai-hero/sandcastle";
 import type { DockerOptions } from "@ai-hero/sandcastle/sandboxes/docker";
@@ -228,6 +228,8 @@ function fakePlatform(
   // Edits the platform refuses, as `<owner>/<name>#<n>`.
   const refused = new Set<string>();
   const failedRemovals = new Map<string, Error>();
+  // Requests that fail, as `<owner>/<name> <operation>`.
+  const failedRequests = new Map<string, Error>();
 
   const latest = (items: TimelineEvent[]) =>
     items
@@ -330,6 +332,8 @@ function fakePlatform(
     // Every request authenticates with the token as it stands.
     async function request(operation: string, ...args: unknown[]) {
       calls.push([repository, operation, ...args]);
+      const failure = failedRequests.get(`${repository} ${operation}`);
+      if (failure) throw failure;
       assert.equal(
         await credential(),
         tokens[repository],
@@ -899,6 +903,7 @@ function fakePlatform(
     find,
     refused,
     failedRemovals,
+    failedRequests,
     calls,
     labels,
     viewers,
@@ -1318,6 +1323,8 @@ const conventions = {
   skill: "implement",
   arguments: "#{issue}",
 };
+// The coverage a pass reports for `conventions`.
+const version2 = { state: "valid", version: 2, runKinds: ["implement"] };
 const factoryFiles = {
   ".scriptorium/config.json": JSON.stringify(conventions),
   ".scriptorium/Dockerfile": toolchain,
@@ -1626,10 +1633,17 @@ test("a token command that fails at refresh holds only its repository", async (t
     {
       repository: "acme/widgets",
       state: "paused",
+      cause: "host",
       reason: failure,
+      configuration: { state: "not-read", problem: failure },
       held: [],
     },
-    { repository: "acme/gadgets", state: "running", held: [] },
+    {
+      repository: "acme/gadgets",
+      state: "running",
+      configuration: version2,
+      held: [],
+    },
   ]);
   assert.ok(
     run.reports.includes(`acme/widgets is paused: ${failure}`),
@@ -1764,12 +1778,15 @@ test("the status file lists each repository's state and its held issues", async 
       {
         repository: "acme/widgets",
         state: "running",
+        configuration: version2,
         held: [{ issue: 5, reason: "blocked by #4" }],
       },
       {
         repository: "acme/gadgets",
         state: "paused",
+        cause: "repository-input",
         reason: "it has no .scriptorium/Dockerfile",
+        configuration: version2,
         held: [
           {
             issue: 2,
@@ -1780,7 +1797,12 @@ test("the status file lists each repository's state and its held issues", async 
       {
         repository: "acme/tools",
         state: "paused",
+        cause: "host",
         reason: "the token command for acme/tools failed with 1",
+        configuration: {
+          state: "not-read",
+          problem: "the token command for acme/tools failed with 1",
+        },
         held: [],
       },
     ],
@@ -2255,8 +2277,10 @@ test("an image that does not build pauses only its repository until it builds", 
   assert.deepEqual(run.status().repositories[0], {
     repository: "acme/widgets",
     state: "paused",
+    cause: "repository-input",
     reason:
       "its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100",
+    configuration: version2,
     held: [
       {
         issue: 4,
@@ -3373,7 +3397,7 @@ for (const fault of [
       status.reason,
       fault === "missing Dockerfile"
         ? /no .scriptorium\/Dockerfile/
-        : /factory configuration.*(?:unreadable|invalid)/,
+        : /factory configuration.*(?:missing|invalid)/,
     );
     assert.ok(
       run.reports.some((line) =>
@@ -3411,9 +3435,9 @@ test("a repository without configuration at startup pauses without guessing conv
   });
   await run.tick();
   assert.equal(run.status().repositories[0].state, "paused");
-  assert.match(
+  assert.equal(
     run.status().repositories[0].reason,
-    /factory configuration.*unreadable/,
+    "The factory configuration .scriptorium/config.json is missing",
   );
   assert.equal(run.github.labels.has("acme/widgets"), false);
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
@@ -5594,16 +5618,25 @@ test("a usage hold stops new claims through unknown usage and a restart until it
   ]);
 });
 
-// The owner's `resume` command, run as its own process against the host
-// configuration the fixture's host runs with.
-function resumeCommand(run: ReturnType<typeof host>, ...args: string[]) {
+// A CLI command, run as its own process against the host configuration the
+// fixture's host runs with.
+function hostCommand(
+  run: ReturnType<typeof host>,
+  command: string,
+  ...args: string[]
+) {
   const path = join(dirname(run.state), "host.json");
   writeFileSync(path, JSON.stringify(run.configuration));
   return execFileSync(
     process.execPath,
-    [join(import.meta.dirname, "../src/main.ts"), "resume", path, ...args],
+    [join(import.meta.dirname, "../src/main.ts"), command, path, ...args],
     { encoding: "utf8" },
   );
+}
+
+// The owner's `resume` command.
+function resumeCommand(run: ReturnType<typeof host>, ...args: string[]) {
+  return hostCommand(run, "resume", ...args);
 }
 
 const ownerResume = { ...thresholds, afterDrain: "owner-resume" } as const;
@@ -7588,6 +7621,13 @@ for (const others of [[], [6]])
       [`${name}#4`],
       "only the labelled PR's merge relaunch launches",
     );
+    // Coverage still reports the hold, with the status file's held reason.
+    const [entry] = run.status().repositories;
+    assert.match(entry.reason, /^factory hold \(#40 carries `factory:hold`\)/);
+    assert.deepEqual(coverageOf(run).repositories[0].paused, {
+      cause: "factory-hold",
+      reason: entry.reason,
+    });
     assert.deepEqual(holdComments(issue.comments), []);
     assert.match(
       holdComments(run.github.find(name, 5).comments)[0],
@@ -9424,8 +9464,24 @@ for (const fault of [
         ? /no \.scriptorium\/Dockerfile/
         : fault === "image build"
           ? /\.scriptorium\/Dockerfile.*build refused/
-          : /\.scriptorium\/config\.json.*(?:unreadable|not JSON|invalid)/s,
+          : /\.scriptorium\/config\.json.*(?:missing|unreadable|not JSON|invalid)/s,
     );
+    assert.equal(status.cause, "repository-input");
+    assert.deepEqual(
+      status.configuration,
+      ["legacy Dockerfile only", "image build"].includes(fault)
+        ? version2
+        : {
+            state:
+              fault === "legacy only"
+                ? "missing"
+                : fault === "unreadable configuration"
+                  ? "unreadable"
+                  : "invalid",
+            problem: status.reason,
+          },
+    );
+    assert.doesNotMatch(status.reason, new RegExp(run.clone("acme/widgets")));
     assert.equal(run.launched.length, 0);
     assert.deepEqual(run.builds, fault === "image build" ? [toolchain] : []);
   });
@@ -10376,4 +10432,413 @@ test("a published result with an unobserved ending recovers its open PR and owne
   assert.equal(run.status().providers[0].retained, 1);
   assert.equal(run.status().capacity.host.runKinds.implement, 0);
   assert.equal(run.status().capacity.host.implement.free, 1);
+});
+
+// The read-only `status` command's JSON, run as its own process against the
+// host configuration and state directory the fixture's host runs with.
+function statusCommand(run: ReturnType<typeof host>, ...args: string[]) {
+  return hostCommand(run, "status", "--json", ...args);
+}
+function coverageOf(run: ReturnType<typeof host>) {
+  return JSON.parse(statusCommand(run)).coverage;
+}
+
+const coverageStorage: ImageStorageStatus = {
+  held: true,
+  reason: "recover the image store",
+  observedAt: "2026-10-09T11:00:00Z",
+  reserveBytes: 100,
+  resumeBytes: 200,
+  filesystems: [],
+  reclamation: { pressure: true, freed: null, error: null },
+};
+const policyFile = ".github/factory-model-policy.json";
+
+// Each case sets up acme/widgets; acme/gadgets keeps its valid version 2
+// inputs and continues beside it.
+for (const [name, setup] of Object.entries<{
+  files?: Record<string, string>;
+  remote?: string;
+  options?: Partial<Parameters<typeof host>[1]>;
+  arrange?: (run: ReturnType<typeof host>) => void;
+  configuration: Record<string, unknown>;
+  paused: { cause: string; reason: RegExp } | null;
+  // Whether acme/widgets#4 launches, as pickup or triage.
+  launches?: boolean;
+}>({
+  "a valid version 3 configuration with every run kind": {
+    files: kindsFiles,
+    configuration: {
+      state: "valid",
+      version: 3,
+      runKinds: ["triage", "implement", "review"],
+    },
+    paused: null,
+    launches: true,
+  },
+  "a valid version 3 configuration with a subset of run kinds": {
+    files: {
+      ...kindsFiles,
+      ".scriptorium/config.json": JSON.stringify({
+        ...kindsConventions,
+        runKinds: {
+          review: kindsConventions.runKinds.review,
+          implement: kindsConventions.runKinds.implement,
+        },
+      }),
+    },
+    configuration: {
+      state: "valid",
+      version: 3,
+      runKinds: ["implement", "review"],
+    },
+    paused: null,
+  },
+  "a valid version 2 configuration": {
+    configuration: version2,
+    paused: null,
+    launches: true,
+  },
+  "a missing configuration": {
+    files: { ".scriptorium/Dockerfile": toolchain },
+    configuration: {
+      state: "missing",
+      problem:
+        /^The factory configuration \.scriptorium\/config\.json is missing$/,
+    },
+    paused: { cause: "repository-input", reason: /is missing$/ },
+  },
+  "an unreadable configuration": {
+    files: {
+      ".scriptorium/config.json/unreadable": "directory",
+      ".scriptorium/Dockerfile": toolchain,
+    },
+    configuration: {
+      state: "unreadable",
+      problem:
+        /^The factory configuration \.scriptorium\/config\.json is unreadable: /,
+    },
+    paused: { cause: "repository-input", reason: /is unreadable: / },
+  },
+  "a configuration that is not JSON": {
+    files: { ...factoryFiles, ".scriptorium/config.json": "{" },
+    configuration: {
+      state: "invalid",
+      problem:
+        /^The factory configuration \.scriptorium\/config\.json is not JSON: /,
+    },
+    paused: { cause: "repository-input", reason: /is not JSON: / },
+  },
+  "a configuration failing a field": {
+    files: {
+      ...factoryFiles,
+      ".scriptorium/config.json": JSON.stringify({ ...conventions, skill: "" }),
+    },
+    configuration: {
+      state: "invalid",
+      problem: /is invalid:\n- skill: is not a non-empty trimmed string$/,
+    },
+    paused: { cause: "repository-input", reason: /- skill: / },
+  },
+  "a configuration with an unsupported version": {
+    files: {
+      ...factoryFiles,
+      ".scriptorium/config.json": JSON.stringify({
+        ...conventions,
+        version: 4,
+      }),
+    },
+    configuration: { state: "invalid", problem: /- version: must be 2 or 3/ },
+    paused: { cause: "repository-input", reason: /must be 2 or 3/ },
+  },
+  "inputs only in a legacy directory": {
+    files: {
+      ".factory/config.json": JSON.stringify(conventions),
+      ".factory/Dockerfile": toolchain,
+    },
+    configuration: {
+      state: "missing",
+      problem: /\.scriptorium\/config\.json is missing$/,
+    },
+    paused: { cause: "repository-input", reason: /is missing$/ },
+  },
+  "a failing token command": {
+    options: {
+      tokens: {
+        "acme/widgets": new Error(
+          "the token command for acme/widgets failed with 1",
+        ),
+      },
+    },
+    configuration: {
+      state: "not-read",
+      problem: /^the token command for acme\/widgets failed with 1$/,
+    },
+    paused: { cause: "host", reason: /^the token command .* failed with 1$/ },
+  },
+  "a failing clone update": {
+    remote: "/nonexistent/acme-widgets.git",
+    configuration: { state: "not-read", problem: /^its clone did not update/ },
+    paused: { cause: "host", reason: /^its clone did not update/ },
+  },
+  "a missing Dockerfile": {
+    files: { ".scriptorium/config.json": JSON.stringify(conventions) },
+    configuration: version2,
+    paused: {
+      cause: "repository-input",
+      reason: /^it has no \.scriptorium\/Dockerfile$/,
+    },
+  },
+  "a sandbox image that does not build": {
+    options: { imageFailures: [new Error("apt-get exited with 100")] },
+    configuration: version2,
+    paused: {
+      cause: "repository-input",
+      reason: /did not build from \.scriptorium\/Dockerfile: .*100$/,
+    },
+  },
+  "an unreadable model policy": {
+    files: { ...kindsFiles, [policyFile]: "{" },
+    configuration: {
+      state: "valid",
+      version: 3,
+      runKinds: ["triage", "implement", "review"],
+    },
+    paused: { cause: "repository-input", reason: /model policy .* not JSON/ },
+  },
+  "a refused platform": {
+    options: { unserved: ["acme/widgets"] },
+    configuration: version2,
+    paused: { cause: "host", reason: /^its remote is on no platform/ },
+  },
+  "a state-label creation failure": {
+    arrange: (run) =>
+      run.github.failedRequests.set(
+        "acme/widgets createLabel",
+        new PlatformError("unavailable", "labels unavailable"),
+      ),
+    configuration: version2,
+    paused: { cause: "host", reason: /^its state labels could not be created/ },
+  },
+  "a platform read failure": {
+    arrange: (run) =>
+      run.github.failedRequests.set(
+        "acme/widgets issues",
+        new PlatformError("unavailable", "issues unavailable"),
+      ),
+    configuration: version2,
+    paused: { cause: "host", reason: /^its platform reads failed/ },
+  },
+  "a storage admission hold": {
+    options: { imageFailures: [new ImageStorageHold(coverageStorage)] },
+    configuration: version2,
+    paused: { cause: "host", reason: /^sandbox image builds wait for storage/ },
+  },
+  "a factory hold": {
+    files: factoryHoldFiles,
+    arrange: (run) =>
+      (run.github.factoryHolds["acme/widgets"] = {
+        issues: [4],
+        pullRequests: [],
+      }),
+    configuration: version2,
+    paused: {
+      cause: "factory-hold",
+      reason: /^factory hold \(#4 carries `factory:hold`\)/,
+    },
+  },
+  "an unreadable factory hold": {
+    files: factoryHoldFiles,
+    arrange: (run) =>
+      (run.github.factoryHolds["acme/widgets"] = new PlatformError(
+        "invalidResponse",
+        "hold read unavailable",
+      )),
+    configuration: version2,
+    paused: {
+      cause: "factory-hold",
+      reason: /^factory hold state is unreadable/,
+    },
+  },
+  "a later platform failure replacing a repository-input failure": {
+    files: { ...kindsFiles, [policyFile]: "{" },
+    arrange: (run) =>
+      run.github.failedRequests.set(
+        "acme/widgets issues",
+        new PlatformError("unavailable", "issues unavailable"),
+      ),
+    configuration: {
+      state: "valid",
+      version: 3,
+      runKinds: ["triage", "implement", "review"],
+    },
+    paused: { cause: "host", reason: /^its platform reads failed/ },
+  },
+  "a factory hold beside a pass pause": {
+    files: {
+      ".scriptorium/config.json": factoryHoldFiles[".scriptorium/config.json"],
+    },
+    arrange: (run) =>
+      (run.github.factoryHolds["acme/widgets"] = {
+        issues: [4],
+        pullRequests: [],
+      }),
+    configuration: version2,
+    paused: {
+      cause: "repository-input",
+      reason: /^it has no \.scriptorium\/Dockerfile$/,
+    },
+  },
+}))
+  test(`status coverage after a pass with ${name}`, async (t) => {
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [{ number: 4 }],
+        "acme/gadgets": [{ number: 3 }],
+      },
+      remotes: {
+        "acme/widgets": setup.remote ?? remote(t, setup.files ?? factoryFiles),
+        "acme/gadgets": remote(t, factoryFiles),
+      },
+      ...setup.options,
+    });
+    setup.arrange?.(run);
+    await run.tick();
+    const coverage = coverageOf(run);
+    assert.deepEqual(coverage.observation, {
+      state: "last-observed",
+      source: "status.json",
+      at: "2026-10-09T12:00:00.000Z",
+    });
+    const [widgets, gadgets] = coverage.repositories;
+    assert.deepEqual(gadgets, {
+      repository: "acme/gadgets",
+      configuration: version2,
+      paused: null,
+    });
+    assert.equal(widgets.repository, "acme/widgets");
+    const { problem, ...configuration } = setup.configuration;
+    if (problem instanceof RegExp) {
+      assert.deepEqual(
+        { ...widgets.configuration, problem: null },
+        {
+          ...configuration,
+          problem: null,
+        },
+      );
+      assert.match(widgets.configuration.problem, problem);
+    } else assert.deepEqual(widgets.configuration, setup.configuration);
+    if (setup.paused === null) assert.equal(widgets.paused, null);
+    else {
+      assert.equal(widgets.paused.cause, setup.paused.cause);
+      assert.match(widgets.paused.reason, setup.paused.reason);
+    }
+    // The status file records the same facts the command projects.
+    const [entry] = run.status().repositories;
+    assert.deepEqual(entry.configuration, widgets.configuration);
+    assert.deepEqual(
+      entry.state === "paused"
+        ? { cause: entry.cause, reason: entry.reason }
+        : null,
+      widgets.paused,
+    );
+    if (
+      widgets.paused?.cause === "repository-input" ||
+      widgets.paused?.cause === "host"
+    )
+      assert.ok(
+        run.reports.includes(
+          `acme/widgets is paused: ${widgets.paused.reason}`,
+        ),
+        run.reports.join("\n"),
+      );
+    // Repository inputs are never named by the host's clone path.
+    const clone = `${run.clone("acme/widgets")}${sep}`;
+    for (const text of [
+      JSON.stringify(coverage),
+      readFileSync(join(run.state, "status.json"), "utf8"),
+      ...run.reports,
+    ])
+      assert.ok(!text.includes(clone), text);
+    // Launch decisions are unchanged: a paused repository launches nothing.
+    assert.deepEqual(
+      run.launched.map(({ options }) => options.name).sort(),
+      setup.launches
+        ? ["acme/gadgets#3", "acme/widgets#4"]
+        : ["acme/gadgets#3"],
+    );
+  });
+
+test("status reports the pass's coverage as text and JSON without reading a repository, a clone or a token, and writes nothing", async (t) => {
+  const marker = join(directory(t), "token-command-ran");
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, { ".scriptorium/Dockerfile": toolchain }),
+      "acme/gadgets": remote(t, kindsFiles),
+    },
+    configuration: {
+      platforms: {
+        github: {
+          tokenCommand: ["sh", "-c", `touch ${marker}; echo token`],
+          authorizedRoles: ["admin"],
+        },
+      },
+    },
+  });
+  await run.tick();
+  // A repository's clone is not where coverage comes from.
+  for (const name of ["acme/widgets", "acme/gadgets"])
+    rmSync(run.clone(name), { recursive: true, force: true });
+  const files = () =>
+    readdirSync(run.state, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => {
+        const path = join(entry.parentPath, entry.name);
+        return [path, readFileSync(path, "utf8")];
+      })
+      .sort();
+  const before = files();
+  const { coverage } = JSON.parse(statusCommand(run));
+  assert.deepEqual(coverage.repositories, [
+    {
+      repository: "acme/widgets",
+      configuration: {
+        state: "missing",
+        problem:
+          "The factory configuration .scriptorium/config.json is missing",
+      },
+      paused: {
+        cause: "repository-input",
+        reason: "The factory configuration .scriptorium/config.json is missing",
+      },
+    },
+    {
+      repository: "acme/gadgets",
+      configuration: {
+        state: "valid",
+        version: 3,
+        runKinds: ["triage", "implement", "review"],
+      },
+      paused: null,
+    },
+  ]);
+  const text = hostCommand(run, "status").split("\n");
+  for (const { repository, configuration, paused } of coverage.repositories)
+    assert.ok(
+      text.includes(
+        `${repository}: configuration=${JSON.stringify(configuration)} paused=${paused === null ? "none" : JSON.stringify(paused)}`,
+      ),
+      text.join("\n"),
+    );
+  assert.ok(
+    text.includes(
+      `coverage observation=${JSON.stringify(coverage.observation)}`,
+    ),
+  );
+  assert.equal(existsSync(marker), false);
+  assert.deepEqual(files(), before);
 });

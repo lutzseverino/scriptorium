@@ -9,7 +9,7 @@ import {
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { status, type StatusPorts } from "../src/status-command.ts";
-import { hostStatus } from "../src/status.ts";
+import { hostStatus, type ConfigurationCoverage } from "../src/status.ts";
 import type { Run } from "../src/factory.ts";
 import { providerStatus } from "../src/events.ts";
 import { UsageReadError } from "../src/providers/usage.ts";
@@ -17,6 +17,11 @@ import { directory } from "./fakes.ts";
 import { execFileSync } from "node:child_process";
 
 const now = new Date("2026-11-08T12:00:00.000Z");
+const valid: ConfigurationCoverage = {
+  state: "valid",
+  version: 3,
+  runKinds: ["implement"],
+};
 
 function fixture(t: TestContext) {
   const root = directory(t);
@@ -643,7 +648,11 @@ test("text and JSON project the host's shared implement counts with current limi
   });
   const snapshot = hostStatus(
     now.toISOString(),
-    config.repositories.map((name: string) => ({ name, paused: null })),
+    config.repositories.map((name: string) => ({
+      name,
+      paused: null,
+      configuration: valid,
+    })),
     [],
     [],
     undefined,
@@ -726,7 +735,7 @@ for (const fault of [
     mkdirSync(state);
     const snapshot = hostStatus(
       now.toISOString(),
-      [{ name: "acme/widgets", paused: null }],
+      [{ name: "acme/widgets", paused: null, configuration: valid }],
       [],
     );
     if (fault === "future")
@@ -752,4 +761,137 @@ for (const fault of [
     }
     assert.equal(capacity.host.implement.limit, 2);
     assert.equal(capacity.repositories[0].implement.limit, 1);
+  });
+
+// A status file the factory's writer produces for the fixture's repositories,
+// one valid and running and one paused on its own inputs.
+function coverageSnapshot(repositories: string[]) {
+  return hostStatus(
+    now.toISOString(),
+    repositories.map((name, index) =>
+      index === 1
+        ? {
+            name,
+            paused: {
+              cause: "repository-input" as const,
+              reason: "it has no .scriptorium/Dockerfile",
+            },
+            configuration: valid,
+          }
+        : { name, paused: null, configuration: valid },
+    ),
+    [],
+  );
+}
+
+test("coverage projects the status file's repository entries, as text and JSON, through a pending transaction", async (t) => {
+  const { path, state } = fixture(t);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  mkdirSync(state);
+  writeFileSync(
+    join(state, "status.json"),
+    JSON.stringify(coverageSnapshot(config.repositories)),
+  );
+  // A pending transaction concerns provider work, not coverage.
+  writeFileSync(
+    join(state, "events-state.json"),
+    JSON.stringify({ version: 1, pending: {} }),
+  );
+  const { coverage } = JSON.parse((await command([path, "--json"])).output[0]);
+  assert.deepEqual(coverage.observation, {
+    state: "last-observed",
+    source: "status.json",
+    at: now.toISOString(),
+  });
+  assert.deepEqual(
+    coverage.repositories,
+    config.repositories.map((repository: string, index: number) => ({
+      repository,
+      configuration: valid,
+      paused:
+        index === 1
+          ? {
+              cause: "repository-input",
+              reason: "it has no .scriptorium/Dockerfile",
+            }
+          : null,
+    })),
+  );
+  const text = (await command([path])).output[0].split("\n");
+  for (const { repository, configuration, paused } of coverage.repositories)
+    assert.ok(
+      text.includes(
+        `${repository}: configuration=${JSON.stringify(configuration)} paused=${paused === null ? "none" : JSON.stringify(paused)}`,
+      ),
+      text.join("\n"),
+    );
+  assert.ok(
+    text.includes(
+      `coverage observation=${JSON.stringify(coverage.observation)}`,
+    ),
+  );
+});
+
+for (const fault of [
+  "missing",
+  "unreadable",
+  "future",
+  "legacy",
+  "inconsistent pause",
+  "inconsistent configuration",
+  "invalid configuration while running",
+  "duplicate",
+  "new repository",
+])
+  test(`coverage is unavailable for a ${fault} status file`, async (t) => {
+    const { path, state } = fixture(t);
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    mkdirSync(state);
+    const snapshot = coverageSnapshot(config.repositories);
+    const [first, second] = snapshot.repositories as Record<string, unknown>[];
+    if (fault === "future") snapshot.updatedAt = "2100-01-01T00:00:00Z";
+    if (fault === "legacy")
+      for (const entry of snapshot.repositories as Record<string, unknown>[]) {
+        delete entry.configuration;
+        delete entry.cause;
+      }
+    if (fault === "inconsistent pause") second.cause = "provider";
+    if (fault === "inconsistent configuration")
+      first.configuration = { state: "valid", version: 2, runKinds: [] };
+    if (fault === "invalid configuration while running")
+      first.configuration = { state: "invalid", problem: "broken" };
+    if (fault === "duplicate")
+      snapshot.repositories.push(snapshot.repositories[0]);
+    if (fault === "new repository") snapshot.repositories.pop();
+    if (fault === "unreadable") mkdirSync(join(state, "status.json"));
+    else if (fault !== "missing")
+      writeFileSync(join(state, "status.json"), JSON.stringify(snapshot));
+    const json = (await command([path, "--json"])).output[0];
+    const { coverage } = JSON.parse(json);
+    assert.equal(coverage.observation.state, "unavailable");
+    assert.equal(coverage.observation.at, null);
+    assert.match(
+      coverage.observation.problem,
+      fault === "missing"
+        ? /^missing record$/
+        : fault === "unreadable"
+          ? /^unreadable record$/
+          : /^missing, legacy or inconsistent coverage observation$/,
+    );
+    assert.deepEqual(
+      coverage.repositories,
+      config.repositories.map((repository: string) => ({
+        repository,
+        configuration: null,
+        paused: null,
+      })),
+    );
+    const text = (await command([path])).output[0];
+    for (const repository of config.repositories)
+      assert.ok(
+        text.includes(
+          `${repository}: configuration=unavailable paused=unavailable`,
+        ),
+        text,
+      );
   });
