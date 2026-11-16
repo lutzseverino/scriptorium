@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { readHostConfiguration } from "../src/host-configuration.ts";
 import { createRegistry } from "../src/providers.ts";
-import { UsageReadError, type UsageWindow } from "../src/providers/usage.ts";
+import {
+  UsageReadError,
+  type ReportedWindow,
+  type UsageWindow,
+} from "../src/providers/usage.ts";
+import { spareUsage } from "../src/factory.ts";
 import { createUsage, retryAt, usageFreshMinutes } from "../src/usage.ts";
 import { directory, fakePorts } from "./fakes.ts";
 
@@ -393,6 +398,7 @@ test("fallback deadlines count from receipt and a replaced credential recovers a
     assert.deepEqual((await restarted.read())["claude-code"], {
       used: 42,
       at: later(deadline).toISOString(),
+      windows: [{ used: 42, reset: null, minutes: 300 }],
     });
     assert.deepEqual(tokens, [
       "Bearer fixture-first-secret",
@@ -462,7 +468,8 @@ test("a configured Claude usage login retains cache/backoff across replacement a
       path,
     };
     const first = createUsage(ports);
-    const reading = { used: 42, at: start.toISOString() };
+    const windows = [{ used: 42, reset: null, minutes: 300 }];
+    const reading = { used: 42, at: start.toISOString(), windows };
     assert.deepEqual((await first.read())["claude-code"], reading);
     now = later(300);
     assert.deepEqual((await first.read())["claude-code"], reading);
@@ -480,6 +487,7 @@ test("a configured Claude usage login retains cache/backoff across replacement a
     assert.deepEqual((await restarted.read())["claude-code"], {
       used: 42,
       at: now.toISOString(),
+      windows,
     });
     assert.deepEqual(tokens, [
       "Bearer synthetic-first-secret",
@@ -775,4 +783,201 @@ test("unknown usage starts no hold, and a hold the thresholds no longer reach en
       String(drainThreshold),
     );
   }
+});
+
+// Windows on the fake clock: a weekly one with half its week elapsed, and a
+// five-hour one with half its five hours elapsed.
+const weekReset = later(3.5 * 24 * 3600).toISOString();
+const sessionReset = later(150 * 60).toISOString();
+const week = (used: number) => ({ used, reset: weekReset, minutes: 10080 });
+const session = (used: number) => ({
+  used,
+  reset: sessionReset,
+  minutes: 300,
+});
+const reading = (...windows: ReportedWindow[]) => ({
+  used: Math.max(...windows.map((window) => window.used)),
+  at: start.toISOString(),
+  windows,
+});
+const weekPace = (used: number) => ({
+  used,
+  minutes: 10080,
+  reset: weekReset,
+  elapsed: 50,
+});
+
+test("every reported window survives a restart, and a record from before windows still loads", async (t) => {
+  const first = usage(t);
+  const windows = [session(12), week(31)];
+  first.answers["claude-code"].push({ used: 31, reset: weekReset, windows });
+  first.answers.codex.push(new Error("refused"));
+  await first.at(0);
+  const recorded = { used: 31, at: start.toISOString(), reset: weekReset };
+  assert.deepEqual(
+    JSON.parse(readFileSync(first.path, "utf8"))["claude-code"].reading,
+    { ...recorded, windows },
+  );
+
+  const second = usage(t, first.path);
+  second.answers["claude-code"].push(new Error("refused"));
+  second.answers.codex.push(new Error("refused"));
+  assert.deepEqual((await second.at(60))["claude-code"], {
+    ...recorded,
+    windows,
+  });
+
+  // A record written before readings kept windows loads without them, and
+  // damaged windows are dropped while the reading stays.
+  const legacy = usage(t);
+  writeFileSync(
+    legacy.path,
+    JSON.stringify({
+      "claude-code": {
+        reading: recorded,
+        nextRead: null,
+        failure: null,
+        hold: null,
+      },
+      codex: {
+        reading: { ...recorded, windows: [{ used: "high" }] },
+        nextRead: null,
+        failure: null,
+        hold: null,
+      },
+    }),
+  );
+  legacy.answers["claude-code"].push(new Error("refused"));
+  legacy.answers.codex.push(new Error("refused"));
+  assert.deepEqual(await legacy.at(60), {
+    "claude-code": recorded,
+    codex: recorded,
+  });
+});
+
+test("a window without a reset or a length counts for the thresholds as today and gives no pace", async (t) => {
+  const reader = usage(t);
+  const windows = [
+    { used: 92, reset: null, minutes: 300 },
+    { used: 20, reset: weekReset, minutes: null },
+  ];
+  reader.answers["claude-code"].push({ used: 92, reset: null, windows });
+  reader.answers.codex.push(10);
+  const read = await reader.at(0);
+  // The fullest window starts the hold, which keeps no windows.
+  assert.deepEqual(reader.holds()["claude-code"], {
+    used: 92,
+    at: start.toISOString(),
+    since: start.toISOString(),
+    until: later(24 * 3600).toISOString(),
+  });
+  assert.deepEqual(spareUsage(read["claude-code"], start.toISOString(), 90), {
+    state: "unknown",
+    reason: "no-pace-window",
+  });
+});
+
+test("a provider has spare usage while its longest window runs below its elapsed share and every shorter window is below the drain threshold", () => {
+  const now = start.toISOString();
+  for (const [name, usage, drainThreshold, expected] of [
+    [
+      "both windows under pace",
+      reading(session(40), week(31)),
+      90,
+      { state: "yes", pace: weekPace(31) },
+    ],
+    [
+      "the longest window sets the pace whatever its order",
+      reading(week(31), session(80)),
+      90,
+      { state: "yes", pace: weekPace(31) },
+    ],
+    [
+      "one window sets the pace",
+      reading(week(49.9)),
+      90,
+      { state: "yes", pace: weekPace(49.9) },
+    ],
+    [
+      "over pace",
+      reading(session(10), week(60)),
+      90,
+      { state: "no", reason: "over-pace", pace: weekPace(60) },
+    ],
+    [
+      "exactly at pace",
+      reading(week(50)),
+      90,
+      { state: "no", reason: "over-pace", pace: weekPace(50) },
+    ],
+    [
+      "a shorter window at the drain threshold",
+      reading(session(90), week(31)),
+      90,
+      {
+        state: "no",
+        reason: "shorter-window-at-drain-threshold",
+        pace: weekPace(31),
+      },
+    ],
+    [
+      "no drain threshold, which no shorter window reaches",
+      reading(session(99), week(31)),
+      null,
+      { state: "yes", pace: weekPace(31) },
+    ],
+    [
+      "a window without a length, which is no shorter window",
+      reading(week(31), { used: 95, reset: sessionReset, minutes: null }),
+      90,
+      { state: "yes", pace: weekPace(31) },
+    ],
+    [
+      "no fresh reading",
+      null,
+      90,
+      { state: "unknown", reason: "no-fresh-reading" },
+    ],
+    [
+      "no window with a length",
+      reading({ used: 10, reset: weekReset, minutes: null }),
+      90,
+      { state: "unknown", reason: "no-pace-window" },
+    ],
+    [
+      "no window with a reset",
+      reading({ used: 10, reset: null, minutes: 10080 }),
+      90,
+      { state: "unknown", reason: "no-pace-window" },
+    ],
+    [
+      "a reading from before readings kept windows",
+      { used: 10, at: now, reset: weekReset },
+      90,
+      { state: "unknown", reason: "no-pace-window" },
+    ],
+  ] as const)
+    assert.deepEqual(spareUsage(usage, now, drainThreshold), expected, name);
+});
+
+test("a stale reading gives no spare usage", async (t) => {
+  const reader = usage(t);
+  reader.answers["claude-code"].push(
+    { used: 10, reset: weekReset, windows: [week(10)] },
+    new Error("refused"),
+  );
+  reader.answers.codex.push(1, 2);
+  const now = (seconds: number) => later(seconds).toISOString();
+  assert.equal(
+    spareUsage((await reader.at(0))["claude-code"], now(0), 90).state,
+    "yes",
+  );
+  assert.deepEqual(
+    spareUsage(
+      (await reader.at(usageFreshMinutes * 60 + 1))["claude-code"],
+      now(usageFreshMinutes * 60 + 1),
+      90,
+    ),
+    { state: "unknown", reason: "no-fresh-reading" },
+  );
 });

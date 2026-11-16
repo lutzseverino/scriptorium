@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ import {
 } from "../src/status.ts";
 import type { Run } from "../src/factory.ts";
 import { providerStatus } from "../src/events.ts";
-import { UsageReadError } from "../src/providers/usage.ts";
+import { UsageReadError, type ReportedWindow } from "../src/providers/usage.ts";
 import { directory } from "./fakes.ts";
 import { execFileSync } from "node:child_process";
 
@@ -296,6 +297,142 @@ test("text and JSON preserve positive free capacity alongside independent persis
     ]),
     before,
   );
+});
+
+test("text and JSON show each provider's windows and its spare usage, or why it is unknown", async (t) => {
+  const { path, state } = fixture(t);
+  mkdirSync(state);
+  const at = "2026-11-08T11:55:00.000Z";
+  // Half of each window has elapsed at `now`.
+  const week = (used: number) => ({
+    used,
+    reset: "2026-11-12T00:00:00.000Z",
+    minutes: 10080,
+  });
+  const session = (used: number) => ({
+    used,
+    reset: "2026-11-08T14:30:00.000Z",
+    minutes: 300,
+  });
+  const entry = (windows: ReportedWindow[], read = at) => ({
+    reading: {
+      used: Math.max(...windows.map((window) => window.used)),
+      at: read,
+      windows,
+    },
+    hold: null,
+    nextRead: null,
+    failure: null,
+  });
+  const record = (claude: object, codex: object) =>
+    writeFileSync(
+      join(state, "usage.json"),
+      JSON.stringify({ "claude-code": claude, codex }),
+    );
+  const spare = async (extra: Partial<StatusPorts> = {}) => {
+    const result = await command(
+      [path, "--json", ...(extra.readUsage ? ["--live-usage"] : [])],
+      extra,
+    );
+    assert.equal(result.code, 0, result.errors.join("\n"));
+    return JSON.parse(result.output[0]).providers.map(
+      (provider: { spareUsage: unknown }) => provider.spareUsage,
+    );
+  };
+  const pace = (used: number) => ({
+    used,
+    minutes: 10080,
+    reset: "2026-11-12T00:00:00.000Z",
+    elapsed: 50,
+  });
+
+  record(entry([session(40), week(31)]), entry([session(10), week(60)]));
+  const json = await command([path, "--json"]);
+  const providers = JSON.parse(json.output[0]).providers;
+  assert.deepEqual(providers[0].usage, {
+    state: "known",
+    reading: { used: 40, at, windows: [session(40), week(31)] },
+  });
+  assert.deepEqual(
+    providers.map((provider: { spareUsage: unknown }) => provider.spareUsage),
+    [
+      { state: "yes", pace: pace(31) },
+      { state: "no", reason: "over-pace", pace: pace(60) },
+    ],
+  );
+  const text = (await command([path])).output[0];
+  for (const provider of providers)
+    for (const key of ["usage", "spareUsage"])
+      assert.ok(
+        text.includes(`  ${key}=${JSON.stringify(provider[key])}`),
+        key,
+      );
+
+  // A shorter window at the drain threshold, and a reading with no window
+  // that has a length.
+  record(
+    entry([session(90), week(31)]),
+    entry([{ used: 10, reset: "2026-11-12T00:00:00.000Z", minutes: null }]),
+  );
+  assert.deepEqual(await spare(), [
+    {
+      state: "no",
+      reason: "shorter-window-at-drain-threshold",
+      pace: pace(31),
+    },
+    { state: "unknown", reason: "no-pace-window" },
+  ]);
+
+  // A stale reading and a record from before readings kept windows.
+  record(entry([week(10)], "2026-11-08T11:39:59.000Z"), {
+    ...entry([week(10)]),
+    reading: { used: 10, at },
+  });
+  assert.deepEqual(await spare(), [
+    { state: "unknown", reason: "no-fresh-reading" },
+    { state: "unknown", reason: "no-pace-window" },
+  ]);
+
+  // A live read replaces the stale reading with its own windows.
+  assert.deepEqual(
+    await spare({
+      readUsage: async () => ({
+        used: 20,
+        reset: "2026-11-12T00:00:00.000Z",
+        windows: [week(20)],
+      }),
+    }),
+    [
+      { state: "yes", pace: pace(20) },
+      { state: "yes", pace: pace(20) },
+    ],
+  );
+
+  // Without a usage record, the status file's snapshot keeps the windows.
+  rmSync(join(state, "usage.json"));
+  const reading = { used: 31, at, windows: [session(12), week(31)] };
+  writeFileSync(
+    join(state, "status.json"),
+    JSON.stringify({
+      updatedAt: at,
+      providers: [
+        providerStatus(
+          "claude-code",
+          at,
+          reading,
+          null,
+          null,
+          { drainThreshold: 90, pauseThreshold: 95, afterDrain: "auto-resume" },
+          0,
+          0,
+        ),
+      ],
+    }),
+  );
+  const fallback = JSON.parse((await command([path, "--json"])).output[0])
+    .providers[0];
+  assert.deepEqual(fallback.usage, { state: "known", reading });
+  assert.deepEqual(fallback.spareUsage, { state: "yes", pace: pace(31) });
 });
 
 test("a stopped host's old operational snapshot remains last-observed, including its owner hold", async (t) => {

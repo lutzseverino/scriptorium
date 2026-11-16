@@ -161,12 +161,19 @@ async function readUsageToken(path: string): Promise<string> {
   return oauth.accessToken;
 }
 
-// The usage endpoint's result.
+// The usage endpoint's result, whose window names give their lengths. Its
+// model-specific windows, such as `seven_day_opus`, are not read.
 export function claudeUsage(result: any): UsageWindow | null {
   return fullest(
-    [result?.five_hour, result?.seven_day].map((window) => ({
+    (
+      [
+        [result?.five_hour, 5 * 60],
+        [result?.seven_day, 7 * 24 * 60],
+      ] as const
+    ).map(([window, minutes]) => ({
       used: window?.utilization,
       reset: window?.resets_at,
+      minutes,
     })),
   );
 }

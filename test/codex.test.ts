@@ -10,7 +10,7 @@ import {
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createRegistry } from "../src/providers.ts";
-import { readCodexUsage } from "../src/providers/codex.ts";
+import { codexUsage, readCodexUsage } from "../src/providers/codex.ts";
 import { command, directory, fakePorts, rawRunLog, request } from "./fakes.ts";
 
 const login = '{"tokens":{"access_token":"secret"}}';
@@ -154,8 +154,16 @@ test("each Codex usage read signs in from a private copy of the current login th
     else process.env.CODEX_HOME = environment;
   });
 
-  // The fuller window is the weekly one, resetting at its Unix seconds.
-  const weekly = { used: 64, reset: "2026-10-14T18:00:00.000Z" };
+  // The fuller window is the weekly one, resetting at its Unix seconds, and
+  // every window keeps its length.
+  const weekly = {
+    used: 64,
+    reset: "2026-10-14T18:00:00.000Z",
+    windows: [
+      { used: 31, reset: "2026-10-14T15:00:00.000Z", minutes: 300 },
+      { used: 64, reset: "2026-10-14T18:00:00.000Z", minutes: 10080 },
+    ],
+  };
   assert.deepEqual(await adapter.readUsage(), weekly);
   const first = fake.seen();
   assert.deepEqual(first.args, ["app-server"]);
@@ -261,4 +269,54 @@ test("a Codex failure without its usage-limit error is no usage limit", (t) => {
     "",
   ])
     assert.equal(adapter.usageLimit(log), null);
+});
+
+test("a Codex reading with one window, such as the x5 plan's, reports only that window", () => {
+  for (const limits of [
+    {
+      primary: null,
+      secondary: {
+        usedPercent: 40,
+        windowDurationMins: 10080,
+        resetsAt: 1792000800,
+      },
+    },
+    {
+      primary: {
+        usedPercent: 40,
+        windowDurationMins: 10080,
+        resetsAt: 1792000800,
+      },
+    },
+  ])
+    assert.deepEqual(codexUsage({ rateLimits: limits }), {
+      used: 40,
+      reset: "2026-10-14T18:00:00.000Z",
+      windows: [
+        { used: 40, reset: "2026-10-14T18:00:00.000Z", minutes: 10080 },
+      ],
+    });
+});
+
+test("a Codex window without a reset or a length still reports its percentage", () => {
+  assert.deepEqual(
+    codexUsage({
+      rateLimits: {
+        primary: { usedPercent: 70, windowDurationMins: 300 },
+        secondary: {
+          usedPercent: 20,
+          windowDurationMins: 0,
+          resetsAt: 1792000800,
+        },
+      },
+    }),
+    {
+      used: 70,
+      reset: null,
+      windows: [
+        { used: 70, reset: null, minutes: 300 },
+        { used: 20, reset: "2026-10-14T18:00:00.000Z", minutes: null },
+      ],
+    },
+  );
 });

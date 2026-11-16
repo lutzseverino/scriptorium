@@ -8,7 +8,12 @@ import {
 import { providerStatus, type ProviderStatus } from "./events.ts";
 import { fresh, usageReading, usageHold, usageHoldAfter } from "./usage.ts";
 import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
-import type { OwnerControl, RunKindCounts } from "./factory.ts";
+import {
+  spareUsage,
+  type OwnerControl,
+  type RunKindCounts,
+  type SpareUsage,
+} from "./factory.ts";
 import {
   capacityCounts,
   configurationProblemStates,
@@ -64,6 +69,8 @@ type BudgetProvider = Omit<
   pauseAtThreshold: boolean | null;
   drained: boolean | null;
   draining: boolean | null;
+  // From the fresh reading's windows, which `usage` shows.
+  spareUsage: SpareUsage;
   reason: ProviderStatus["reason"] | "unavailable";
   nextAction: ProviderStatus["nextAction"] | "inspect-observations";
   observations: { work: Observation; usage: Observation; owner: Observation };
@@ -833,6 +840,11 @@ export async function readBudget(
                 : claimsHeld === false
                   ? false
                   : null,
+            spareUsage: spareUsage(
+              reading,
+              projectionTime.toISOString(),
+              configuration.usage.drainThreshold,
+            ),
             reason: claimsHeld === null ? "unavailable" : projected.reason,
             nextAction:
               claimsHeld === true
@@ -922,6 +934,7 @@ export function formatStatus(budget: LaunchBudget): string {
         "pauseAtThreshold",
         "drained",
         "draining",
+        "spareUsage",
         "reason",
         "nextAction",
         "observations",

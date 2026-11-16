@@ -132,10 +132,15 @@ test("Claude Code usage is read from its endpoint with the token file, not the e
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = environment;
   });
 
-  // The fixture's fuller window is the five-hour one, with its reset.
+  // The fixture's fuller window is the five-hour one, with its reset; its
+  // model-specific windows are not read.
   assert.deepEqual(await adapter.readUsage(), {
     used: 42,
     reset: "2026-10-13T15:00:00.000Z",
+    windows: [
+      { used: 42, reset: "2026-10-13T15:00:00.000Z", minutes: 300 },
+      { used: 17.5, reset: "2026-10-17T09:00:00.000Z", minutes: 10080 },
+    ],
   });
   assert.deepEqual(calls, [
     {
@@ -172,10 +177,18 @@ test("a renewed Claude usage login is reread independently of the launch token",
     });
   writeFileSync(usageCredential, login("synthetic-usage-first"));
   // A usage read needs no launch credential and no refresh token.
-  assert.deepEqual(await adapter.readUsage(), { used: 73, reset: null });
+  const reading = {
+    used: 73,
+    reset: null,
+    windows: [
+      { used: 12, reset: null, minutes: 300 },
+      { used: 73, reset: null, minutes: 10080 },
+    ],
+  };
+  assert.deepEqual(await adapter.readUsage(), reading);
   writeFileSync(`${usageCredential}.next`, login("synthetic-usage-renewed"));
   renameSync(`${usageCredential}.next`, usageCredential);
-  assert.deepEqual(await adapter.readUsage(), { used: 73, reset: null });
+  assert.deepEqual(await adapter.readUsage(), reading);
   assert.deepEqual(tokens, [
     "Bearer synthetic-usage-first",
     "Bearer synthetic-usage-renewed",
@@ -256,18 +269,43 @@ test("Claude Code usage is unknown when the endpoint's answer omits the windows"
     [new Response('"unexpected"'), null],
     [
       new Response('{"seven_day":{"utilization":64}}'),
-      { used: 64, reset: null },
+      {
+        used: 64,
+        reset: null,
+        windows: [{ used: 64, reset: null, minutes: 10080 }],
+      },
     ],
     [
       new Response(
         '{"five_hour":{"utilization":64,"resets_at":"soon"},"seven_day":{"utilization":12,"resets_at":"2026-10-17T09:00:00Z"}}',
       ),
-      { used: 64, reset: null },
+      {
+        used: 64,
+        reset: null,
+        windows: [
+          { used: 64, reset: null, minutes: 300 },
+          { used: 12, reset: "2026-10-17T09:00:00.000Z", minutes: 10080 },
+        ],
+      },
     ],
   ] as const) {
     const ports = fakePorts({ fetch: async () => response });
     assert.deepEqual(await claudeCode(t, ports).adapter.readUsage(), expected);
   }
+});
+
+test("a Claude account without a five-hour window reports its seven-day window with its length", async (t) => {
+  const ports = fakePorts({
+    fetch: async () =>
+      new Response(
+        '{"five_hour":null,"seven_day":{"utilization":31,"resets_at":"2026-10-17T09:00:00Z"},"seven_day_opus":{"utilization":90,"resets_at":"2026-10-17T09:00:00Z"}}',
+      ),
+  });
+  assert.deepEqual(await claudeCode(t, ports).adapter.readUsage(), {
+    used: 31,
+    reset: "2026-10-17T09:00:00.000Z",
+    windows: [{ used: 31, reset: "2026-10-17T09:00:00.000Z", minutes: 10080 }],
+  });
 });
 
 test("a refused Claude Code usage read names its status and Retry-After, never its body or the token", async (t) => {

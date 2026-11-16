@@ -818,7 +818,7 @@ The process owns everything under `stateDirectory`:
 | `repositories/<owner>/<name>/clone/`             | The repository's clone. Each pass resets it to the remote's default branch, and runs branch from it.                                                                                                                                                                                                                                                                                                                                              |
 | `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                                                                                                                      |
 | `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                                                                                                             |
-| `usage.json`                                     | Each provider's last good usage reading with when it was read and its reset, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                                                         |
+| `usage.json`                                     | Each provider's last good usage reading with when it was read, its reset and every window the provider reported, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                     |
 | `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                                                                                                                  |
 | `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                     |
 | `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline, its run result as read and whether its comment and labels landed, and whether the host settled it. What the issue was told lives in its [run comment](#run-comments). |
@@ -1604,6 +1604,19 @@ answer with no usage window preserves a cached reading only for the existing
 deadline. Errors use safe categories, never provider responses or credentials.
 The live read uses only configured host usage credentials; it grants no token
 permission to a sandbox.
+
+Each provider's fresh reading lists every window the provider reports under
+`usage.reading.windows`, each with its percentage `used`, its `reset` and its
+length in `minutes`, either of which is `null` when the provider reports none.
+Codex reports each window's length; Claude's five-hour and seven-day windows
+take theirs from their names, and its model-specific windows are not read.
+The drain and pause thresholds still read the fullest window. `spareUsage` is
+`yes` while the longest window with a length and a reset is used less than the
+percentage of it already elapsed and every shorter window is below the
+configured drain threshold, and `no` otherwise, both with that `pace` window
+and its `elapsed` percentage. It is `unknown` with the reason
+`no-fresh-reading` or `no-pace-window` when there is no fresh reading or no
+window with both a length and a reset.
 
 The command does not run a daemon pass, reconcile state, claim work, launch a
 sandbox, apply or queue a resume, or write the factory's state. It leaves owner
