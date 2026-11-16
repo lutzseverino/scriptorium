@@ -19,6 +19,7 @@ import {
 } from "./factory-configuration.ts";
 import type { ProviderStatus } from "./events.ts";
 import type { Credentials } from "./credentials.ts";
+import type { ModelPolicyPath } from "./model-policy.ts";
 
 // What the pass read from the repository's `.scriptorium/config.json`. The
 // last valid configuration that settles existing runs is never reported here.
@@ -38,6 +39,15 @@ export const configurationProblemStates = [
 )[];
 export type ConfigurationProblemState =
   (typeof configurationProblemStates)[number];
+
+// Where the pass read the repository's model policy from: a path, neither
+// path (host defaults), a refusal naming its correction, or no read, as for a
+// version 2 configuration or a pass that never reached it.
+export type ModelPolicyCoverage =
+  | { state: "read"; path: ModelPolicyPath }
+  | { state: "absent" }
+  | { state: "rejected"; problem: string }
+  | { state: "not-read" };
 
 // Who acts on a repository's pause: a person's factory hold, the
 // repository's own inputs, or the host.
@@ -102,6 +112,7 @@ export type RepositoryStatus = {
   cause?: PauseCause;
   reason?: string;
   configuration: ConfigurationCoverage;
+  modelPolicy: ModelPolicyCoverage;
   // The issues the factory saw ready but did not launch, and why.
   held: { issue: number; reason: string }[];
   // Active merge-delivery runs, distinct from pickup, retries and resumption.
@@ -160,6 +171,7 @@ export function hostStatus(
     name: string;
     paused: RepositoryPause | null;
     configuration: ConfigurationCoverage;
+    modelPolicy: ModelPolicyCoverage;
     pass?: PassHealth;
     ownerWaits?: OwnerWaits | null;
   }[],
@@ -195,12 +207,13 @@ export function hostStatus(
     ...(imageStorage && { imageStorage }),
     ...(credentials && { credentials }),
     repositories: repositories.map(
-      ({ name, paused, configuration, pass, ownerWaits }) => ({
+      ({ name, paused, configuration, modelPolicy, pass, ownerWaits }) => ({
         repository: name,
         ...(paused === null
           ? { state: "running" as const }
           : { state: "paused" as const, ...paused }),
         configuration,
+        modelPolicy,
         ...(runs.some(
           (run) =>
             run.repository === name &&

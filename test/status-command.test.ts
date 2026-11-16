@@ -13,6 +13,7 @@ import { status, type StatusPorts } from "../src/status-command.ts";
 import {
   hostStatus,
   type ConfigurationCoverage,
+  type ModelPolicyCoverage,
   type UnresolvedRun,
 } from "../src/status.ts";
 import {
@@ -33,6 +34,14 @@ const valid: ConfigurationCoverage = {
   state: "valid",
   version: 3,
   runKinds: ["implement"],
+};
+const policy: ModelPolicyCoverage = {
+  state: "read",
+  path: ".scriptorium/model-policy.json",
+};
+const legacyPolicy: ModelPolicyCoverage = {
+  state: "read",
+  path: ".github/factory-model-policy.json",
 };
 
 function fixture(t: TestContext) {
@@ -1232,6 +1241,7 @@ test("text and JSON project the host's shared implement counts with current limi
       name,
       paused: null,
       configuration: valid,
+      modelPolicy: policy,
     })),
     [],
     [],
@@ -1315,7 +1325,14 @@ for (const fault of [
     mkdirSync(state);
     const snapshot = hostStatus(
       now.toISOString(),
-      [{ name: "acme/widgets", paused: null, configuration: valid }],
+      [
+        {
+          name: "acme/widgets",
+          paused: null,
+          configuration: valid,
+          modelPolicy: policy,
+        },
+      ],
       [],
     );
     if (fault === "future")
@@ -1344,7 +1361,8 @@ for (const fault of [
   });
 
 // A status file the factory's writer produces for the fixture's repositories,
-// one valid and running and one paused on its own inputs.
+// one valid and running with its model policy at the new path, and one paused
+// on its own inputs with its policy at the old path.
 function coverageSnapshot(repositories: string[]) {
   return hostStatus(
     now.toISOString(),
@@ -1357,8 +1375,9 @@ function coverageSnapshot(repositories: string[]) {
               reason: "it has no .scriptorium/Dockerfile",
             },
             configuration: valid,
+            modelPolicy: legacyPolicy,
           }
-        : { name, paused: null, configuration: valid },
+        : { name, paused: null, configuration: valid, modelPolicy: policy },
     ),
     [],
   );
@@ -1388,6 +1407,7 @@ test("coverage projects the status file's repository entries, as text and JSON, 
     config.repositories.map((repository: string, index: number) => ({
       repository,
       configuration: valid,
+      modelPolicy: index === 1 ? legacyPolicy : policy,
       paused:
         index === 1
           ? {
@@ -1398,10 +1418,15 @@ test("coverage projects the status file's repository entries, as text and JSON, 
     })),
   );
   const text = (await command([path])).output[0].split("\n");
-  for (const { repository, configuration, paused } of coverage.repositories)
+  for (const {
+    repository,
+    configuration,
+    modelPolicy,
+    paused,
+  } of coverage.repositories)
     assert.ok(
       text.includes(
-        `${repository}: configuration=${JSON.stringify(configuration)} paused=${paused === null ? "none" : JSON.stringify(paused)}`,
+        `${repository}: configuration=${JSON.stringify(configuration)} modelPolicy=${JSON.stringify(modelPolicy)} paused=${paused === null ? "none" : JSON.stringify(paused)}`,
       ),
       text.join("\n"),
     );
@@ -1420,6 +1445,12 @@ for (const fault of [
   "inconsistent pause",
   "inconsistent configuration",
   "invalid configuration while running",
+  "legacy model policy",
+  "unknown model policy path",
+  "rejected model policy while running",
+  "model policy read for version 2",
+  "model policy not read for version 3",
+  "model policy read without the configuration",
   "duplicate",
   "new repository",
 ])
@@ -1440,6 +1471,17 @@ for (const fault of [
       first.configuration = { state: "valid", version: 2, runKinds: [] };
     if (fault === "invalid configuration while running")
       first.configuration = { state: "invalid", problem: "broken" };
+    if (fault === "legacy model policy") delete first.modelPolicy;
+    if (fault === "unknown model policy path")
+      first.modelPolicy = { state: "read", path: ".factory/model-policy.json" };
+    if (fault === "rejected model policy while running")
+      first.modelPolicy = { state: "rejected", problem: "broken" };
+    if (fault === "model policy read for version 2")
+      first.configuration = { ...valid, version: 2 };
+    if (fault === "model policy not read for version 3")
+      first.modelPolicy = { state: "not-read" };
+    if (fault === "model policy read without the configuration")
+      second.configuration = { state: "not-read", problem: "no clone" };
     if (fault === "duplicate")
       snapshot.repositories.push(snapshot.repositories[0]);
     if (fault === "new repository") snapshot.repositories.pop();
@@ -1463,6 +1505,7 @@ for (const fault of [
       config.repositories.map((repository: string) => ({
         repository,
         configuration: null,
+        modelPolicy: null,
         paused: null,
       })),
     );
@@ -1470,7 +1513,7 @@ for (const fault of [
     for (const repository of config.repositories)
       assert.ok(
         text.includes(
-          `${repository}: configuration=unavailable paused=unavailable`,
+          `${repository}: configuration=unavailable modelPolicy=unavailable paused=unavailable`,
         ),
         text,
       );
@@ -1550,6 +1593,7 @@ function healthSnapshot(repositories: string[]) {
       name,
       paused: null,
       configuration: valid,
+      modelPolicy: policy,
       ...(index === 0 ? widgetsHealth : gadgetsHealth),
     })),
     [],
@@ -1766,8 +1810,18 @@ test("text and JSON show the last pass's credential health and detail as an addi
   const snapshot = hostStatus(
     now.toISOString(),
     [
-      { name: "acme/widgets", paused: null, configuration: valid },
-      { name: "acme/gadgets", paused: null, configuration: valid },
+      {
+        name: "acme/widgets",
+        paused: null,
+        configuration: valid,
+        modelPolicy: policy,
+      },
+      {
+        name: "acme/gadgets",
+        paused: null,
+        configuration: valid,
+        modelPolicy: policy,
+      },
     ],
     [],
   );

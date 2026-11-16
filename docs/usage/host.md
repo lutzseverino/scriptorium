@@ -475,14 +475,22 @@ host's capabilities holds the same way.
 ### Repository model policy
 
 For version 3 factory configurations, the optional repository-owned
-`.github/factory-model-policy.json` holds the repository's preferences.
+`.scriptorium/model-policy.json` holds the repository's preferences.
 Version 2 ignores this file and keeps its issue-label selection and host defaults.
 The factory reads it from the same default-branch
 revision as `.scriptorium/config.json`, never from a run's pull request. Without
 the file, every launch takes the host's defaults, including `models.retry`.
 A present file that is unreadable, not JSON or invalid pauses the repository
 with its correction, as invalid configuration does; it never reads as absence.
-Repo Canon checks the file's schema and ships no values.
+[Coverage](#coverage) reports which path the pass read the policy from.
+
+Version 3 configurations also read the policy's previous path,
+`.github/factory-model-policy.json`, when `.scriptorium/model-policy.json` is
+absent. This fallback lasts one configuration version: the next factory
+configuration version reads only `.scriptorium/model-policy.json`, so move the
+file now. When both paths exist, the factory does not choose between them: it
+pauses the repository with an error naming both paths until one policy
+remains, at `.scriptorium/model-policy.json`.
 
 ```json
 {
@@ -1627,7 +1635,8 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - its token command fails;
 - its clone does not update;
 - its `.scriptorium/config.json` is missing, unreadable or invalid, or its
-  version 3 model policy is unreadable or invalid;
+  version 3 model policy is unreadable or invalid, or exists at both its
+  current and previous paths;
 - it has no `.scriptorium/Dockerfile`, its sandbox image does not build, or storage admission holds a new build;
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
@@ -1784,6 +1793,10 @@ coverage.repositories[]          one entry per repository the host configuration
     .runKinds                    the enabled run kinds, ordered triage, implement, review; only when valid
                                  (version 2: ["implement"])
     .problem                     why the configuration is not valid; only when not valid
+  .modelPolicy                   null while the observation is unavailable; otherwise:
+    .state                       read | absent | rejected | not-read
+    .path                        .scriptorium/model-policy.json or .github/factory-model-policy.json; only when read
+    .problem                     why the policy was refused; only when rejected
   .paused                        null when the pass left no repository pause or factory hold
                                  (and while the observation is unavailable); otherwise:
     .cause                       factory-hold | repository-input | host
@@ -1801,6 +1814,14 @@ coverage.repositories[]          one entry per repository the host configuration
   settle existing runs is never reported as the current one.
 - `runKinds` names only kinds from the closed set Scriptorium owns, never their
   skills or arguments.
+- `modelPolicy` is where the pass read the [repository model
+  policy](#repository-model-policy) from: `read` with the `path` it came from,
+  `absent` when neither path exists and launches take the host's defaults,
+  `rejected` when a present policy is unreadable or invalid or both paths
+  exist, which also pauses the repository, and `not-read` for a version 2
+  configuration or when the pass never reached the policy. A pass that cannot
+  read the configuration but still settles runs with the last valid version 3
+  configuration reads the policy too.
 - `paused` is the repository pause or factory hold described under
   [Repository pauses](#repository-pauses), with the same reason as the status
   file. A `repository-input` or `host` pause claims and launches nothing that
@@ -1818,8 +1839,8 @@ hold:
 - `paused` is `null`.
 
 Coverage is always `last-observed`, at the status file's `updatedAt`; it is
-never current. It is `unavailable`, with every entry's `configuration` and
-`paused` set to `null`, when the status file is missing, unreadable (including
+never current. It is `unavailable`, with every entry's `configuration`,
+`modelPolicy` and `paused` set to `null`, when the status file is missing, unreadable (including
 for a user who cannot read the host's state directory), future-dated, written
 by a release that does not record coverage, inconsistent, or lacks an entry for
 a listed repository. Then `null` establishes nothing: neither coverage nor its
@@ -1827,7 +1848,7 @@ absence. A pending operational transaction concerns provider work counts and
 leaves coverage available. The command reads coverage only from the status
 file: it clones, fetches and reads no repository, runs no token command and
 writes nothing. Text output shows each repository as
-`<repository>: configuration=<JSON> paused=<JSON>`, with `paused=none` when
+`<repository>: configuration=<JSON> modelPolicy=<JSON> paused=<JSON>`, with `paused=none` when
 the observation is available and nothing pauses it, and `unavailable` values
 otherwise, followed by `coverage observation=<JSON>`.
 
@@ -2067,7 +2088,8 @@ Warnings and configuration errors go to stderr, leaving JSON stdout parseable.
 After every pass the factory replaces `status.json` whole. It lists each
 repository in the host configuration's order with its state, `running` or
 `paused` with the `cause` and `reason`, its `configuration` as the pass read
-it, in the shape [coverage](#coverage) reports, and the issues the pass held
+it and its `modelPolicy` source, in the shapes [coverage](#coverage) reports,
+and the issues the pass held
 with their skip reasons. A paused entry's `cause` and `reason` describe the
 pass's final pause reason, or the factory hold when the pass has no pause
 reason. Each entry also has the `pass` and `ownerWaits` facts in the shape

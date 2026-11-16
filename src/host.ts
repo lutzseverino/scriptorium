@@ -41,11 +41,7 @@ import {
   stopLabels,
   transition,
 } from "./label-roles.ts";
-import {
-  modelPolicyPath,
-  readModelPolicy,
-  type ModelPolicy,
-} from "./model-policy.ts";
+import { readModelPolicy, type ModelPolicy } from "./model-policy.ts";
 import {
   decideFactory,
   pullRequestIdentity,
@@ -109,6 +105,7 @@ import {
   unknownPassHealth,
   writeStatus,
   type ConfigurationCoverage,
+  type ModelPolicyCoverage,
   type OwnerWaits,
   type PassHealth,
   type PauseCause,
@@ -208,6 +205,8 @@ type Pass = {
   configuration: FactoryConfiguration | null;
   // The repository's model policy from the same revision, null without one.
   modelPolicy: ModelPolicy | null;
+  // Where this pass read the model policy from.
+  modelPolicyFile: ModelPolicyCoverage;
   releaseHold?: number[] | null;
   // Open issues and PRs carrying `labels.hold`; null when the read failed.
   factoryHold?: number[] | null;
@@ -378,6 +377,7 @@ export function createHost(
       read: null,
       configuration: conventions.get(name) ?? null,
       modelPolicy: null,
+      modelPolicyFile: { state: "not-read" },
       ownerWaits: null,
     };
     const { clone } = directory(name);
@@ -432,13 +432,18 @@ export function createHost(
         try {
           // A present unreadable policy holds launches rather than reading
           // as absence, just as invalid configuration does.
-          pass.modelPolicy = readModelPolicy(join(clone, modelPolicyPath));
+          const read = readModelPolicy(clone);
+          pass.modelPolicy = read?.policy ?? null;
+          pass.modelPolicyFile = read
+            ? { state: "read", path: read.path }
+            : { state: "absent" };
         } catch (error) {
-          if (pass.paused === null)
-            pause(
-              `${error instanceof Error ? error.message : error}`,
-              "repository-input",
-            );
+          const problem = `${error instanceof Error ? error.message : error}`;
+          pass.modelPolicyFile = {
+            state: "rejected",
+            problem: repositoryReason(name, problem),
+          };
+          if (pass.paused === null) pause(problem, "repository-input");
         }
       const dockerfile = join(clone, dockerfilePath);
       if (pass.paused === null && !existsSync(dockerfile))
@@ -1739,6 +1744,7 @@ export function createHost(
             return {
               name: pass.name,
               configuration: pass.configurationFile,
+              modelPolicy: pass.modelPolicyFile,
               paused:
                 pass.paused ??
                 (held
