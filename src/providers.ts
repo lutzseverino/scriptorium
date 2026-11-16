@@ -288,6 +288,8 @@ export function createRegistry(
     if (visited.has(identity)) return;
     visiting.add(identity);
     for (const broader of metadata.get(identity)?.narrowerThan ?? []) {
+      // A self-pair is already refused, not reported again as a cycle.
+      if (broader === identity) continue;
       if (visiting.has(broader))
         problems.push(
           `models.metadata.${identity}.narrowerThan: cycle through ${broader}`,

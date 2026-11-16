@@ -1164,7 +1164,7 @@ function admit(
       available,
     );
   if (modelSource.kind === "stage")
-    choice = standIn(choice, next.diversity, snapshot, models, available);
+    choice = chooseStandIn(choice, next.diversity, snapshot, models, available);
   let reason =
     repositoryHeld?.reason ??
     (next.pause && limited(choice.model.provider, next.pause, snapshot)) ??
@@ -1183,7 +1183,7 @@ function admit(
     }
   }
   if (reason) return skipped(next, reason, repositoryHeld?.hold);
-  const { model, selection, diversity, standIn: substitution } = choice;
+  const { model, selection, diversity, standIn } = choice;
   countRunning(running, {
     repository: repository.name,
     provider: model.provider,
@@ -1197,7 +1197,7 @@ function admit(
       ...at,
       ...model,
       selection,
-      ...(substitution && { standIn: substitution }),
+      ...(standIn && { standIn }),
       ...(diversity && { diversity }),
       continuation: next.launch,
     },
@@ -1206,7 +1206,8 @@ function admit(
 
 // Only direct, host-declared broader models are candidates, in declaration
 // order. The usual availability and fallback gates still own admission.
-function standIn(
+// Seam (deferred): the stand-in choice; consumers: 1 (status planned in #194); extract at 3.
+function chooseStandIn(
   choice: Choice,
   implementedBy: string | null,
   snapshot: Snapshot,
@@ -1214,11 +1215,11 @@ function standIn(
   available: (model: Model) => string | null,
 ): Choice {
   const chosen = `${choice.model.provider}/${choice.model.model}`;
-  const pairs =
+  const broaderModels =
     models.modelFacts.catalog.find((entry) => entry.identity === chosen)
       ?.narrowerThan ?? [];
   const unavailable = available(choice.model);
-  for (const identity of pairs) {
+  for (const identity of broaderModels) {
     const broader = models.resolveModel(identity);
     if (
       "error" in broader ||

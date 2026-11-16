@@ -70,16 +70,19 @@ test("host metadata accepts a narrower-than pair as its only value", (t) => {
 test("narrower-than pairs refuse invalid identities and cycles, naming the field", (t) => {
   const path = join(directory(t), "host.json");
   const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
-  for (const broader of [
-    [],
-    "claude-code/claude-opus-5-5",
-    ["unknown/work"],
-    ["claude-opus-5-5"],
-    ["claude-code/claude-opus-5-5@high"],
-    ["codex/gpt-work"],
-    [" claude-code/claude-opus-5-5"],
-    ["claude-code/claude-opus-5-5 "],
-  ]) {
+  for (const [broader, reason] of [
+    [[], /narrowerThan: /],
+    ["claude-code/claude-opus-5-5", /narrowerThan: /],
+    [["unknown/work"], /narrowerThan\[0\]: provider unknown is not configured/],
+    [["claude-opus-5-5"], /narrowerThan\[0\]: must be a canonical/],
+    [
+      ["claude-code/claude-opus-5-5@high"],
+      /narrowerThan\[0\]: must not specify an effort/,
+    ],
+    [["codex/gpt-work"], /narrowerThan\[0\]: a model cannot be narrower/],
+    [[" claude-code/claude-opus-5-5"], /narrowerThan\[0\]: /],
+    [["claude-code/claude-opus-5-5 "], /narrowerThan\[0\]: /],
+  ] as const) {
     writeFileSync(
       path,
       JSON.stringify({
@@ -90,7 +93,10 @@ test("narrower-than pairs refuse invalid identities and cycles, naming the field
         },
       }),
     );
-    assert.throws(() => read(path), /models\.metadata\.gpt-work\.narrowerThan/);
+    const problems = refused(path).join("\n");
+    assert.match(problems, /models\.metadata\.gpt-work\.narrowerThan/);
+    assert.match(problems, reason);
+    assert.doesNotMatch(problems, /cycle/);
   }
   writeFileSync(
     path,
