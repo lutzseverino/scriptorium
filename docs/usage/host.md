@@ -1805,7 +1805,8 @@ health.overdueRuns               null while the observation is unavailable; othe
   stop was requested. `stopping`: a stop was requested, for the time limit,
   the pause threshold or otherwise, and the agent has not exited. `exited`: the
   agent exited and the run's ending is not yet resolved, for example while its
-  result publication or ending observation is pending; `resultPosted` says
+  result publication or ending observation is pending, including a
+  publication a restart found pending; `resultPosted` says
   whether its result comment and labels have landed. A run whose ending is
   resolved never appears, whether done, awaiting merge, stopped, failed,
   paused or interrupted. Phases read the same exit fact as capacity counts.

@@ -229,12 +229,13 @@ export function hostStatus(
   };
 }
 
-type ObjectValue = Record<string, unknown>;
-const object = (value: unknown): ObjectValue | null =>
+// Checks for values read back from the factory's JSON records.
+export type ObjectValue = Record<string, unknown>;
+export const object = (value: unknown): ObjectValue | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as ObjectValue)
     : null;
-const time = (value: unknown): value is string =>
+export const time = (value: unknown): value is string =>
   typeof value === "string" && Number.isFinite(Date.parse(value));
 const fields = (record: ObjectValue) => Object.keys(record).sort().join();
 

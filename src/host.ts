@@ -1750,10 +1750,12 @@ export function createHost(
   }
 
   // The runs the host holds whose ending is not resolved: running, stopping,
-  // or exited while publication or ending observation is pending.
+  // or exited while publication or ending observation is pending. A restart
+  // gives a recovered run an ending before its result is posted, so that
+  // run's publication still leaves it unresolved.
   function unresolvedRuns(): UnresolvedRun[] {
     return runs.flatMap((run) =>
-      run.exited && run.ended !== null
+      run.exited && run.ended !== null && !publicationPending(run)
         ? []
         : [
             {
@@ -1816,6 +1818,18 @@ export function createHost(
   }
 
   return { tick, interrupt, drain, refreshTokens, report };
+}
+
+// Whether the run's result comment and labels have yet to land. An
+// interrupted or paused run launches again rather than posting.
+function publicationPending(run: HostRun): boolean {
+  return (
+    run.result !== undefined &&
+    !("invalid" in run.result) &&
+    !run.resultPosted &&
+    !run.interrupted &&
+    !pausedEnding(run)
+  );
 }
 
 // How a run ended, when it paused.

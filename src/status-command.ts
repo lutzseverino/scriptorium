@@ -12,11 +12,14 @@ import type { OwnerControl, RunKindCounts } from "./factory.ts";
 import {
   capacityCounts,
   configurationProblemStates,
+  object,
   passHealth,
   pauseCauses,
   runPhases,
+  time,
   type ConfigurationCoverage,
   type ConfigurationProblemState,
+  type ObjectValue,
   type OwnerWaits,
   type PassHealth,
   type RepositoryPause,
@@ -173,15 +176,6 @@ export async function status(
   return 0;
 }
 
-type ObjectValue = Record<string, unknown>;
-function object(value: unknown): ObjectValue | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as ObjectValue)
-    : null;
-}
-function time(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
 function count(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

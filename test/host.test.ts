@@ -11306,3 +11306,53 @@ test("runs that ended awaiting merge or paused never appear among unresolved run
   assert.deepEqual(run.status().unresolvedRuns, []);
   assert.deepEqual(healthOf(run).overdueRuns, []);
 });
+
+test("an exited run a restart recovers before its result is posted stays among the overdue runs until it settles", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.github.failedRequests.set(
+    "acme/widgets issues",
+    new PlatformError("unavailable", "issues unavailable"),
+  );
+  run.launched
+    .find(({ options }) => options.name === "acme/widgets#4")!
+    .finish();
+  await run.drain();
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  const exited = {
+    repository: "acme/widgets",
+    issue: 4,
+    runKind: "implement",
+    startedAt: "2026-10-09T12:00:00.000Z",
+    limitAt: "2026-10-09T16:00:00.000Z",
+    phase: "exited",
+    resultPosted: false,
+  };
+  assert.deepEqual(run.status().unresolvedRuns, [exited]);
+  // Platform reads keep failing across the restart, so no pass posts the
+  // result or settles the run the host still holds.
+  run.interrupt();
+  const restarted = run.restart();
+  run.clock.now = new Date("2026-10-09T17:00:00Z");
+  await restarted.tick();
+  assert.equal(recordOf(run.state, 4, 1).settled, false);
+  assert.deepEqual(run.status().unresolvedRuns, [exited]);
+  assert.deepEqual(healthOf(run).overdueRuns, [exited]);
+  // Once the reads recover, the result lands and the run settles; only the
+  // issue's next attempt remains.
+  run.github.failedRequests.delete("acme/widgets issues");
+  run.clock.now = new Date("2026-10-09T17:05:00Z");
+  await restarted.tick();
+  assert.equal(recordOf(run.state, 4, 1).settled, true);
+  assert.deepEqual(
+    healthOf(run).overdueRuns.map(
+      ({ startedAt, phase }: { startedAt: string; phase: string }) =>
+        `${startedAt} ${phase}`,
+    ),
+    ["2026-10-09T17:05:00.000Z running"],
+  );
+});
