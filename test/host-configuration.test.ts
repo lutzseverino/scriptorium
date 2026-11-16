@@ -54,6 +54,77 @@ test("host effort is required rather than inferred from the adapter", (t) => {
   assert.match(refused(path).join("\n"), /models\.effort: is missing/);
 });
 
+test("host metadata accepts a narrower-than pair as its only value", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const models = {
+    ...base.models,
+    metadata: {
+      "gpt-work": { narrowerThan: ["claude-code/claude-opus-5-5"] },
+    },
+  };
+  writeFileSync(path, JSON.stringify({ ...base, models }));
+  assert.deepEqual(read(path).configuration.models, models);
+});
+
+test("narrower-than pairs refuse invalid identities and cycles, naming the field", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const broader of [
+    [],
+    "claude-code/claude-opus-5-5",
+    ["unknown/work"],
+    ["claude-opus-5-5"],
+    ["claude-code/claude-opus-5-5@high"],
+    ["codex/gpt-work"],
+    [" claude-code/claude-opus-5-5"],
+    ["claude-code/claude-opus-5-5 "],
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...base,
+        models: {
+          ...base.models,
+          metadata: { "gpt-work": { narrowerThan: broader } },
+        },
+      }),
+    );
+    assert.throws(() => read(path), /models\.metadata\.gpt-work\.narrowerThan/);
+  }
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ...base,
+      models: {
+        ...base.models,
+        allowed: ["gpt-work", "claude-sonnet-5-5", "claude-opus-5-5"],
+        metadata: {
+          "gpt-work": { narrowerThan: ["claude-code/claude-other"] },
+        },
+      },
+    }),
+  );
+  assert.throws(() => read(path), /narrowerThan\[0\].*not in models.allowed/);
+  for (const metadata of [
+    {
+      "gpt-work": { narrowerThan: ["claude-code/claude-opus-5-5"] },
+      "claude-opus-5-5": { narrowerThan: ["codex/gpt-work"] },
+    },
+    {
+      "gpt-work": { narrowerThan: ["claude-code/claude-sonnet-5-5"] },
+      "claude-sonnet-5-5": { narrowerThan: ["claude-code/claude-opus-5-5"] },
+      "claude-opus-5-5": { narrowerThan: ["codex/gpt-work"] },
+    },
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, models: { ...base.models, metadata } }),
+    );
+    assert.throws(() => read(path), /narrowerThan.*cycle/);
+  }
+});
+
 test("model metadata stays within capabilities and diagnoses its fields", (t) => {
   const path = join(directory(t), "host.json");
   const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));

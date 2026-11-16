@@ -107,7 +107,13 @@ export type ProviderSettings = { credential: string; usageCredential?: string };
 
 export type Model = { provider: string; model: string; effort: string };
 
-export type ModelMetadata = { guidance?: string; effort?: string };
+export type ModelMetadata = {
+  guidance?: string;
+  effort?: string;
+  // The host owns these direct pairs; admission consumes them and status will
+  // use the same choice. Pairs imply no transitive relationship.
+  narrowerThan?: readonly string[];
+};
 export type ModelSettings = {
   effort: string;
   default?: string;
@@ -245,7 +251,9 @@ export function createRegistry(
       if (
         previous &&
         (previous.effort !== entry.effort ||
-          previous.guidance !== entry.guidance)
+          previous.guidance !== entry.guidance ||
+          JSON.stringify(previous.narrowerThan) !==
+            JSON.stringify(entry.narrowerThan))
       )
         problems.push(`${path}: conflicts with metadata for ${identity}`);
       else {
@@ -256,8 +264,40 @@ export function createRegistry(
         const error = effortProblem(model.provider, entry.effort);
         if (error) problems.push(`${path}.effort: ${error}`);
       }
+      entry.narrowerThan?.forEach((value, index) => {
+        const field = `${path}.narrowerThan[${index}]`;
+        const broader = permitted("", value);
+        if (value.includes("@"))
+          problems.push(`${field}: must not specify an effort in the identity`);
+        else if ("error" in broader)
+          problems.push(`${field}: ${broader.error}`);
+        else if (value !== identityOf(broader) || /\s/.test(value))
+          problems.push(
+            `${field}: must be a canonical <provider>/<model> identity`,
+          );
+        else if (value === identity)
+          problems.push(`${field}: a model cannot be narrower than itself`);
+        else catalog.set(value, broader);
+      });
     }
   }
+
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  function visit(identity: string) {
+    if (visited.has(identity)) return;
+    visiting.add(identity);
+    for (const broader of metadata.get(identity)?.narrowerThan ?? []) {
+      if (visiting.has(broader))
+        problems.push(
+          `models.metadata.${identity}.narrowerThan: cycle through ${broader}`,
+        );
+      else visit(broader);
+    }
+    visiting.delete(identity);
+    visited.add(identity);
+  }
+  for (const identity of metadata.keys()) visit(identity);
 
   function effortProblem(provider: string, effort: string): string | null {
     const efforts = providers.get(provider)!.efforts;

@@ -50,6 +50,7 @@ function configuration(review = true): FactoryConfiguration {
 
 // Only the retry model `provider/retry` resolves.
 const models: Models = {
+  modelFacts: { effort: "high", defaults: {}, catalog: [] },
   resolveModel: (value) =>
     value === "provider/retry"
       ? { provider: "provider", model: "retry", effort: "high" }

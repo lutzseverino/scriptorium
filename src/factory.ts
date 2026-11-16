@@ -143,6 +143,7 @@ export type Run = {
   // Where the model came from, and whether a review that asked for another
   // provider than its implement attempt's could not have one.
   selection?: Selection;
+  standIn?: StandIn;
   diversity?: "unavailable";
   // Observed hold numbers; null means a read failed during the run.
   holdObserved?: number[] | null;
@@ -256,7 +257,10 @@ export type Snapshot = {
 };
 
 // How the decision core resolves models: the provider registry.
-export type Models = Pick<Registry, "resolveModel" | "resolveModelLabel">;
+export type Models = Pick<
+  Registry,
+  "resolveModel" | "resolveModelLabel" | "modelFacts"
+>;
 
 // Where a launch's model came from: the issue's model label, the repository's
 // model policy, the host's default for its kind, the host default the policy's
@@ -269,7 +273,17 @@ export type Selection =
   | "host-default"
   | "fallback"
   | "diversity"
+  | "stand-in"
   | "recorded";
+
+// Why admission ran a broader model than its fresh choice. The run's own
+// provider/model identify what actually ran, including after recovery.
+export type StandIn = {
+  chosen: string;
+  reason:
+    | { kind: "spare usage"; used: number; elapsed: number }
+    | { kind: "chosen provider cannot launch"; reason: string };
+};
 
 export type Launch = {
   kind: "launch";
@@ -280,6 +294,7 @@ export type Launch = {
   model: string;
   effort: string;
   selection: Selection;
+  standIn?: StandIn;
   diversity?: "unavailable";
 };
 
@@ -1069,7 +1084,12 @@ function skipped(
   ];
 }
 
-type Choice = { model: Model; selection: Selection; diversity?: "unavailable" };
+type Choice = {
+  model: Model;
+  selection: Selection;
+  diversity?: "unavailable";
+  standIn?: StandIn;
+};
 
 // Admission preserves reason precedence: fresh repository gates and a fresh
 // merge's release hold precede model validation; retry/resume models precede
@@ -1114,6 +1134,7 @@ function admit(
               ? { provider: run.provider, model: run.model, effort: run.effort }
               : resolved,
             selection: "recorded",
+            ...(run.standIn && { standIn: run.standIn }),
           };
   } else
     choice = stageModel(
@@ -1142,6 +1163,8 @@ function admit(
       models,
       available,
     );
+  if (modelSource.kind === "stage")
+    choice = standIn(choice, next.diversity, snapshot, models, available);
   let reason =
     repositoryHeld?.reason ??
     (next.pause && limited(choice.model.provider, next.pause, snapshot)) ??
@@ -1160,7 +1183,7 @@ function admit(
     }
   }
   if (reason) return skipped(next, reason, repositoryHeld?.hold);
-  const { model, selection, diversity } = choice;
+  const { model, selection, diversity, standIn: substitution } = choice;
   countRunning(running, {
     repository: repository.name,
     provider: model.provider,
@@ -1174,10 +1197,62 @@ function admit(
       ...at,
       ...model,
       selection,
+      ...(substitution && { standIn: substitution }),
       ...(diversity && { diversity }),
       continuation: next.launch,
     },
   ];
+}
+
+// Only direct, host-declared broader models are candidates, in declaration
+// order. The usual availability and fallback gates still own admission.
+function standIn(
+  choice: Choice,
+  implementedBy: string | null,
+  snapshot: Snapshot,
+  models: Models,
+  available: (model: Model) => string | null,
+): Choice {
+  const chosen = `${choice.model.provider}/${choice.model.model}`;
+  const pairs =
+    models.modelFacts.catalog.find((entry) => entry.identity === chosen)
+      ?.narrowerThan ?? [];
+  const unavailable = available(choice.model);
+  for (const identity of pairs) {
+    const broader = models.resolveModel(identity);
+    if (
+      "error" in broader ||
+      broader.provider === implementedBy ||
+      available(broader) !== null
+    )
+      continue;
+    const reading = snapshot.usage[broader.provider] ?? null;
+    const spare = spareUsage(
+      reading,
+      snapshot.now,
+      snapshot.settings.drainThreshold,
+    );
+    const reason: StandIn["reason"] | null =
+      spare.state === "yes"
+        ? {
+            kind: "spare usage",
+            used: spare.pace.used,
+            elapsed: spare.pace.elapsed,
+          }
+        : unavailable &&
+            reading &&
+            (snapshot.settings.drainThreshold === null ||
+              reading.used < snapshot.settings.drainThreshold)
+          ? { kind: "chosen provider cannot launch", reason: unavailable }
+          : null;
+    if (reason)
+      return {
+        model: broader,
+        selection: "stand-in",
+        standIn: { chosen, reason },
+      };
+  }
+  return choice;
 }
 
 // Every implement continuation acquires both budgets at the same gate,

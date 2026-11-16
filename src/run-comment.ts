@@ -11,7 +11,7 @@
 import type { Comment, IssueTracker } from "@lutzseverino/postern";
 import { renderComment } from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
-import type { IssueId } from "./factory.ts";
+import type { IssueId, StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
 import type { InputResume } from "./platform.ts";
 import type { RunResult } from "./run-result.ts";
@@ -40,11 +40,23 @@ export type PhaseFacts = {
   provider?: string;
   model?: string;
   effort?: string;
+  standIn?: StandIn;
   attempt?: number;
   round?: number;
   link?: string;
   unpushable?: string[];
 };
+
+function standInText(facts: PhaseFacts): string | undefined {
+  if (!facts.standIn) return undefined;
+  const { chosen, reason } = facts.standIn;
+  const percent = (value: number) => Math.round(value * 10) / 10;
+  const detail =
+    reason.kind === "spare usage"
+      ? `spare usage (${percent(reason.used)}% used, ${percent(reason.elapsed)}% elapsed)`
+      : `chosen provider cannot launch (${reason.reason})`;
+  return `chosen \`${chosen}\`; ran \`${facts.provider}/${facts.model}\` as a stand-in: ${detail}`;
+}
 
 // One write: facts merged into one phase's, whose run facts and link stay
 // until replaced or cleared by an undefined fact, while its reason, reset and
@@ -174,7 +186,14 @@ export function issueComments(
         shown.map((name) => {
           const facts = state.phases[name];
           const done = facts?.state === "done" || facts?.state === "merged";
-          return [name, { ...facts, check: done ? "x" : " " }];
+          return [
+            name,
+            {
+              ...facts,
+              standIn: facts && standInText(facts),
+              check: done ? "x" : " ",
+            },
+          ];
         }),
       ),
       result: result && `${bodyStart}${result}${bodyEnd}`,

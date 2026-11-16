@@ -288,16 +288,22 @@ function hostConfigurationProblems(value: unknown): string[] {
           allowed: list(text(), { nonEmpty: true }),
           metadata: record(
             (entry, path, problems) => {
-              object({ guidance: text(), effort: text() }, [
-                "guidance",
-                "effort",
-              ])(entry, path, problems);
+              object(
+                {
+                  guidance: text(),
+                  effort: text(),
+                  narrowerThan: list(text(), { nonEmpty: true }),
+                },
+                ["guidance", "effort", "narrowerThan"],
+              )(entry, path, problems);
               if (
                 typeof entry === "object" &&
                 entry !== null &&
                 Object.keys(entry).length === 0
               )
-                problems.push(`${path}: needs guidance and/or effort`);
+                problems.push(
+                  `${path}: needs guidance, effort or narrowerThan`,
+                );
             },
             () => null,
           ),

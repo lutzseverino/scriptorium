@@ -8,6 +8,7 @@ const lineNames = [
   "provider",
   "model",
   "effort",
+  "standIn",
   "attempt",
   "round",
   "link",
@@ -35,7 +36,7 @@ type Part = string | { name: string; section?: Part[] };
 
 // One checklist line of the run comment, for the phase `name`.
 const phase = (name: string, title: string) =>
-  `{#${name}}- [{check}] ${title}{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · \`{provider}/{model}@{effort}\`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: \`{unpushable}\`\n{/unpushable}{/${name}}`;
+  `{#${name}}- [{check}] ${title}{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · \`{provider}/{model}@{effort}\`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#standIn} · {standIn}{/standIn}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: \`{unpushable}\`\n{/unpushable}{/${name}}`;
 
 const defaults = {
   run: `**Factory run: {status}**\n\n${phase("triage", "Triage")}${phase("implement", "Implement")}${phase("review", "Review")}${phase("merge", "Merge")}{#result}\n<details>\n<summary>Latest run result</summary>\n\n{result}\n\n</details>\n{/result}`,
