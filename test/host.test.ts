@@ -8744,45 +8744,46 @@ test("factory findings require a host-recorded run citation and its filing ident
   );
 });
 
-test("an unowned trusted draft starts review against its PR body and resumes the explicit target", async (t) => {
-  const bare = remote(t, kindsFiles);
-  const pr = {
-    ...publishedPR(bare, "grill/domain"),
-    number: 42,
-    body: "Record the chosen design",
-    author: { login: "owner", bot: false },
-  };
-  const run = host(t, {
-    repositories: {
-      "acme/widgets": [
-        {
-          number: 42,
-          isPullRequest: true,
-          labels: [],
-          branchPullRequests: [pr],
-        },
-      ],
-    },
-    remotes: { "acme/widgets": bare },
+for (const draft of [true, false])
+  test(`an unowned trusted ${draft ? "draft" : "ready"} PR starts review against its PR body and resumes the explicit target`, async (t) => {
+    const bare = remote(t, kindsFiles);
+    const pr = {
+      ...publishedPR(bare, "grill/domain"),
+      number: 42,
+      body: "Record the chosen design",
+      author: { login: "owner", bot: false },
+    };
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 42,
+            isPullRequest: true,
+            labels: [],
+            branchPullRequests: [pr],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    if (draft) run.github.drafts.add(42);
+    await run.tick();
+    assert.equal(run.launched.length, 1, run.reports.join("\n"));
+    assert.equal(invocation(run.launched[0].options.prompt), "/review #42");
+    assert.match(
+      run.launched[0].options.prompt!,
+      /no linked issue, use the PR body as the Spec source/,
+    );
+    // The PR predates this launch and is on a non-factory branch: its explicit
+    // target still survives interruption, even after it is marked ready.
+    run.interrupt();
+    run.github.drafts.delete(42);
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(run.launched.length, 2, run.reports.join("\n"));
+    assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
+    assert.equal(recordOf(run.state, 42, 1).continuation.target.number, 42);
   });
-  run.github.drafts.add(42);
-  await run.tick();
-  assert.equal(run.launched.length, 1, run.reports.join("\n"));
-  assert.equal(invocation(run.launched[0].options.prompt), "/review #42");
-  assert.match(
-    run.launched[0].options.prompt!,
-    /no linked issue, use the PR body as the Spec source/,
-  );
-  // The PR predates this launch and is on a non-factory branch: its explicit
-  // target still survives interruption, even after it is marked ready.
-  run.interrupt();
-  run.github.drafts.delete(42);
-  const restarted = run.restart();
-  await restarted.tick();
-  assert.equal(run.launched.length, 2, run.reports.join("\n"));
-  assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
-  assert.equal(recordOf(run.state, 42, 1).continuation.target.number, 42);
-});
 
 test("an independent review's answered stop resumes review on its PR after its label goes, across a restart", async (t) => {
   const bare = remote(t, kindsFiles);
@@ -8862,24 +8863,30 @@ test("a review stop while the gate read fails asks for its stop, not a gate", as
   );
 });
 
-test("a running worker's PR on another branch is owned before independent draft admission", async (t) => {
-  const bare = remote(t, kindsFiles);
-  const run = host(t, {
-    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
-    remotes: { "acme/widgets": bare },
+for (const draft of [true, false])
+  test(`a running worker's ${draft ? "draft" : "ready"} PR on another branch is owned before independent review admission`, async (t) => {
+    const bare = remote(t, kindsFiles);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          { number: 4, labels: ["state:ready"] },
+          { number: 42, isPullRequest: true, labels: [] },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    run.github.viewers["acme/widgets"] = { login: "owner", bot: false };
+    await run.tick();
+    const pr = {
+      ...publishedPR(bare, "work/domain"),
+      number: 42,
+      author: { login: "owner", bot: false },
+    };
+    run.github.find("acme/widgets", 4).pullRequests.push(pr);
+    if (draft) run.github.drafts.add(42);
+    await run.tick();
+    assert.equal(run.launched.length, 1, run.reports.join("\n"));
   });
-  run.github.viewers["acme/widgets"] = { login: "owner", bot: false };
-  await run.tick();
-  const pr = {
-    ...publishedPR(bare, "work/domain"),
-    number: 42,
-    author: { login: "owner", bot: false },
-  };
-  run.github.find("acme/widgets", 4).pullRequests.push(pr);
-  run.github.drafts.add(42);
-  await run.tick();
-  assert.equal(run.launched.length, 1, run.reports.join("\n"));
-});
 
 test("historical PR ownership survives another run replacing the issue's current record", async (t) => {
   const bare = remote(t, kindsFiles);

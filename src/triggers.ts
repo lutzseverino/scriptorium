@@ -106,12 +106,13 @@ export function triageTrigger(
   return null;
 }
 
-export function draftTrigger(issue: Issue, policy: Policy): Trigger | null {
+export function reviewTrigger(issue: Issue, policy: Policy): Trigger | null {
   const pr = issue.pullRequest;
-  return pr?.draft &&
+  // Keep the durable prefix so heads reviewed as drafts remain consumed.
+  return pr &&
     issue.author &&
     actorRefusal(issue.author, policy, {
-      subject: "the draft PR",
+      subject: "the PR",
       action: "opened",
     }) === null &&
     !issue.reviewedHeads?.includes(pr.target.headCommit)

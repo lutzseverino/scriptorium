@@ -214,10 +214,10 @@ checks:
 
 - **Implement** starts on accepted readiness, `labels.ready`, as in version 2.
 - **Review** starts on the PR an implement run ends with, keeping the claim
-  while the run comment shows the review. It also claims an open draft PR whose
-  author has an authorized current role, is not excluded, and which no factory
-  run owns. An untrusted draft starts nothing. Independent drafts use the PR
-  number as their work item; review resolves linked issue contracts, or uses
+  while the run comment shows the review. It also claims an open PR, draft or
+  ready for review, whose author has an authorized current role, is not excluded,
+  and which no factory run owns. An untrusted PR starts nothing. Independent PRs
+  use the PR number as their work item; review resolves linked issue contracts, or uses
   the PR body as its Spec source when there is no linked issue. The PR's head
   is consumed durably, and its explicit target survives interruptions and
   changes out of draft. These triggers pass through the same model, capacity,

@@ -30,7 +30,7 @@ import type { Model, Registry } from "./providers.ts";
 import type { ReportedWindow } from "./providers/usage.ts";
 import type { ReadResult } from "./run-result.ts";
 import type { MergeRelaunch, InputResume } from "./platform.ts";
-import { triageTrigger, draftTrigger, type Trigger } from "./triggers.ts";
+import { triageTrigger, reviewTrigger, type Trigger } from "./triggers.ts";
 import {
   closes,
   readinessExclusion,
@@ -807,7 +807,7 @@ function continuation(
         ) ||
           issue.pullRequest?.headBranch === `factory/issue-${run.issue}`),
     ) &&
-    draftTrigger(issue, policy(repository));
+    reviewTrigger(issue, policy(repository));
   const state: ContinuationState = resumed
     ? { kind: "resume", run: resumed }
     : (handoff ??
