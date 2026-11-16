@@ -1325,6 +1325,18 @@ const conventions = {
 };
 // The coverage a pass reports for `conventions`.
 const version2 = { state: "valid", version: 2, runKinds: ["implement"] };
+// The health of a repository whose passes have neither failed, published nor
+// settled, and of one failing since a pass.
+const passing = {
+  failingSince: null,
+  lastPublication: null,
+  lastSettlement: null,
+};
+const failing = (since: string, failure: string) => ({
+  ...passing,
+  failingSince: since,
+  failure,
+});
 const factoryFiles = {
   ".scriptorium/config.json": JSON.stringify(conventions),
   ".scriptorium/Dockerfile": toolchain,
@@ -1637,12 +1649,16 @@ test("a token command that fails at refresh holds only its repository", async (t
       reason: failure,
       configuration: { state: "not-read", problem: failure },
       held: [],
+      pass: failing("2026-10-09T12:30:00.000Z", failure),
+      ownerWaits: null,
     },
     {
       repository: "acme/gadgets",
       state: "running",
       configuration: version2,
       held: [],
+      pass: passing,
+      ownerWaits: null,
     },
   ]);
   assert.ok(
@@ -1770,6 +1786,7 @@ test("the status file lists each repository's state and its held issues", async 
   const {
     providers: _providers,
     capacity: _capacity,
+    unresolvedRuns: _runs,
     ...repositoryStatus
   } = run.status();
   assert.deepEqual(repositoryStatus, {
@@ -1780,6 +1797,8 @@ test("the status file lists each repository's state and its held issues", async 
         state: "running",
         configuration: version2,
         held: [{ issue: 5, reason: "blocked by #4" }],
+        pass: passing,
+        ownerWaits: null,
       },
       {
         repository: "acme/gadgets",
@@ -1793,6 +1812,11 @@ test("the status file lists each repository's state and its held issues", async 
             reason: "acme/gadgets is paused: it has no .scriptorium/Dockerfile",
           },
         ],
+        pass: failing(
+          "2026-10-09T12:00:00.000Z",
+          "it has no .scriptorium/Dockerfile",
+        ),
+        ownerWaits: null,
       },
       {
         repository: "acme/tools",
@@ -1804,6 +1828,11 @@ test("the status file lists each repository's state and its held issues", async 
           problem: "the token command for acme/tools failed with 1",
         },
         held: [],
+        pass: failing(
+          "2026-10-09T12:00:00.000Z",
+          "the token command for acme/tools failed with 1",
+        ),
+        ownerWaits: null,
       },
     ],
   });
@@ -2288,6 +2317,11 @@ test("an image that does not build pauses only its repository until it builds", 
           "acme/widgets is paused: its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100",
       },
     ],
+    pass: failing(
+      "2026-10-09T12:00:00.000Z",
+      "its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100",
+    ),
+    ownerWaits: null,
   });
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "ready-for-agent",
@@ -10769,7 +10803,7 @@ for (const [name, setup] of Object.entries<{
     );
   });
 
-test("status reports the pass's coverage as text and JSON without reading a repository, a clone or a token, and writes nothing", async (t) => {
+test("status reports the pass's coverage and health as text and JSON without reading a repository, a clone or a token, and writes nothing", async (t) => {
   const marker = join(directory(t), "token-command-ran");
   const run = host(t, {
     repositories: {
@@ -10802,7 +10836,11 @@ test("status reports the pass's coverage as text and JSON without reading a repo
       })
       .sort();
   const before = files();
-  const { coverage } = JSON.parse(statusCommand(run));
+  const { coverage, health } = JSON.parse(statusCommand(run));
+  // Health comes from the same status file.
+  assert.equal(health.observation.state, "last-observed");
+  assert.equal(health.repositories.length, 2);
+  assert.notEqual(health.overdueRuns, null);
   assert.deepEqual(coverage.repositories, [
     {
       repository: "acme/widgets",
@@ -10841,4 +10879,480 @@ test("status reports the pass's coverage as text and JSON without reading a repo
   );
   assert.equal(existsSync(marker), false);
   assert.deepEqual(files(), before);
+});
+
+function healthOf(run: ReturnType<typeof host>) {
+  return JSON.parse(statusCommand(run)).health;
+}
+
+test("health tracks a repository whose input breaks for three passes, across a restart, until it is repaired and breaks again", async (t) => {
+  const broken = () => new Error("apt-get exited with 100");
+  const reason =
+    "its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100";
+  // acme/widgets builds first on every pass; acme/gadgets always builds.
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }], "acme/gadgets": [] },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    imageFailures: [broken(), null, broken(), null, broken(), null],
+  });
+  const pass = async (
+    active: { tick(): Promise<unknown> },
+    at: string,
+    widgets: object,
+  ) => {
+    run.clock.now = new Date(at);
+    await active.tick();
+    const health = healthOf(run);
+    assert.deepEqual(health.observation, {
+      state: "last-observed",
+      source: "status.json",
+      at: run.clock.now.toISOString(),
+    });
+    assert.deepEqual(
+      health.repositories.map(({ pass }: { pass: object }) => pass),
+      [widgets, passing],
+    );
+    // The status file records what the command projects.
+    assert.deepEqual(
+      run.status().repositories.map(({ pass }: { pass: object }) => pass),
+      [widgets, passing],
+    );
+  };
+  await pass(
+    run,
+    "2026-10-09T12:00:00Z",
+    failing("2026-10-09T12:00:00.000Z", reason),
+  );
+  await pass(
+    run,
+    "2026-10-09T12:05:00Z",
+    failing("2026-10-09T12:00:00.000Z", reason),
+  );
+  run.interrupt();
+  const restarted = run.restart();
+  await pass(
+    restarted,
+    "2026-10-09T12:10:00Z",
+    failing("2026-10-09T12:00:00.000Z", reason),
+  );
+  await pass(restarted, "2026-10-09T12:15:00Z", passing);
+  // A later failure starts a new run of failing passes.
+  run.github.failedRequests.set(
+    "acme/widgets issues",
+    new PlatformError("unavailable", "issues unavailable"),
+  );
+  run.clock.now = new Date("2026-10-09T12:20:00Z");
+  await restarted.tick();
+  const [widgets] = healthOf(run).repositories;
+  assert.equal(widgets.pass.failingSince, "2026-10-09T12:20:00.000Z");
+  assert.match(widgets.pass.failure, /^its platform reads failed: /);
+  assert.ok(
+    run.reports.includes(`acme/widgets is paused: ${widgets.pass.failure}`),
+    run.reports.join("\n"),
+  );
+  const clone = `${run.clone("acme/widgets")}${sep}`;
+  for (const text of [
+    statusCommand(run),
+    readFileSync(join(run.state, "status.json"), "utf8"),
+    ...run.reports,
+  ])
+    assert.ok(!text.includes(clone), text);
+});
+
+test("a decision that fails during a pass fails only its repository's pass, with the decision's error", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+  });
+  run.github.failedRequests.set(
+    "acme/widgets addLabels",
+    new PlatformError("unavailable", "labels unavailable"),
+  );
+  await run.tick();
+  const [widgets, gadgets] = healthOf(run).repositories;
+  assert.equal(widgets.pass.failingSince, "2026-10-09T12:00:00.000Z");
+  assert.match(
+    widgets.pass.failure,
+    /^acme\/widgets#4 claim failed, so acme\/widgets waits for the next pass: .*labels unavailable/,
+  );
+  assert.ok(run.reports.includes(widgets.pass.failure), run.reports.join("\n"));
+  assert.deepEqual(gadgets.pass, passing);
+  // The decision's failure is not a pause.
+  assert.equal(coverageOf(run).repositories[0].paused, null);
+  run.github.failedRequests.delete("acme/widgets addLabels");
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  assert.deepEqual(healthOf(run).repositories[0].pass, passing);
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/gadgets#3", "acme/widgets#4"],
+  );
+});
+
+for (const [name, hold] of Object.entries({
+  set: { issues: [4], pullRequests: [] },
+  unreadable: new PlatformError("invalidResponse", "hold read unavailable"),
+}))
+  test(`a factory hold alone, ${name}, never fails a pass`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryHoldFiles) },
+    });
+    run.github.factoryHolds["acme/widgets"] = hold;
+    await run.tick();
+    const [widgets] = healthOf(run).repositories;
+    assert.deepEqual(widgets.pass, passing);
+    assert.equal(coverageOf(run).repositories[0].paused.cause, "factory-hold");
+  });
+
+test("health names the last published triage result and settled implement run, keeps them across a restart and invents none from an older status file", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: ["state:triage"] }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(resultConventions),
+      }),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+  });
+  await run.tick();
+  assert.deepEqual(
+    healthOf(run).repositories.map(({ pass }: { pass: object }) => pass),
+    [passing, passing],
+  );
+  const launch = (name: string) =>
+    run.launched.find(({ options }) => options.name === name)!;
+  launch("acme/widgets#4").finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "Which way should it go?",
+  });
+  launch("acme/gadgets#3").finish(undefined, undefined, {
+    outcome: "failed",
+    body: "It could not.",
+    reason: "the tests fail",
+  });
+  await run.drain();
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  const [widgets, gadgets] = healthOf(run).repositories;
+  const triage = {
+    at: "2026-10-09T12:05:00.000Z",
+    issue: 4,
+    runKind: "triage",
+  };
+  assert.deepEqual(widgets.pass, {
+    ...passing,
+    lastPublication: triage,
+    lastSettlement: triage,
+  });
+  const implement = {
+    at: "2026-10-09T12:05:00.000Z",
+    issue: 3,
+    runKind: "implement",
+  };
+  assert.deepEqual(gadgets.pass, {
+    ...passing,
+    lastPublication: implement,
+    lastSettlement: implement,
+  });
+  assert.equal(recordOf(run.state, 4, 1).settled, true);
+  const restarted = run.restart();
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  await restarted.tick();
+  // acme/widgets has nothing left in flight to publish or settle.
+  assert.deepEqual(healthOf(run).repositories[0].pass, widgets.pass);
+  // A status file from before health was recorded establishes nothing.
+  const path = join(run.state, "status.json");
+  const status = JSON.parse(readFileSync(path, "utf8"));
+  for (const entry of status.repositories) delete entry.pass;
+  writeFileSync(path, JSON.stringify(status));
+  run.clock.now = new Date("2026-10-09T12:15:00Z");
+  await run.restart().tick();
+  assert.deepEqual(
+    healthOf(run).repositories.map(({ pass }: { pass: object }) => pass),
+    [passing, passing],
+  );
+});
+
+test("owner waits list the open issues carrying a version 3 owner label, from the pass's own issue read", async (t) => {
+  const { owner: _owner, ...withoutOwner } = kindsConventions.labels;
+  const asked = ["state:owner"];
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 7, labels: asked },
+        { number: 2, labels: ["question"] },
+        { number: 5, labels: asked },
+      ],
+      "acme/gadgets": [{ number: 3, labels: asked }],
+      "acme/tools": [{ number: 1, labels: asked }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, kindsFiles),
+      "acme/gadgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify({
+          ...kindsConventions,
+          labels: withoutOwner,
+        }),
+      }),
+      "acme/tools": remote(t, factoryFiles),
+    },
+  });
+  await run.tick();
+  const waits = healthOf(run).repositories.map(
+    ({ ownerWaits }: { ownerWaits: unknown }) => ownerWaits,
+  );
+  assert.deepEqual(waits, [
+    {
+      label: "state:owner",
+      issues: [5, 7].map((number) => ({
+        number,
+        title: `Issue ${number}`,
+        url: `https://platform.test/acme/widgets/issues/${number}`,
+      })),
+    },
+    null,
+    null,
+  ]);
+  assert.deepEqual(
+    run
+      .status()
+      .repositories.map(
+        ({ ownerWaits }: { ownerWaits: unknown }) => ownerWaits,
+      ),
+    waits,
+  );
+  // The pass reads open issues once, with no read of its own for owner waits.
+  assert.deepEqual(
+    run.github.calls.filter(
+      ([repository, operation, filter]) =>
+        repository === "acme/widgets" &&
+        operation === "issues" &&
+        (filter as { label?: string }).label === undefined,
+    ).length,
+    1,
+  );
+  assert.ok(
+    !run.github.calls.some(
+      ([, operation, filter]) =>
+        operation === "issues" &&
+        (filter as { label?: string }).label === "state:owner",
+    ),
+  );
+  // A pass that did not read the open issues establishes no owner waits.
+  run.github.failedRequests.set(
+    "acme/widgets issues",
+    new PlatformError("unavailable", "issues unavailable"),
+  );
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  assert.equal(healthOf(run).repositories[0].ownerWaits, null);
+});
+
+test("overdue runs show an exited run held for publication, an active run at its limit and one stopping, and never an ended run", async (t) => {
+  const protocol = contractFixture();
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: ["state:triage"] }],
+      "acme/gadgets": [{ number: 3 }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+      }),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    wrapConnection: (connection) =>
+      connection.repository.path === "acme/widgets"
+        ? protocol.wrap(connection)
+        : connection,
+  });
+  await run.tick();
+  protocol.controls.evaluation = false;
+  run.launched
+    .find(({ options }) => options.name === "acme/widgets#4")!
+    .finish(undefined, undefined, {
+      outcome: "done",
+      state: "state:ready",
+      labels: ["model:claude-sonnet-5-5", "type:enhancement"],
+      body: bodyBrief,
+    });
+  // The implement run keeps running.
+  await until(() => recordOf(run.state, 4, 1).exited);
+  const byRepository = (runs: { repository: string }[]) =>
+    runs.toSorted((a, b) => a.repository.localeCompare(b.repository));
+  const triage = {
+    repository: "acme/widgets",
+    issue: 4,
+    runKind: "triage",
+    startedAt: "2026-10-09T12:00:00.000Z",
+    limitAt: "2026-10-09T16:00:00.000Z",
+    phase: "exited",
+    resultPosted: false,
+  };
+  const implement = {
+    repository: "acme/gadgets",
+    issue: 3,
+    runKind: "implement",
+    startedAt: "2026-10-09T12:00:00.000Z",
+    limitAt: "2026-10-09T16:00:00.000Z",
+    phase: "running",
+    resultPosted: false,
+  };
+  // At its limit, the active run is not yet stopped.
+  run.clock.now = new Date("2026-10-09T16:00:00Z");
+  await run.tick();
+  const status = run.status();
+  assert.deepEqual(byRepository(status.unresolvedRuns), [implement, triage]);
+  // Runs at the same limit order by repository.
+  assert.deepEqual(healthOf(run).overdueRuns, [implement, triage]);
+  // Health changes nothing about the held run's claim or capacity.
+  assert.equal(recordOf(run.state, 4, 1).ended, null);
+  assert.equal(recordOf(run.state, 4, 1).settled, false);
+  assert.ok(protocol.issue.labels.includes("factory:running"));
+  assert.equal(status.capacity.host.runKinds.triage, 0);
+  assert.equal(status.capacity.host.runKinds.implement, 1);
+  assert.equal(run.launched.length, 2);
+  // Past it, the host stops the run, which keeps running until it exits.
+  run.sandcastle.ignoreAborts = true;
+  run.clock.now = new Date("2026-10-09T16:01:00Z");
+  await run.tick();
+  assert.deepEqual(healthOf(run).overdueRuns, [
+    { ...implement, phase: "stopping" },
+    triage,
+  ]);
+  const text = hostCommand(run, "status").split("\n");
+  assert.ok(text.includes("overdue runs=2"), text.join("\n"));
+  assert.ok(
+    text.includes(
+      "  acme/gadgets#3: runKind=implement phase=stopping startedAt=2026-10-09T12:00:00.000Z limitAt=2026-10-09T16:00:00.000Z resultPosted=false",
+    ),
+    text.join("\n"),
+  );
+  // An interrupted run's ending is resolved; its relaunch is a new run.
+  run.interrupt();
+  run.sandcastle.ignoreAborts = false;
+  run.clock.now = new Date("2026-10-09T16:02:00Z");
+  await run.restart().tick();
+  assert.deepEqual(byRepository(run.status().unresolvedRuns), [
+    {
+      ...implement,
+      startedAt: "2026-10-09T16:02:00.000Z",
+      limitAt: "2026-10-09T20:02:00.000Z",
+    },
+    triage,
+  ]);
+  // Once its publication lands, the triage run's ending resolves.
+  protocol.controls.evaluation = true;
+  run.clock.now = new Date("2026-10-09T16:03:00Z");
+  await run.restart().tick();
+  assert.ok(
+    !run
+      .status()
+      .unresolvedRuns.some(
+        ({ repository }: { repository: string }) =>
+          repository === "acme/widgets",
+      ),
+    JSON.stringify(run.status().unresolvedRuns),
+  );
+});
+
+test("runs that ended awaiting merge or paused never appear among unresolved runs", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }, { number: 5 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  assert.deepEqual(
+    run
+      .status()
+      .unresolvedRuns.map(
+        ({ issue, phase }: { issue: number; phase: string }) =>
+          `${issue} ${phase}`,
+      )
+      .sort(),
+    ["4 running", "5 running"],
+  );
+  run.github.find("acme/widgets", 4).pullRequests.push("OPEN");
+  const launch = (name: string) =>
+    run.launched.find(({ options }) => options.name === name)!;
+  launch("acme/widgets#4").finish();
+  endOnLimit(launch("acme/widgets#5"));
+  launch("acme/widgets#5").finish();
+  await run.drain();
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  assert.match(
+    runComment(run.github.find("acme/widgets", 4)),
+    /- \[ \] Merge: awaiting merge\n/,
+  );
+  assert.ok("paused" in recordOf(run.state, 5, 1).ended);
+  assert.deepEqual(run.status().unresolvedRuns, []);
+  assert.deepEqual(healthOf(run).overdueRuns, []);
+});
+
+test("an exited run a restart recovers before its result is posted stays among the overdue runs until it settles", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.github.failedRequests.set(
+    "acme/widgets issues",
+    new PlatformError("unavailable", "issues unavailable"),
+  );
+  run.launched
+    .find(({ options }) => options.name === "acme/widgets#4")!
+    .finish();
+  await run.drain();
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  const exited = {
+    repository: "acme/widgets",
+    issue: 4,
+    runKind: "implement",
+    startedAt: "2026-10-09T12:00:00.000Z",
+    limitAt: "2026-10-09T16:00:00.000Z",
+    phase: "exited",
+    resultPosted: false,
+  };
+  assert.deepEqual(run.status().unresolvedRuns, [exited]);
+  // Platform reads keep failing across the restart, so no pass posts the
+  // result or settles the run the host still holds.
+  run.interrupt();
+  const restarted = run.restart();
+  run.clock.now = new Date("2026-10-09T17:00:00Z");
+  await restarted.tick();
+  assert.equal(recordOf(run.state, 4, 1).settled, false);
+  assert.deepEqual(run.status().unresolvedRuns, [exited]);
+  assert.deepEqual(healthOf(run).overdueRuns, [exited]);
+  // Once the reads recover, the result lands and the run settles; only the
+  // issue's next attempt remains.
+  run.github.failedRequests.delete("acme/widgets issues");
+  run.clock.now = new Date("2026-10-09T17:05:00Z");
+  await restarted.tick();
+  assert.equal(recordOf(run.state, 4, 1).settled, true);
+  assert.deepEqual(
+    healthOf(run).overdueRuns.map(
+      ({ startedAt, phase }: { startedAt: string; phase: string }) =>
+        `${startedAt} ${phase}`,
+    ),
+    ["2026-10-09T17:05:00.000Z running"],
+  );
 });

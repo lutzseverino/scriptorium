@@ -882,9 +882,12 @@ test("open issues reach the core with their readiness, links and times, and with
     connection,
     configuration,
   ).readIssues();
+  // Each keeps the title and link the platform returned.
   assert.deepEqual(issues, [
     {
       number: 1,
+      title: "Issue 1",
+      url: "https://github.com/acme/widgets/issues/1",
       createdAt: "2026-10-01T00:00:00Z",
       labels: [labels.ready],
       ready: {
@@ -935,6 +938,8 @@ test("open issues reach the core with their readiness, links and times, and with
     },
     {
       number: 2,
+      title: "Issue 2",
+      url: "https://github.com/acme/widgets/issues/2",
       createdAt: "2026-10-01T00:00:00Z",
       labels: [labels.ready],
       ready: {
@@ -960,6 +965,8 @@ test("open issues reach the core with their readiness, links and times, and with
       [9, [labels.ready], undefined],
     ].map(([number, issueLabels, actor]) => ({
       number,
+      title: `Issue ${number}`,
+      url: `https://github.com/acme/widgets/issues/${number}`,
       createdAt: "2026-10-01T00:00:00Z",
       labels: issueLabels,
       ready:

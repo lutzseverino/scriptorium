@@ -36,12 +36,19 @@ test("host status accepts the original three arguments with no provider statuses
           },
         ],
       },
+      unresolvedRuns: [],
       repositories: [
         {
           repository: "acme/widgets",
           state: "running",
           configuration,
           held: [],
+          pass: {
+            failingSince: null,
+            lastPublication: null,
+            lastSettlement: null,
+          },
+          ownerWaits: null,
         },
       ],
     },
@@ -79,6 +86,7 @@ test("host status keeps explicitly supplied provider statuses", () => {
       },
       repositories: [],
     },
+    unresolvedRuns: [],
   });
 });
 

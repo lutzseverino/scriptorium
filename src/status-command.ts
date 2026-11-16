@@ -12,12 +12,21 @@ import type { OwnerControl, RunKindCounts } from "./factory.ts";
 import {
   capacityCounts,
   configurationProblemStates,
+  object,
+  passHealth,
   pauseCauses,
+  runPhases,
+  time,
   type ConfigurationCoverage,
   type ConfigurationProblemState,
+  type ObjectValue,
+  type OwnerWaits,
+  type PassHealth,
   type RepositoryPause,
+  type RunPhase,
+  type UnresolvedRun,
 } from "./status.ts";
-import { runKindNames } from "./factory-configuration.ts";
+import { runKindNames, type RunKindName } from "./factory-configuration.ts";
 import { createRegistry, type ModelFacts } from "./providers.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 
@@ -87,12 +96,25 @@ type Coverage = {
   }[];
 };
 
+// Null pass, owner waits and overdue runs establish nothing while the
+// observation is unavailable.
+type Health = {
+  observation: Observation;
+  repositories: {
+    repository: string;
+    pass: PassHealth | null;
+    ownerWaits: OwnerWaits | null;
+  }[];
+  overdueRuns: UnresolvedRun[] | null;
+};
+
 export type LaunchBudget = {
   version: 1;
   observedAt: string;
   models: ModelFacts;
   capacity: BudgetCapacity;
   coverage: Coverage;
+  health: Health;
   providers: BudgetProvider[];
 };
 
@@ -154,15 +176,6 @@ export async function status(
   return 0;
 }
 
-type ObjectValue = Record<string, unknown>;
-function object(value: unknown): ObjectValue | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as ObjectValue)
-    : null;
-}
-function time(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
 function count(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -323,18 +336,23 @@ function configurationCoverage(value: unknown): ConfigurationCoverage | null {
     : null;
 }
 
-// Coverage is the last pass's account of each listed repository. Any doubt
-// about the record makes it unavailable rather than guessed; a pending
-// transaction concerns provider work and leaves it available.
-function readCoverage(
+type CoverageEntry = {
+  configuration: ConfigurationCoverage;
+  paused: RepositoryPause | null;
+  // The entry as the status file holds it.
+  recorded: ObjectValue;
+};
+
+// The status file's repository entries, or null when any doubt about the
+// record makes them unknown rather than guessed: the file is missing,
+// unreadable, future-dated, legacy or inconsistent, or lacks a listed
+// repository. A pending transaction concerns provider work, not these.
+function coverageEntries(
   configuration: HostConfiguration,
   work: ReturnType<typeof readObservation>,
   now: Date,
-): Coverage {
-  const entries = new Map<
-    string,
-    { configuration: ConfigurationCoverage; paused: RepositoryPause | null }
-  >();
+): Map<string, CoverageEntry> | null {
+  const entries = new Map<string, CoverageEntry>();
   const recorded = work.data?.repositories;
   let valid = Array.isArray(recorded);
   if (Array.isArray(recorded))
@@ -360,17 +378,31 @@ function readCoverage(
           : paused === null)
       )
         valid = false;
-      else entries.set(entry.repository, { configuration: read, paused });
+      else
+        entries.set(entry.repository, {
+          configuration: read,
+          paused,
+          recorded: entry,
+        });
     }
   const updatedAt = work.data?.updatedAt;
-  const known =
-    valid &&
+  return valid &&
     time(updatedAt) &&
     Date.parse(updatedAt) <= now.getTime() &&
-    configuration.repositories.every((repository) => entries.has(repository));
+    configuration.repositories.every((repository) => entries.has(repository))
+    ? entries
+    : null;
+}
+
+// Coverage is the last pass's account of each listed repository.
+function readCoverage(
+  configuration: HostConfiguration,
+  work: ReturnType<typeof readObservation>,
+  entries: Map<string, CoverageEntry> | null,
+): Coverage {
   return {
-    observation: known
-      ? { ...work.observation, at: updatedAt }
+    observation: entries
+      ? { ...work.observation, at: work.data!.updatedAt as string }
       : unavailable(
           "status.json",
           work.observation.problem ??
@@ -378,9 +410,123 @@ function readCoverage(
         ),
     repositories: configuration.repositories.map((repository) => ({
       repository,
-      configuration: known ? entries.get(repository)!.configuration : null,
-      paused: known ? entries.get(repository)!.paused : null,
+      configuration: entries ? entries.get(repository)!.configuration : null,
+      paused: entries ? entries.get(repository)!.paused : null,
     })),
+  };
+}
+
+// The owner waits a status file entry records: null, or undefined when they
+// are not what a pass writes.
+function ownerWaits(value: unknown): OwnerWaits | null | undefined {
+  if (value === null) return null;
+  const record = object(value);
+  const issues = record?.issues;
+  if (
+    !record ||
+    Object.keys(record).sort().join() !== "issues,label" ||
+    typeof record.label !== "string" ||
+    !Array.isArray(issues)
+  )
+    return undefined;
+  const read = issues.map(object);
+  return read.every(
+    (issue, index) =>
+      issue &&
+      Object.keys(issue).sort().join() === "number,title,url" &&
+      count(issue.number) &&
+      issue.number > 0 &&
+      (index === 0 || issue.number > (read[index - 1]!.number as number)) &&
+      typeof issue.title === "string" &&
+      typeof issue.url === "string",
+  )
+    ? {
+        label: record.label,
+        issues: read.map((issue) => ({
+          number: issue!.number as number,
+          title: issue!.title as string,
+          url: issue!.url as string,
+        })),
+      }
+    : undefined;
+}
+
+function unresolvedRun(value: unknown): UnresolvedRun | null {
+  const record = object(value);
+  return record &&
+    Object.keys(record).sort().join() ===
+      "issue,limitAt,phase,repository,resultPosted,runKind,startedAt" &&
+    typeof record.repository === "string" &&
+    count(record.issue) &&
+    record.issue > 0 &&
+    runKindNames.includes(record.runKind as RunKindName) &&
+    time(record.startedAt) &&
+    time(record.limitAt) &&
+    runPhases.includes(record.phase as RunPhase) &&
+    typeof record.resultPosted === "boolean"
+    ? {
+        repository: record.repository,
+        issue: record.issue,
+        runKind: record.runKind as RunKindName,
+        startedAt: record.startedAt,
+        limitAt: record.limitAt,
+        phase: record.phase as RunPhase,
+        resultPosted: record.resultPosted,
+      }
+    : null;
+}
+
+// Health is the last pass's account too, unavailable whenever coverage is
+// and whenever the file does not record it. A run is overdue once its limit
+// is at or before the command's observation.
+function readHealth(
+  configuration: HostConfiguration,
+  work: ReturnType<typeof readObservation>,
+  entries: Map<string, CoverageEntry> | null,
+  now: Date,
+): Health {
+  const health = new Map<
+    string,
+    { pass: PassHealth; ownerWaits: OwnerWaits | null }
+  >();
+  for (const [repository, { recorded }] of entries ?? []) {
+    const pass = passHealth(recorded.pass);
+    const waits = ownerWaits(recorded.ownerWaits);
+    if (pass && waits !== undefined)
+      health.set(repository, { pass, ownerWaits: waits });
+  }
+  const recordedRuns = work.data?.unresolvedRuns;
+  const runs = Array.isArray(recordedRuns)
+    ? recordedRuns.map(unresolvedRun)
+    : [];
+  const known =
+    entries !== null &&
+    health.size === entries.size &&
+    Array.isArray(recordedRuns) &&
+    runs.every((run) => run !== null);
+  return {
+    observation: known
+      ? { ...work.observation, at: work.data!.updatedAt as string }
+      : unavailable(
+          "status.json",
+          work.observation.problem ??
+            "missing, legacy or inconsistent health observation",
+        ),
+    repositories: configuration.repositories.map((repository) => ({
+      repository,
+      pass: known ? health.get(repository)!.pass : null,
+      ownerWaits: known ? health.get(repository)!.ownerWaits : null,
+    })),
+    overdueRuns: known
+      ? (runs as UnresolvedRun[])
+          .filter((run) => Date.parse(run.limitAt) <= now.getTime())
+          .sort(
+            (a, b) =>
+              Date.parse(a.limitAt) - Date.parse(b.limitAt) ||
+              a.repository.localeCompare(b.repository) ||
+              a.issue - b.issue,
+          )
+      : null,
   };
 }
 
@@ -397,6 +543,7 @@ export async function readBudget(
     configuration.stateDirectory,
     "events-state.json",
   );
+  const entries = coverageEntries(configuration, workFile, now);
   return {
     version: 1,
     observedAt,
@@ -406,7 +553,8 @@ export async function readBudget(
       checkpoint.data?.pending !== undefined,
       now,
     ),
-    coverage: readCoverage(configuration, workFile, now),
+    coverage: readCoverage(configuration, workFile, entries),
+    health: readHealth(configuration, workFile, entries, now),
     models: createRegistry(configuration.providers, configuration.models)
       .modelFacts,
     providers: await Promise.all(
@@ -727,6 +875,10 @@ function withProblem(observation: Observation, problem: string): Observation {
 export function formatStatus(budget: LaunchBudget): string {
   const value = (entry: unknown) =>
     entry === null ? "unavailable" : JSON.stringify(entry);
+  // An available observation's null is a fact of its own; overdue runs are
+  // null only while it is unavailable.
+  const health = (entry: unknown) =>
+    budget.health.overdueRuns === null ? "unavailable" : JSON.stringify(entry);
   return [
     `Observed ${budget.observedAt}; not a launch grant or reservation.`,
     `models=${JSON.stringify(budget.models)}`,
@@ -746,6 +898,16 @@ export function formatStatus(budget: LaunchBudget): string {
         `${repository}: configuration=${value(configuration)} paused=${configuration === null ? "unavailable" : paused === null ? "none" : JSON.stringify(paused)}`,
     ),
     `coverage observation=${JSON.stringify(budget.coverage.observation)}`,
+    ...budget.health.repositories.map(
+      ({ repository, pass, ownerWaits }) =>
+        `${repository}: pass=${health(pass)} ownerWaits=${health(ownerWaits)}`,
+    ),
+    `overdue runs=${budget.health.overdueRuns === null ? "unavailable" : budget.health.overdueRuns.length}`,
+    ...(budget.health.overdueRuns ?? []).map(
+      ({ repository, issue, ...run }) =>
+        `  ${repository}#${issue}: runKind=${run.runKind} phase=${run.phase} startedAt=${run.startedAt} limitAt=${run.limitAt} resultPosted=${run.resultPosted}`,
+    ),
+    `health observation=${JSON.stringify(budget.health.observation)}`,
     ...budget.providers.flatMap((provider) => [
       `${provider.provider}: cap=${provider.cap} running=${value(provider.running)} free=${value(provider.free)} paused=${value(provider.paused)} retained=${value(provider.retained)}`,
       ...[

@@ -1,5 +1,6 @@
 // The status file: a machine-readable account of the latest pass, for the
 // operator's monitoring. The factory posts no status to GitHub.
+import { readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ImageStorageStatus } from "./image-storage.ts";
@@ -11,9 +12,10 @@ import {
   type RunKindCounts,
 } from "./factory.ts";
 import type { ImplementLimits } from "./host-configuration.ts";
-import type {
-  FactoryConfigurationError,
-  RunKindName,
+import {
+  runKindNames,
+  type FactoryConfigurationError,
+  type RunKindName,
 } from "./factory-configuration.ts";
 import type { ProviderStatus } from "./events.ts";
 
@@ -47,6 +49,50 @@ export type PauseCause = (typeof pauseCauses)[number];
 
 export type RepositoryPause = { cause: PauseCause; reason: string };
 
+// A run the host published a result for or settled, and when.
+export type RunMark = { at: string; issue: number; runKind: RunKindName };
+
+// The repository's passes as the host's records show them. A pass fails when
+// it pauses the repository for a reason of its own, which a factory hold is
+// not, or when a decision it applies there fails.
+export type PassHealth = {
+  // When the current unbroken run of failing passes began; null when the
+  // latest pass did not fail.
+  failingSince: string | null;
+  // The latest failing pass's reason, only while failing.
+  failure?: string;
+  lastPublication: RunMark | null;
+  lastSettlement: RunMark | null;
+};
+
+export const unknownPassHealth: PassHealth = {
+  failingSince: null,
+  lastPublication: null,
+  lastSettlement: null,
+};
+
+// The open issues waiting on the owner, as the pass read them.
+export type OwnerWaits = {
+  label: string;
+  issues: { number: number; title: string; url: string }[];
+};
+
+export const runPhases = ["running", "stopping", "exited"] as const;
+export type RunPhase = (typeof runPhases)[number];
+
+// A run the host still holds whose ending is not resolved.
+export type UnresolvedRun = {
+  repository: string;
+  issue: number;
+  runKind: RunKindName;
+  startedAt: string;
+  // Its start plus the time limit the host enforces.
+  limitAt: string;
+  phase: RunPhase;
+  // Whether its result comment and labels have landed.
+  resultPosted: boolean;
+};
+
 export type RepositoryStatus = {
   repository: string;
   state: "running" | "paused";
@@ -63,6 +109,9 @@ export type RepositoryStatus = {
     pullRequest: number;
     headCommit: string;
   }[];
+  pass: PassHealth;
+  // Null without an owner label role or when the pass read no open issues.
+  ownerWaits: OwnerWaits | null;
 };
 
 export type CapacityCounts = {
@@ -97,6 +146,7 @@ export type Status = {
   repositories: RepositoryStatus[];
   providers: ProviderStatus[];
   capacity: Capacity;
+  unresolvedRuns: UnresolvedRun[];
   imageStorage?: ImageStorageStatus;
 };
 
@@ -108,12 +158,15 @@ export function hostStatus(
     name: string;
     paused: RepositoryPause | null;
     configuration: ConfigurationCoverage;
+    pass?: PassHealth;
+    ownerWaits?: OwnerWaits | null;
   }[],
   decisions: Decision[],
   providers: ProviderStatus[] = [],
   imageStorage?: ImageStorageStatus,
   runs: Run[] = [],
   limits?: ImplementLimits,
+  unresolvedRuns: UnresolvedRun[] = [],
 ): Status {
   const counts = runningCounts(runs);
   const names = new Set([
@@ -135,40 +188,117 @@ export function hostStatus(
         ),
       })),
     },
+    unresolvedRuns,
     ...(imageStorage && { imageStorage }),
-    repositories: repositories.map(({ name, paused, configuration }) => ({
-      repository: name,
-      ...(paused === null
-        ? { state: "running" as const }
-        : { state: "paused" as const, ...paused }),
-      configuration,
-      ...(runs.some(
-        (run) =>
-          run.repository === name &&
-          !run.exited &&
-          run.continuation.mergeRelaunch,
-      ) && {
-        mergeRelaunches: runs.flatMap((run) =>
-          run.repository === name &&
-          !run.exited &&
-          run.continuation.mergeRelaunch
-            ? [
-                {
-                  issue: run.issue,
-                  pullRequest: run.continuation.mergeRelaunch.number,
-                  headCommit: run.continuation.mergeRelaunch.headCommit,
-                },
-              ]
+    repositories: repositories.map(
+      ({ name, paused, configuration, pass, ownerWaits }) => ({
+        repository: name,
+        ...(paused === null
+          ? { state: "running" as const }
+          : { state: "paused" as const, ...paused }),
+        configuration,
+        ...(runs.some(
+          (run) =>
+            run.repository === name &&
+            !run.exited &&
+            run.continuation.mergeRelaunch,
+        ) && {
+          mergeRelaunches: runs.flatMap((run) =>
+            run.repository === name &&
+            !run.exited &&
+            run.continuation.mergeRelaunch
+              ? [
+                  {
+                    issue: run.issue,
+                    pullRequest: run.continuation.mergeRelaunch.number,
+                    headCommit: run.continuation.mergeRelaunch.headCommit,
+                  },
+                ]
+              : [],
+          ),
+        }),
+        held: decisions.flatMap((decision) =>
+          decision.kind === "skip" && decision.repository === name
+            ? [{ issue: decision.issue, reason: decision.reason }]
             : [],
         ),
+        pass: pass ?? unknownPassHealth,
+        ownerWaits: ownerWaits ?? null,
       }),
-      held: decisions.flatMap((decision) =>
-        decision.kind === "skip" && decision.repository === name
-          ? [{ issue: decision.issue, reason: decision.reason }]
-          : [],
-      ),
-    })),
+    ),
   };
+}
+
+// Checks for values read back from the factory's JSON records.
+export type ObjectValue = Record<string, unknown>;
+export const object = (value: unknown): ObjectValue | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as ObjectValue)
+    : null;
+export const time = (value: unknown): value is string =>
+  typeof value === "string" && Number.isFinite(Date.parse(value));
+const fields = (record: ObjectValue) => Object.keys(record).sort().join();
+
+function runMark(value: unknown): RunMark | null | undefined {
+  if (value === null) return null;
+  const record = object(value);
+  return record &&
+    fields(record) === "at,issue,runKind" &&
+    time(record.at) &&
+    Number.isSafeInteger(record.issue) &&
+    (record.issue as number) > 0 &&
+    runKindNames.includes(record.runKind as RunKindName)
+    ? {
+        at: record.at,
+        issue: record.issue as number,
+        runKind: record.runKind as RunKindName,
+      }
+    : undefined;
+}
+
+// A status file entry's pass health, or null when it is not one a pass
+// writes.
+export function passHealth(value: unknown): PassHealth | null {
+  const record = object(value);
+  if (!record) return null;
+  const failing = record.failingSince !== null;
+  const lastPublication = runMark(record.lastPublication);
+  const lastSettlement = runMark(record.lastSettlement);
+  return fields(record) ===
+    (failing
+      ? "failingSince,failure,lastPublication,lastSettlement"
+      : "failingSince,lastPublication,lastSettlement") &&
+    (!failing ||
+      (time(record.failingSince) && typeof record.failure === "string")) &&
+    lastPublication !== undefined &&
+    lastSettlement !== undefined
+    ? {
+        failingSince: record.failingSince as string | null,
+        ...(failing && { failure: record.failure as string }),
+        lastPublication,
+        lastSettlement,
+      }
+    : null;
+}
+
+// Each repository's pass health in the status file a previous process
+// wrote; a repository without a readable entry establishes nothing.
+export function readPassHealth(path: string): Map<string, PassHealth> {
+  const health = new Map<string, PassHealth>();
+  let recorded;
+  try {
+    recorded = JSON.parse(readFileSync(path, "utf8"))?.repositories;
+  } catch {
+    return health;
+  }
+  if (Array.isArray(recorded))
+    for (const value of recorded) {
+      const entry = object(value);
+      const pass = passHealth(entry?.pass);
+      if (pass && typeof entry?.repository === "string")
+        health.set(entry.repository, pass);
+    }
+  return health;
 }
 
 // Replaces the file whole, so a reader never sees a partial status.

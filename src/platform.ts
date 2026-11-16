@@ -83,6 +83,9 @@ export type InputResume = {
   };
 };
 
+// An open issue with the title and link the platform returned for it.
+export type OpenIssue = Issue & { title: string; url: string };
+
 export function repositoryPlatform(
   connection: ConnectionWithLinkAdditions,
   configuration: PlatformConventions,
@@ -619,10 +622,10 @@ export function repositoryPlatform(
     // The repository's open issues. The role of each ready label's latest
     // actor is read once per account per call, which a pass makes once. A
     // time the platform doesn't offer is null, never invented.
-    async readIssues(): Promise<Issue[]> {
+    async readIssues(): Promise<OpenIssue[]> {
       const { capabilities } = issueTracker;
       const actor = actorLookup();
-      const issues: Issue[] = [];
+      const issues: OpenIssue[] = [];
       for (const issue of await issueTracker.issues()) {
         // Changes arrive in platform order, so the last match is the latest.
         const changes = configured(labels, (role) => role.applied).some(
@@ -670,6 +673,8 @@ export function repositoryPlatform(
           : null;
         issues.push({
           number: issue.number,
+          title: issue.title,
+          url: issue.url,
           createdAt: issue.createdAt,
           ...(author && { author, filingRun: filingRun(issue) }),
           ...(reporter && {
