@@ -203,3 +203,12 @@ A run's own Git directory and working tree, cloned for that run alone, in which
 its sandbox works. No other run's clone or the repository's shared clone is
 visible to it, and it lasts as long as the run's attempt.
 _Avoid_: Shared clone, worktree
+
+**Credential health**:
+One aggregate judgment of the credentials the factory runs on, recorded each
+pass: unhealthy when a held provider login is past its expiry or its renewal
+due time, its last renewal failed, or the GitHub App installation lacks a
+permission a run kind declares; unknown when any of those facts cannot be
+established; healthy otherwise. It is built from facts only, never a
+credential.
+_Avoid_: Credential status, token health

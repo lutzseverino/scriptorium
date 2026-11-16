@@ -115,6 +115,7 @@ import {
   type RepositoryPause,
   type UnresolvedRun,
 } from "./status.ts";
+import { credentialHealth, readCredentialObservations } from "./credentials.ts";
 import { createUsage } from "./usage.ts";
 import type { Action, Phase, RunUpdate } from "./run-comment.ts";
 import { createEvents, providerStatus } from "./events.ts";
@@ -1711,6 +1712,21 @@ export function createHost(
     const providers = providerStatuses();
     events.commit(providers);
     const imageStorage = ports.imageStorageStatus?.();
+    const credentials = credentialHealth({
+      now: ports.now(),
+      loginExpiries: Object.fromEntries(
+        await Promise.all(
+          [...registry.providers].map(async ([name, adapter]) => [
+            name,
+            await adapter.loginExpiry(),
+          ]),
+        ),
+      ),
+      observations: await readCredentialObservations(
+        configuration.credentialObservations,
+      ),
+      version2: passes.some((pass) => pass.configuration?.version === 2),
+    });
     try {
       await writeStatus(
         statusPath,
@@ -1740,6 +1756,7 @@ export function createHost(
           runs,
           configuration.implement,
           unresolvedRuns(),
+          credentials,
         ),
       );
     } catch (error) {

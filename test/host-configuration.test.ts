@@ -322,6 +322,25 @@ test("Claude Code accepts an optional absolute usage credential without changing
   );
 });
 
+test("the optional credential observations path must be absolute", (t) => {
+  const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  configuration.credentialObservations =
+    "/var/lib/factory-host/credential-observations.json";
+  const path = join(directory(t), "host.json");
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(read(path).configuration, {
+    ...configuration,
+    imageBuilder: "daemon",
+  });
+
+  configuration.credentialObservations = "credential-observations.json";
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(refused(path), [
+    `The host configuration ${path} is invalid:`,
+    '- credentialObservations: "credential-observations.json" is not an absolute path',
+  ]);
+});
+
 test("every missing required field is named", () => {
   assert.deepEqual(refusal("missing"), [
     `The host configuration ${fixture("missing")} is invalid:`,

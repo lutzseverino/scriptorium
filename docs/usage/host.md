@@ -64,8 +64,8 @@ host configuration itself.
 ## Host configuration
 
 The host configuration is one JSON file. Every field is required except
-`providers.claude-code.usageCredential`, `implement`, `imageBuilder`, `imageRetention`, `imageStorage` and
-the fields whose default the table below gives. Unknown fields are refused,
+`providers.claude-code.usageCredential`, `implement`, `imageBuilder`, `imageRetention`, `imageStorage`,
+`credentialObservations` and the fields whose default the table below gives. Unknown fields are refused,
 and nothing comes from environment variables.
 
 ```json
@@ -150,6 +150,7 @@ and nothing comes from environment variables.
 | `imageStorage.cachePath`                | Absolute existing directory on the filesystem backing the factory builder's cache; required when storage admission and the factory builder are selected.                                                                                             |
 | `imageStorage.reserveBytes`             | Positive whole-byte minimum available space required before starting each new build.                                                                                                                                                                 |
 | `imageStorage.resumeBytes`              | Positive whole-byte recovery threshold, strictly greater than the reserve; required to release a storage hold.                                                                                                                                       |
+| `credentialObservations`                | Optional absolute path of the non-secret credential observations document the host writes and the factory only reads. See [credential health](#credential-health).                                                                                   |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -1941,6 +1942,14 @@ and allow additive fields. Implement capacity and run-kind counts use the same
 admission projection. This command does not read orchestration threads or
 implement the downstream records view.
 
+The top-level `credentials` field (rendered in text as `credentials health=…`,
+with one line per provider and run kind) is the status file's
+[credential health](#credential-health), as the last pass computed it. When
+the command cannot read it from `status.json`, `credentials.health` is
+`unknown`, `observedAt` is `null`, every fact is `unknown`, and `problems`
+names why. The command reads no credential copy and adds no staleness limit of
+its own.
+
 Exit status is `0` for an observation (including unavailable facts), `1` for
 invalid or unreadable host configuration, and `2` for malformed arguments.
 Warnings and configuration errors go to stderr, leaving JSON stdout parseable.
@@ -2090,8 +2099,129 @@ each provider's `observedAt` identifies that observation.
 }
 ```
 
+Each pass also records its [credential health](#credential-health) under
+`credentials`.
+
 The process also logs each pass's decisions, skip reasons and pauses to
 standard output, [redacted](#redaction).
+
+## Credential health
+
+Each pass judges the credentials the factory runs on and writes the result
+into `status.json` under `credentials`. `status` and `status --json` show the
+same object. It reports, per provider, the expiry of the login copy the
+factory holds and, per run kind, the GitHub App permissions the installation
+lacks, with one aggregate result. Only facts reach the status file and the
+`status` output: times, outcomes, permission names and health, never a token,
+key or credential, so reading them needs no access to the credential copies. It
+is separate from the command's [pass health](#health).
+
+The factory reads each login's expiry from the copy it already holds:
+
+- Claude Code: the `usageCredential` login copy's `claudeAiOauth.expiresAt`.
+  The setup token has no readable expiry, so a host without `usageCredential`
+  reports Claude Code's expiry as `unknown`.
+- Codex: the `exp` claim of the held `auth.json` login's access token. A login
+  without one reports its expiry as `unknown`.
+
+### Credential observations
+
+The host supplies the rest through the optional `credentialObservations`
+document: a JSON file the host writes and the factory reads on each pass. It
+holds no token, key or credential. Version 1:
+
+```json
+{
+  "version": 1,
+  "providers": {
+    "claude-code": {
+      "observedAt": "2026-11-16T11:00:00Z",
+      "validUntil": "2026-11-16T13:00:00Z",
+      "renewalDueAt": "2026-11-17T06:00:00Z",
+      "lastRenewal": { "at": "2026-11-16T06:00:00Z", "outcome": "succeeded" }
+    }
+  },
+  "githubApp": {
+    "observedAt": "2026-11-16T11:55:00Z",
+    "validUntil": "2026-11-16T12:55:00Z",
+    "grantedPermissions": {
+      "actions": "read",
+      "checks": "read",
+      "contents": "write",
+      "issues": "read",
+      "metadata": "read",
+      "pull_requests": "write",
+      "statuses": "read"
+    }
+  }
+}
+```
+
+| Field                                             | Value                                                                                                    |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `version`                                         | `1`.                                                                                                     |
+| `providers.<provider>.observedAt`, `.validUntil`  | ISO times: when the host observed that provider's login renewal, and until when that observation holds.  |
+| `providers.<provider>.renewalDueAt`               | ISO time: the login's expiry minus the host's renewal threshold. The threshold itself stays on the host. |
+| `providers.<provider>.lastRenewal.at`, `.outcome` | ISO time of the host's last renewal of that login, and its outcome: `succeeded` or `failed`.             |
+| `githubApp.observedAt`, `.validUntil`             | ISO times: when the host observed the App installation, and until when that observation holds.           |
+| `githubApp.grantedPermissions.<permission>`       | `read` or `write`, as the App installation grants the permission.                                        |
+
+Each producer sets `validUntil` from its own schedule; the factory adds no
+staleness limit. The facts a part of the document supplies are unknown when:
+
+- `credentialObservations` is not configured, or the document is missing,
+  unreadable, not JSON or of another `version`: every fact it supplies;
+- a `providers.<provider>` or `githubApp` section is missing, does not match
+  the shape above, or is at or past its own `validUntil` when the pass runs:
+  that section's facts. The other sections stay usable.
+
+Entries for providers the host configuration does not name are ignored.
+
+### Run kind permission check
+
+For each run kind, `triage`, `implement` and `review`, the factory compares
+the [permissions it declares for that kind](#run-kind-token-permissions) with
+`githubApp.grantedPermissions` and names every declared permission the
+installation lacks, with the level the kind needs. A `write` grant satisfies a
+`read` requirement. While a served repository is on factory configuration
+version 2, implement also needs version 2's set, including `issues` write. The
+factory embeds no host value and never acquires an App private key. It
+compares only run kinds' declared sets, not the permissions of the
+repository's own token.
+
+### Credential health output
+
+`credentials` holds:
+
+| Field                                | Meaning                                                                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `health`                             | `healthy`, `unhealthy` or `unknown`, judged below.                                                                                |
+| `observedAt`                         | When the factory computed this, an ISO time.                                                                                      |
+| `providers.<provider>.health`        | That provider's own judgment, by the same rules.                                                                                  |
+| `providers.<provider>.loginExpiry`   | The held login copy's expiry, or `unknown`.                                                                                       |
+| `providers.<provider>.renewalDueAt`  | From the observations, or `unknown`.                                                                                              |
+| `providers.<provider>.lastRenewal`   | `{ "at": "…", "outcome": "succeeded" }` from the observations, or `unknown`.                                                      |
+| `runKinds.<kind>.health`             | That run kind's own judgment.                                                                                                     |
+| `runKinds.<kind>.missingPermissions` | Each missing permission with the level the kind needs, such as `{ "statuses": "read" }`; `{}` when none is missing; or `unknown`. |
+| `problems`                           | Why each unknown fact is unknown, such as `githubApp is past its validUntil`.                                                     |
+
+`credentials.health` is:
+
+1. `unhealthy` when any known fact is bad: a login at or past its expiry or
+   its `renewalDueAt`, a `lastRenewal.outcome` of `failed`, or a run kind
+   missing a declared permission, even while other facts are unknown;
+2. otherwise `unknown` when any of those facts is unknown;
+3. otherwise `healthy`.
+
+An unknown fact is never reported as healthy.
+
+### Monitoring credential health
+
+A check that reads one timestamp and compares one dotted field with a healthy
+value can watch the status file directly. For homelab monitoring's `record`
+check, read the state directory's `status.json` with timestamp
+`credentials.observedAt`, field `credentials.health` and healthy value
+`healthy`.
 
 ## Operational events
 

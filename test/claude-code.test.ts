@@ -438,3 +438,52 @@ test("a Claude Code failure without its limit error, or prose about limits, is n
   ])
     assert.equal(adapter.usageLimit(log), null);
 });
+
+test("Claude Code's login expiry is its usage login copy's, and unknown without a readable one", async (t) => {
+  const root = directory(t);
+  const credential = join(root, "setup-token");
+  const usageCredential = join(root, "usage.json");
+  writeFileSync(credential, "synthetic-launch-secret");
+  const adapter = (usage?: string) =>
+    createRegistry(
+      {
+        "claude-code": {
+          credential,
+          ...(usage !== undefined && { usageCredential: usage }),
+        },
+      },
+      { effort: "high" },
+      fakePorts().ports,
+    ).providers.get("claude-code")!;
+  // The setup token carries no expiry.
+  assert.equal(await adapter().loginExpiry(), null);
+  const expiresAt = Date.parse("2026-11-16T12:00:00.000Z");
+  // An expired copy still reports its expiry.
+  for (const at of [expiresAt, 1]) {
+    writeFileSync(
+      usageCredential,
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "synthetic-login-secret",
+          refreshToken: "synthetic-refresh-secret",
+          expiresAt: at,
+        },
+      }),
+    );
+    assert.deepEqual(
+      await adapter(usageCredential).loginExpiry(),
+      new Date(at),
+    );
+  }
+  for (const content of [
+    undefined,
+    "synthetic-login-secret not JSON",
+    "null",
+    JSON.stringify({ claudeAiOauth: { expiresAt: "tomorrow" } }),
+    JSON.stringify({ claudeAiOauth: { expiresAt: 1e20 } }),
+  ]) {
+    if (content === undefined) rmSync(usageCredential, { force: true });
+    else writeFileSync(usageCredential, content);
+    assert.equal(await adapter(usageCredential).loginExpiry(), null);
+  }
+});

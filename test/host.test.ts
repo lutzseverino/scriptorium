@@ -1731,6 +1731,146 @@ test("every printed token and delivered credential is redacted from the run log,
     assert.equal(written.includes(secret), false, secret);
 });
 
+test("each pass records credential health from the held logins and the host's observations, never a credential", async (t) => {
+  const root = directory(t);
+  const secrets = [
+    "synthetic-claude-access-secret",
+    "synthetic-claude-refresh-secret",
+    "synthetic-codex-refresh-secret",
+    "synthetic-codex-signature-secret",
+    "synthetic-observation-secret",
+  ];
+  const claudeUsage = join(root, "claude-usage.json");
+  writeFileSync(
+    claudeUsage,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: secrets[0],
+        refreshToken: secrets[1],
+        // Past the fixture clock's 2026-10-09T12:00:00Z.
+        expiresAt: Date.parse("2026-10-09T11:00:00Z"),
+      },
+    }),
+  );
+  const codexLogin = join(root, "codex-auth.json");
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Date.parse("2026-10-10T12:00:00Z") / 1000 }),
+  ).toString("base64url");
+  writeFileSync(
+    codexLogin,
+    JSON.stringify({
+      tokens: {
+        access_token: `eyJhbGciOiJub25lIn0.${payload}.${secrets[3]}`,
+        refresh_token: secrets[2],
+      },
+    }),
+  );
+  const provider = {
+    observedAt: "2026-10-09T11:00:00Z",
+    validUntil: "2026-10-09T13:00:00Z",
+    renewalDueAt: "2026-10-10T00:00:00Z",
+    lastRenewal: { at: "2026-10-09T10:00:00Z", outcome: "succeeded" },
+    note: secrets[4],
+  };
+  const observations = join(root, "credential-observations.json");
+  writeFileSync(
+    observations,
+    JSON.stringify({
+      version: 1,
+      providers: { "claude-code": provider, codex: provider },
+      githubApp: {
+        observedAt: "2026-10-09T11:00:00Z",
+        validUntil: "2026-10-09T13:00:00Z",
+        grantedPermissions: {
+          actions: "read",
+          checks: "read",
+          contents: "write",
+          issues: "read",
+          metadata: "read",
+          pull_requests: "write",
+        },
+        token: secrets[4],
+      },
+    }),
+  );
+  const run = host(t, {
+    repositories: { "acme/widgets": [] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: {
+      providers: {
+        "claude-code": {
+          cap: 1,
+          credential: join(root, "claude-token"),
+          usageCredential: claudeUsage,
+        },
+        codex: { cap: 1, credential: codexLogin },
+      },
+      credentialObservations: observations,
+    },
+  });
+  await run.tick();
+  const { credentials } = run.status();
+  // The fixture repository is on configuration version 2, whose runs need
+  // issues write.
+  assert.deepEqual(credentials, {
+    health: "unhealthy",
+    observedAt: "2026-10-09T12:00:00.000Z",
+    providers: {
+      "claude-code": {
+        health: "unhealthy",
+        loginExpiry: "2026-10-09T11:00:00.000Z",
+        renewalDueAt: provider.renewalDueAt,
+        lastRenewal: provider.lastRenewal,
+      },
+      codex: {
+        health: "healthy",
+        loginExpiry: "2026-10-10T12:00:00.000Z",
+        renewalDueAt: provider.renewalDueAt,
+        lastRenewal: provider.lastRenewal,
+      },
+    },
+    runKinds: {
+      triage: { health: "healthy", missingPermissions: {} },
+      implement: {
+        health: "unhealthy",
+        missingPermissions: { issues: "write", statuses: "read" },
+      },
+      review: { health: "unhealthy", missingPermissions: { statuses: "read" } },
+    },
+    problems: [],
+  });
+
+  const printed = [hostCommand(run, "status"), statusCommand(run)];
+  assert.deepEqual(JSON.parse(printed[1]).credentials, credentials);
+  assert.match(printed[0], /credentials health=unhealthy/);
+  const written = [
+    readFileSync(join(run.state, "status.json"), "utf8"),
+    ...printed,
+    ...run.reports,
+  ].join("\n");
+  for (const secret of secrets)
+    assert.equal(written.includes(secret), false, secret);
+
+  // Without the observations, nothing the host observes is known.
+  rmSync(observations);
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  writeFileSync(
+    claudeUsage,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: secrets[0],
+        expiresAt: Date.parse("2026-10-10T11:00:00Z"),
+      },
+    }),
+  );
+  await run.tick();
+  assert.equal(run.status().credentials.health, "unknown");
+  assert.equal(run.status().credentials.observedAt, "2026-10-09T12:10:00.000Z");
+  assert.deepEqual(run.status().credentials.problems, [
+    "the credential observations are missing",
+  ]);
+});
+
 test("each clone ignores Sandcastle's directory locally and follows its remote", async (t) => {
   const widgets = remote(t, factoryFiles);
   const run = host(t, {
@@ -1787,6 +1927,7 @@ test("the status file lists each repository's state and its held issues", async 
     providers: _providers,
     capacity: _capacity,
     unresolvedRuns: _runs,
+    credentials: _credentials,
     ...repositoryStatus
   } = run.status();
   assert.deepEqual(repositoryStatus, {

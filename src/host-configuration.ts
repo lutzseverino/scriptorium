@@ -1,6 +1,7 @@
 // The host configuration: the operator's one JSON file for this host. Every
-// field is required unless it is the optional Claude usage credential or has a
-// default; unknown fields are refused, and nothing comes from the environment.
+// field is required unless it is optional, such as the Claude usage credential,
+// or has a default; unknown fields are refused, and nothing comes from the
+// environment.
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { PlatformName } from "@lutzseverino/postern";
@@ -41,6 +42,9 @@ export type HostConfiguration = {
   imageBuilder: ImageBuilder;
   imageRetention: ImageRetention;
   imageStorage?: ImageStoragePolicy;
+  // The host-written, non-secret credential observations document the
+  // factory reads on each pass, or absent when the host writes none.
+  credentialObservations?: string;
 };
 
 // Optional sandbox admission limits across providers; omission adds no limit.
@@ -373,6 +377,7 @@ function hostConfigurationProblems(value: unknown): string[] {
         },
         ["cachePath"],
       ),
+      credentialObservations: text(isAbsolute, "is not an absolute path"),
       imageRetention: object(
         {
           obsoletePairs: number(
@@ -393,6 +398,7 @@ function hostConfigurationProblems(value: unknown): string[] {
       "imageBuilder",
       "imageRetention",
       "imageStorage",
+      "credentialObservations",
       ...(shorthand ? ["platforms"] : ["readiness", "github"]),
     ],
   )(value, "", problems);

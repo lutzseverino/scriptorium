@@ -320,3 +320,34 @@ test("a Codex window without a reset or a length still reports its percentage", 
     },
   );
 });
+
+test("Codex's login expiry is its access token's, and unknown without a readable one", async (t) => {
+  const { adapter, credential } = codex(t);
+  const jwt = (payload: unknown) =>
+    [
+      Buffer.from('{"alg":"none"}').toString("base64url"),
+      Buffer.from(JSON.stringify(payload)).toString("base64url"),
+      "synthetic-signature-secret",
+    ].join(".");
+  const exp = Date.parse("2026-11-16T12:00:00.000Z") / 1000;
+  writeFileSync(
+    credential,
+    JSON.stringify({
+      tokens: {
+        access_token: jwt({ exp, sub: "synthetic" }),
+        refresh_token: "synthetic-refresh-secret",
+      },
+    }),
+  );
+  assert.deepEqual(await adapter.loginExpiry(), new Date(exp * 1000));
+  for (const content of [
+    login,
+    "synthetic-login-secret not JSON",
+    '{"OPENAI_API_KEY":"synthetic-key-secret"}',
+    JSON.stringify({ tokens: { access_token: jwt({ sub: "synthetic" }) } }),
+    JSON.stringify({ tokens: { access_token: jwt({ exp: "later" }) } }),
+  ]) {
+    writeFileSync(credential, content);
+    assert.equal(await adapter.loginExpiry(), null);
+  }
+});

@@ -18,6 +18,7 @@ import {
   type RunKindName,
 } from "./factory-configuration.ts";
 import type { ProviderStatus } from "./events.ts";
+import type { Credentials } from "./credentials.ts";
 
 // What the pass read from the repository's `.scriptorium/config.json`. The
 // last valid configuration that settles existing runs is never reported here.
@@ -148,6 +149,7 @@ export type Status = {
   capacity: Capacity;
   unresolvedRuns: UnresolvedRun[];
   imageStorage?: ImageStorageStatus;
+  credentials?: Credentials;
 };
 
 // Each repository in the order given, with its configuration, its pause or
@@ -167,6 +169,7 @@ export function hostStatus(
   runs: Run[] = [],
   limits?: ImplementLimits,
   unresolvedRuns: UnresolvedRun[] = [],
+  credentials?: Credentials,
 ): Status {
   const counts = runningCounts(runs);
   const names = new Set([
@@ -190,6 +193,7 @@ export function hostStatus(
     },
     unresolvedRuns,
     ...(imageStorage && { imageStorage }),
+    ...(credentials && { credentials }),
     repositories: repositories.map(
       ({ name, paused, configuration, pass, ownerWaits }) => ({
         repository: name,

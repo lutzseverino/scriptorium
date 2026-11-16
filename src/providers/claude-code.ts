@@ -104,6 +104,17 @@ export function claudeCodeAdapter(
       }
       return claudeUsage(result);
     },
+    // Only the usage login copy carries an expiry; the setup token has none.
+    async loginExpiry() {
+      if (usageCredential === undefined) return null;
+      try {
+        const expiresAt = (await readUsageLogin(usageCredential))?.expiresAt;
+        const date = new Date(typeof expiresAt === "number" ? expiresAt : NaN);
+        return Number.isFinite(date.getTime()) ? date : null;
+      } catch {
+        return null;
+      }
+    },
     usageLimit: (log) => limitError(log, claudeLimitErrors),
   };
 }
@@ -136,16 +147,7 @@ async function readToken(path: string): Promise<string> {
 // The host replaces this copy after renewing the root-held login. It is never
 // passed to an agent or used to refresh a token.
 async function readUsageToken(path: string): Promise<string> {
-  let login;
-  try {
-    login = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    // JSON parse errors may quote secrets; keep neither the error nor a cause.
-    throw new UsageReadError(
-      "the Claude Code usage login is not readable JSON",
-    );
-  }
-  const oauth = login?.claudeAiOauth;
+  const oauth = await readUsageLogin(path);
   if (
     typeof oauth?.accessToken !== "string" ||
     oauth.accessToken === "" ||
@@ -159,6 +161,20 @@ async function readUsageToken(path: string): Promise<string> {
   if (oauth.expiresAt <= Date.now())
     throw new UsageReadError("the Claude Code usage login has expired");
   return oauth.accessToken;
+}
+
+// The usage login copy's OAuth entry, unchecked.
+async function readUsageLogin(path: string): Promise<any> {
+  let login;
+  try {
+    login = JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    // JSON parse errors may quote secrets; keep neither the error nor a cause.
+    throw new UsageReadError(
+      "the Claude Code usage login is not readable JSON",
+    );
+  }
+  return login?.claudeAiOauth;
 }
 
 // The usage endpoint's result, whose window names give their lengths. Its
