@@ -641,7 +641,7 @@ test("an invalid host configuration stops the process with its reason", () => {
   assert.equal(usage.status, 2);
   assert.equal(
     usage.stderr,
-    "Usage: node src/main.ts <host configuration>\n   or: node src/main.ts resume <host configuration> <provider> [--drain-threshold N]\n   or: node src/main.ts status <host configuration> [--json] [--live-usage]\n",
+    "Usage: node src/main.ts <host configuration>\n   or: node src/main.ts resume <host configuration> <provider> [--drain-threshold N]\n   or: node src/main.ts status <host configuration> [--json] [--live-usage]\n   or: node src/main.ts results --author <trusted publishing account>\n",
   );
 });
 
