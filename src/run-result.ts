@@ -18,7 +18,8 @@ export type RunResult = {
   state?: string;
   // Other labels, from the families the kind may request.
   labels?: string[];
-  // Markdown, contained so that it holds no HTML comment and so no marker.
+  // Markdown without filing citation lines, contained so that it holds no HTML
+  // comment and so no marker.
   body: string;
   // One line on why the run ended; a failed result always has one.
   reason?: string;
@@ -115,10 +116,11 @@ export function parseRunResult(
     body
       .split(/(?<=\n)|(?<=\r)(?!\n)/)
       .filter((line) => {
+        // A citation line is one comment: its first closer ends the line.
         const trimmed = line.trim();
         return !(
           trimmed.startsWith("<!-- scriptorium:filing-run ") &&
-          trimmed.endsWith("-->")
+          trimmed.indexOf("-->") === trimmed.length - 3
         );
       })
       .join(""),
