@@ -9,7 +9,11 @@ import {
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { status, type StatusPorts } from "../src/status-command.ts";
-import { hostStatus, type ConfigurationCoverage } from "../src/status.ts";
+import {
+  hostStatus,
+  type ConfigurationCoverage,
+  type UnresolvedRun,
+} from "../src/status.ts";
 import type { Run } from "../src/factory.ts";
 import { providerStatus } from "../src/events.ts";
 import { UsageReadError } from "../src/providers/usage.ts";
@@ -894,4 +898,203 @@ for (const fault of [
         ),
         text,
       );
+  });
+
+// A status file the factory's writer produces with health: acme/widgets fails
+// with owner waits and acme/gadgets passes, beside three unresolved runs, one
+// exactly at its limit when the command observes.
+const failingSince = "2026-11-08T09:00:00.000Z";
+const healthRuns: UnresolvedRun[] = [
+  {
+    repository: "acme/gadgets",
+    issue: 3,
+    runKind: "implement",
+    startedAt: "2026-11-08T09:00:00.000Z",
+    limitAt: now.toISOString(),
+    phase: "stopping",
+    resultPosted: false,
+  },
+  {
+    repository: "acme/widgets",
+    issue: 4,
+    runKind: "triage",
+    startedAt: "2026-11-08T07:00:00.000Z",
+    limitAt: "2026-11-08T11:00:00.000Z",
+    phase: "exited",
+    resultPosted: false,
+  },
+  {
+    repository: "acme/widgets",
+    issue: 6,
+    runKind: "review",
+    startedAt: "2026-11-08T08:00:00.001Z",
+    limitAt: "2026-11-08T12:00:00.001Z",
+    phase: "running",
+    resultPosted: false,
+  },
+];
+const widgetsHealth = {
+  pass: {
+    failingSince,
+    failure: "its platform reads failed: issues unavailable",
+    lastPublication: {
+      at: "2026-11-08T08:00:00.000Z",
+      issue: 4,
+      runKind: "triage" as const,
+    },
+    lastSettlement: null,
+  },
+  ownerWaits: {
+    label: "state:owner",
+    issues: [
+      {
+        number: 5,
+        title: "Choose the format",
+        url: "https://platform.test/acme/widgets/issues/5",
+      },
+    ],
+  },
+};
+const gadgetsHealth = {
+  pass: {
+    failingSince: null,
+    lastPublication: null,
+    lastSettlement: {
+      at: "2026-11-08T10:00:00.000Z",
+      issue: 2,
+      runKind: "implement" as const,
+    },
+  },
+  ownerWaits: null,
+};
+function healthSnapshot(repositories: string[]) {
+  return hostStatus(
+    now.toISOString(),
+    repositories.map((name, index) => ({
+      name,
+      paused: null,
+      configuration: valid,
+      ...(index === 0 ? widgetsHealth : gadgetsHealth),
+    })),
+    [],
+    [],
+    undefined,
+    [],
+    undefined,
+    healthRuns,
+  );
+}
+
+test("health projects the status file's pass health, owner waits and overdue runs, as text and JSON, through a pending transaction", async (t) => {
+  const { path, state } = fixture(t);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  mkdirSync(state);
+  writeFileSync(
+    join(state, "status.json"),
+    JSON.stringify(healthSnapshot(config.repositories)),
+  );
+  // A pending transaction concerns provider work, not health.
+  writeFileSync(
+    join(state, "events-state.json"),
+    JSON.stringify({ version: 1, pending: {} }),
+  );
+  const before = readFileSync(join(state, "status.json"), "utf8");
+  const budget = JSON.parse((await command([path, "--json"])).output[0]);
+  assert.deepEqual(budget.health, {
+    observation: {
+      state: "last-observed",
+      source: "status.json",
+      at: now.toISOString(),
+    },
+    repositories: [
+      { repository: "acme/widgets", ...widgetsHealth },
+      { repository: "acme/gadgets", ...gadgetsHealth },
+    ],
+    // Ordered by limit; a run exactly at its limit is overdue, and one a
+    // millisecond short of it is not.
+    overdueRuns: [healthRuns[1], healthRuns[0]],
+  });
+  assert.equal(budget.version, 1);
+  assert.equal(budget.capacity.observation.state, "unavailable");
+  const text = (await command([path])).output[0].split("\n");
+  const coverage = text.indexOf(
+    `coverage observation=${JSON.stringify(budget.coverage.observation)}`,
+  );
+  assert.deepEqual(text.slice(coverage + 1, coverage + 7), [
+    `acme/widgets: pass=${JSON.stringify(widgetsHealth.pass)} ownerWaits=${JSON.stringify(widgetsHealth.ownerWaits)}`,
+    `acme/gadgets: pass=${JSON.stringify(gadgetsHealth.pass)} ownerWaits=null`,
+    "overdue runs=2",
+    "  acme/widgets#4: runKind=triage phase=exited startedAt=2026-11-08T07:00:00.000Z limitAt=2026-11-08T11:00:00.000Z resultPosted=false",
+    "  acme/gadgets#3: runKind=implement phase=stopping startedAt=2026-11-08T09:00:00.000Z limitAt=2026-11-08T12:00:00.000Z resultPosted=false",
+    `health observation=${JSON.stringify(budget.health.observation)}`,
+  ]);
+  // The command writes nothing.
+  assert.equal(readFileSync(join(state, "status.json"), "utf8"), before);
+});
+
+for (const fault of [
+  "missing",
+  "unreadable",
+  "future",
+  "pre-coverage",
+  "pre-health",
+  "without unresolved runs",
+  "inconsistent pass",
+  "failure while passing",
+  "inconsistent owner waits",
+  "inconsistent run",
+  "duplicate",
+  "new repository",
+])
+  test(`health is unavailable for a ${fault} status file`, async (t) => {
+    const { path, state } = fixture(t);
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    mkdirSync(state);
+    const snapshot = healthSnapshot(config.repositories);
+    const [first, second] = snapshot.repositories as Record<string, any>[];
+    if (fault === "future") snapshot.updatedAt = "2100-01-01T00:00:00Z";
+    if (fault === "pre-coverage") delete first.configuration;
+    if (fault === "pre-health")
+      for (const entry of snapshot.repositories as Record<string, unknown>[]) {
+        delete entry.pass;
+        delete entry.ownerWaits;
+      }
+    if (fault === "without unresolved runs")
+      delete (snapshot as Partial<typeof snapshot>).unresolvedRuns;
+    if (fault === "inconsistent pass") first.pass.failingSince = "yesterday";
+    if (fault === "failure while passing") second.pass.failure = "it broke";
+    if (fault === "inconsistent owner waits")
+      first.ownerWaits.issues.push(first.ownerWaits.issues[0]);
+    if (fault === "inconsistent run")
+      (snapshot.unresolvedRuns[0] as Record<string, unknown>).phase = "paused";
+    if (fault === "duplicate")
+      snapshot.repositories.push(snapshot.repositories[0]);
+    if (fault === "new repository") snapshot.repositories.pop();
+    if (fault === "unreadable") mkdirSync(join(state, "status.json"));
+    else if (fault !== "missing")
+      writeFileSync(join(state, "status.json"), JSON.stringify(snapshot));
+    const { health } = JSON.parse((await command([path, "--json"])).output[0]);
+    assert.equal(health.observation.state, "unavailable");
+    assert.equal(health.observation.at, null);
+    assert.match(
+      health.observation.problem,
+      fault === "missing"
+        ? /^missing record$/
+        : fault === "unreadable"
+          ? /^unreadable record$/
+          : /^missing, legacy or inconsistent health observation$/,
+    );
+    // Nulls establish nothing: no health, no failure, no empty list.
+    assert.deepEqual(health.repositories, [
+      { repository: "acme/widgets", pass: null, ownerWaits: null },
+      { repository: "acme/gadgets", pass: null, ownerWaits: null },
+    ]);
+    assert.equal(health.overdueRuns, null);
+    const text = (await command([path])).output[0].split("\n");
+    for (const repository of config.repositories)
+      assert.ok(
+        text.includes(`${repository}: pass=unavailable ownerWaits=unavailable`),
+        text.join("\n"),
+      );
+    assert.ok(text.includes("overdue runs=unavailable"), text.join("\n"));
   });

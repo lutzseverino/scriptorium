@@ -105,10 +105,15 @@ import { followRunLog, readLogEnd } from "./run-log.ts";
 import { prompt } from "./prompt.ts";
 import {
   hostStatus,
+  readPassHealth,
+  unknownPassHealth,
   writeStatus,
   type ConfigurationCoverage,
+  type OwnerWaits,
+  type PassHealth,
   type PauseCause,
   type RepositoryPause,
+  type UnresolvedRun,
 } from "./status.ts";
 import { createUsage } from "./usage.ts";
 import type { Action, Phase, RunUpdate } from "./run-comment.ts";
@@ -207,6 +212,9 @@ type Pass = {
   factoryHold?: number[] | null;
   // Open PRs carrying a gate label; null when the read failed.
   gated?: number[] | null;
+  // The open issues carrying the version 3 owner label, as this pass read
+  // them; null without that label or when the read did not happen.
+  ownerWaits: OwnerWaits | null;
 };
 
 export function createHost(
@@ -234,6 +242,10 @@ export function createHost(
   let interrupting = false;
   // Why image retention last waited, reported once until it changes.
   let retentionWait: string | null = null;
+  // Each repository's pass health, which the first pass takes from the
+  // status file the previous process wrote.
+  let passHealth = new Map<string, PassHealth>();
+  const statusPath = join(configuration.stateDirectory, "status.json");
   const pending = new Set<Promise<void>>();
   const events = createEvents(configuration.stateDirectory);
   let providerReadings: Snapshot["usage"] = {};
@@ -312,6 +324,29 @@ export function createHost(
     );
   }
 
+  // Reasons name repository inputs by their repository path, never by the
+  // host's clone path.
+  const repositoryReason = (repository: string, reason: string) =>
+    redactor.redact(
+      reason.replaceAll(`${directory(repository).clone}${sep}`, ""),
+    );
+
+  // The repository's pass health with the run as its latest publication or
+  // settlement, from now.
+  function mark(
+    run: HostRun,
+    fact: "lastPublication" | "lastSettlement",
+  ): void {
+    passHealth.set(run.repository, {
+      ...(passHealth.get(run.repository) ?? unknownPassHealth),
+      [fact]: {
+        at: ports.now().toISOString(),
+        issue: run.issue,
+        runKind: run.continuation.runKind ?? "implement",
+      },
+    });
+  }
+
   // Everything the process owns for a repository lives under its directory.
   function directory(repository: string) {
     const root = join(
@@ -342,15 +377,12 @@ export function createHost(
       read: null,
       configuration: conventions.get(name) ?? null,
       modelPolicy: null,
+      ownerWaits: null,
     };
     const { clone } = directory(name);
-    // Reasons name repository inputs by their repository path, never by
-    // the host's clone path.
-    const repositoryReason = (reason: string) =>
-      redactor.redact(reason.replaceAll(`${clone}${sep}`, ""));
     // The last pause wins, with who acts on it.
     const pause = (reason: string, cause: PauseCause) =>
-      (pass.paused = { cause, reason: repositoryReason(reason) }).reason;
+      (pass.paused = { cause, reason: repositoryReason(name, reason) }).reason;
     const notRead = (problem: string) =>
       (pass.configurationFile = { state: "not-read", problem });
     // A repository whose own token fails to print is paused for the pass.
@@ -483,7 +515,20 @@ export function createHost(
       record(run);
     }
     try {
-      const issues = await platform.readIssues();
+      const open = await platform.readIssues();
+      const owner =
+        pass.configuration.version === 3
+          ? pass.configuration.labels.owner
+          : undefined;
+      if (owner !== undefined)
+        pass.ownerWaits = {
+          label: owner,
+          issues: open
+            .filter((issue) => issue.labels.includes(owner))
+            .sort((a, b) => a.number - b.number)
+            .map(({ number, title, url }) => ({ number, title, url })),
+        };
+      const issues: Issue[] = [...open];
       if (runKind(pass.configuration, "review"))
         issues.push(
           ...(await platform.readPullRequests(
@@ -611,6 +656,7 @@ export function createHost(
           issue.labels = postedLabels(issue.labels, post);
           run.resultPosted = true;
           record(run);
+          mark(run, "lastPublication");
           await tell(pass, issue, {
             phase: phaseOf(run),
             facts: {
@@ -792,10 +838,15 @@ export function createHost(
 
   function forget(decision: { repository: string; issue: number }) {
     const run = find(decision);
-    if (!run) return;
+    if (run) settle(run);
+  }
+
+  // The host stops holding the run.
+  function settle(run: HostRun) {
     runs.splice(runs.indexOf(run), 1);
     run.settled = true;
     record(run);
+    mark(run, "lastSettlement");
   }
 
   function readProvenance(name: string): Provenance[] {
@@ -871,6 +922,7 @@ export function createHost(
   // threshold, as paused, while orphans settle through the outcome table.
   function start() {
     ports.stopSandboxes();
+    passHealth = readPassHealth(statusPath);
     const recovered: HostRun[] = [];
     for (const name of configuration.repositories) {
       const runsDirectory = directory(name).runs;
@@ -1516,12 +1568,8 @@ export function createHost(
         }
         await platform.transition(decision.issue, "release");
         if (!stop) forget(decision);
-        else if (previous) {
-          // Retire the attempt; its continuation is on the issue.
-          runs.splice(runs.indexOf(previous), 1);
-          previous.settled = true;
-          record(previous);
-        }
+        // Retire the attempt; its continuation is on the issue.
+        else if (previous) settle(previous);
         return;
       }
       case "pause": {
@@ -1627,7 +1675,8 @@ export function createHost(
     }
     // A failed transition stops the repository's later decisions, such as
     // a launch after a claim that did not apply; other repositories continue.
-    const stopped = new Set<string>();
+    // Each stopped repository keeps the failure as its pass's.
+    const stopped = new Map<string, string>();
     for (const decision of decisions) {
       if (interrupting) break;
       if (stopped.has(decision.repository)) continue;
@@ -1637,18 +1686,34 @@ export function createHost(
           passes.find((pass) => pass.name === decision.repository)!,
         );
       } catch (error) {
-        stopped.add(decision.repository);
-        report(
+        const failure = repositoryReason(
+          decision.repository,
           `${decision.repository}#${decision.issue} ${decision.kind} failed, so ${decision.repository} waits for the next pass: ${error}`,
         );
+        stopped.set(decision.repository, failure);
+        report(failure);
       }
+    }
+    // A factory hold is a person's pause, so it never fails a pass.
+    for (const pass of passes) {
+      const previous = passHealth.get(pass.name) ?? unknownPassHealth;
+      const failure = stopped.get(pass.name) ?? pass.paused?.reason;
+      passHealth.set(pass.name, {
+        failingSince:
+          failure === undefined
+            ? null
+            : (previous.failingSince ?? snapshot.now),
+        ...(failure !== undefined && { failure }),
+        lastPublication: previous.lastPublication,
+        lastSettlement: previous.lastSettlement,
+      });
     }
     const providers = providerStatuses();
     events.commit(providers);
     const imageStorage = ports.imageStorageStatus?.();
     try {
       await writeStatus(
-        join(configuration.stateDirectory, "status.json"),
+        statusPath,
         hostStatus(
           snapshot.now,
           passes.map((pass) => {
@@ -1661,6 +1726,8 @@ export function createHost(
                 (held
                   ? { cause: "factory-hold" as const, reason: held }
                   : null),
+              pass: passHealth.get(pass.name)!,
+              ownerWaits: pass.ownerWaits,
             };
           }),
           decisions,
@@ -1672,6 +1739,7 @@ export function createHost(
             : undefined,
           runs,
           configuration.implement,
+          unresolvedRuns(),
         ),
       );
     } catch (error) {
@@ -1679,6 +1747,32 @@ export function createHost(
     }
     if (!interrupting) await retain(passes);
     return decisions;
+  }
+
+  // The runs the host holds whose ending is not resolved: running, stopping,
+  // or exited while publication or ending observation is pending.
+  function unresolvedRuns(): UnresolvedRun[] {
+    return runs.flatMap((run) =>
+      run.exited && run.ended !== null
+        ? []
+        : [
+            {
+              repository: run.repository,
+              issue: run.issue,
+              runKind: run.continuation.runKind ?? "implement",
+              startedAt: run.startedAt,
+              limitAt: new Date(
+                Date.parse(run.startedAt) + settings.timeLimitMinutes * 60_000,
+              ).toISOString(),
+              phase: run.exited
+                ? "exited"
+                : run.stopped || run.pausing
+                  ? "stopping"
+                  : "running",
+              resultPosted: run.resultPosted === true,
+            },
+          ],
+    );
   }
 
   // Once a pass has prepared every repository's image, the factory's obsolete

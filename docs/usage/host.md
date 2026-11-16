@@ -1579,7 +1579,9 @@ repositories continue. A repository pause is no [paused run](#paused-runs): it
 never adds the paused label. Its reason appears in the process log and the
 status file, and an actionable configuration hold gets a [hold comment](#hold-comments)
 on affected issues when the host can read them using a valid configuration. A run whose sandbox is still running counts against its
-provider's cap and time limit even while its repository can't be read.
+provider's cap and time limit even while its repository can't be read. A
+repository pause with a `repository-input` or `host` cause fails the pass for
+[health](#health).
 
 ## Read-only launch budget
 
@@ -1745,6 +1747,92 @@ writes nothing. Text output shows each repository as
 the observation is available and nothing pauses it, and `unavailable` values
 otherwise, followed by `coverage observation=<JSON>`.
 
+### Health
+
+The `health` field in status JSON tells an orchestrating agent whether this
+host's passes are working in each repository, which runs are still claimed
+past their time limit, and which issues wait on the owner:
+
+```text
+health.observation               same shape as capacity.observation: state (last-observed | unavailable),
+                                 source "status.json", at (the status file's updatedAt), optional problem
+health.repositories[]            one entry per repository the host configuration lists, in its order
+  .repository                    "owner/name"
+  .pass                          null while the observation is unavailable; otherwise:
+    .failingSince                when the current unbroken run of failing passes began;
+                                 null when the latest pass did not fail
+    .failure                     the latest failing pass's reason; only while failing
+    .lastPublication             { at, issue, runKind } of the last run result the host published
+                                 in this repository; null when its records hold none
+    .lastSettlement              { at, issue, runKind } of the last run the host settled
+                                 in this repository; null when its records hold none
+  .ownerWaits                    null while the observation is unavailable, when the repository's
+                                 configuration names no owner label, or when the latest pass did not
+                                 read its open issues; otherwise:
+    .label                       the configured owner label, such as "state:owner"
+    .issues[]                    { number, title, url } for each open issue carrying it, by number
+health.overdueRuns               null while the observation is unavailable; otherwise every run
+                                 still claimed past its time limit, ordered by limitAt:
+  []                             { repository, issue, runKind, startedAt, limitAt, phase, resultPosted }
+    .phase                       running | stopping | exited
+```
+
+- **Failing pass.** A pass fails for a repository when it pauses the
+  repository for a reason of its own, a `repository-input` or `host` cause
+  under [Repository pauses](#repository-pauses), or when a decision it applies
+  there fails, so the repository waits for the next pass. A factory hold alone,
+  set or unreadable, is a person's pause and never fails a pass. A pass that
+  completes for the repository ends the run of failures, and `failingSince`
+  returns to `null`; a later failure starts a new one.
+- **Failure reason.** `failure` is the failed decision's error as the process
+  log reports it, or otherwise the pass's pause reason. It is
+  [redacted](#redaction) and names repository inputs by their repository path,
+  never by the host's clone path.
+- **Last publication and settlement.** `lastPublication` is the last run result
+  whose comment and labels the host posted, including a triage brief's
+  publication. `lastSettlement` is the last run the host stopped holding,
+  including an attempt it retires to launch the next. The host keeps both, and
+  `failingSince`, in the status file it writes, and takes them from there when
+  it starts, so they survive a [restart](#restarts). A status file written by
+  a release that records no health establishes nothing: those fields start at
+  `null` and fill from the first pass that records them.
+- **Owner waits.** The owner label is the one a version 3 configuration names
+  for the `owner` label role; version 2 configurations and version 3
+  configurations without that role report `null`. The issues, titles and links
+  are those the pass's existing read of open issues returned, with no other
+  platform read; pull requests are not included.
+- **Run phase.** `running`: the agent was launched and has not exited, and no
+  stop was requested. `stopping`: a stop was requested, for the time limit,
+  the pause threshold or otherwise, and the agent has not exited. `exited`: the
+  agent exited and the run's ending is not yet resolved, for example while its
+  result publication or ending observation is pending; `resultPosted` says
+  whether its result comment and labels have landed. A run whose ending is
+  resolved never appears, whether done, awaiting merge, stopped, failed,
+  paused or interrupted. Phases read the same exit fact as capacity counts.
+- **Time limit.** `limitAt` is the run's start plus `timeLimitMinutes`. A run
+  is past its limit when `limitAt` is at or before the command's `observedAt`,
+  and runs at the same limit order by repository, then issue. Runs come from
+  the last-observed status file, so a run listed while the process is down is
+  still claimed as far as the host's records show. Health adds no timeout and
+  changes no stop.
+
+Health is always `last-observed`, taken from the last pass's status file at
+its `updatedAt`. It is `unavailable`, with every entry's `pass` and
+`ownerWaits` and the whole `overdueRuns` set to `null`, under each condition
+that makes [coverage](#coverage) unavailable, and when the status file was
+written by a release that does not record health or its health facts are
+inconsistent. Then `null` establishes nothing: no health, no failure, no empty
+list. A pending operational transaction leaves health available. A pass that
+ends before writing the status file leaves the previous file, whose age shows
+in `observation.at`. The command reads health only from the status file: it
+reads no repository, clone, token or run record, makes no platform call and
+writes nothing. Text output shows each repository as
+`<repository>: pass=<JSON> ownerWaits=<JSON>`, then `overdue runs=<count>`
+with one indented `<repository>#<issue>: runKind=… phase=… startedAt=…
+limitAt=… resultPosted=…` line per overdue run, then
+`health observation=<JSON>`, with `unavailable` values while the observation is
+unavailable.
+
 ### Observation provenance
 
 There is no liveness or operational-observation timeout. Reading a file cannot
@@ -1778,7 +1866,7 @@ modification time establishes no daemon liveness. `unavailable` has `at: null`.
 ### JSON contract, version 1
 
 The command's JSON document has `version: 1`, `observedAt` (when inspection
-began), `capacity`, [`coverage`](#coverage), `models` and `providers`. Each
+began), `capacity`, [`coverage`](#coverage), [`health`](#health), `models` and `providers`. Each
 provider reuses the operational fields documented under
 [Status file](#status-file), with the following additions and unavailable
 representations. Its `observedAt` identifies the projection time, while the
@@ -1851,7 +1939,11 @@ repository in the host configuration's order with its state, `running` or
 it, in the shape [coverage](#coverage) reports, and the issues the pass held
 with their skip reasons. A paused entry's `cause` and `reason` describe the
 pass's final pause reason, or the factory hold when the pass has no pause
-reason.
+reason. Each entry also has the `pass` and `ownerWaits` facts in the shape
+[health](#health) reports. The file's `unresolvedRuns` lists every run the
+host holds whose ending is not resolved, with the `repository`, `issue`,
+`runKind`, `startedAt`, `limitAt`, `phase` and `resultPosted` that health's
+overdue runs are selected from.
 It also lists every configured provider in configuration order, even with no
 frontier issue or running work. A repository with active merge relaunches has
 `mergeRelaunches` entries naming each `issue`, `pullRequest` and `headCommit`;
@@ -1897,7 +1989,30 @@ each provider's `observedAt` identifies that observation.
           "issue": 7,
           "reason": "relaunch waits: claude-code hit its usage limit (resets 12:50pm (UTC)); usage 100% is at or above the 95% pause threshold"
         }
-      ]
+      ],
+      "pass": {
+        "failingSince": null,
+        "lastPublication": {
+          "at": "2026-10-09T11:55:00.000Z",
+          "issue": 6,
+          "runKind": "triage"
+        },
+        "lastSettlement": {
+          "at": "2026-10-09T11:55:00.000Z",
+          "issue": 6,
+          "runKind": "triage"
+        }
+      },
+      "ownerWaits": {
+        "label": "state:owner",
+        "issues": [
+          {
+            "number": 6,
+            "title": "Choose the export format",
+            "url": "https://github.com/acme/widgets/issues/6"
+          }
+        ]
+      }
     },
     {
       "repository": "acme/gadgets",
@@ -1914,7 +2029,25 @@ each provider's `observedAt` identifies that observation.
           "issue": 2,
           "reason": "acme/gadgets is paused: it has no .scriptorium/Dockerfile"
         }
-      ]
+      ],
+      "pass": {
+        "failingSince": "2026-10-09T11:00:00.000Z",
+        "failure": "it has no .scriptorium/Dockerfile",
+        "lastPublication": null,
+        "lastSettlement": null
+      },
+      "ownerWaits": null
+    }
+  ],
+  "unresolvedRuns": [
+    {
+      "repository": "acme/widgets",
+      "issue": 4,
+      "runKind": "implement",
+      "startedAt": "2026-10-09T11:00:00.000Z",
+      "limitAt": "2026-10-09T15:00:00.000Z",
+      "phase": "running",
+      "resultPosted": false
     }
   ],
   "providers": [
