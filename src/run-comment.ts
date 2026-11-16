@@ -11,7 +11,7 @@
 import type { Comment, IssueTracker } from "@lutzseverino/postern";
 import { renderComment } from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
-import type { IssueId, StandIn } from "./factory.ts";
+import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
 import type { InputResume } from "./platform.ts";
 import type { RunResult } from "./run-result.ts";
@@ -50,12 +50,7 @@ export type PhaseFacts = {
 function standInText(facts: PhaseFacts): string | undefined {
   if (!facts.standIn) return undefined;
   const { chosen, reason } = facts.standIn;
-  const percent = (value: number) => Math.round(value * 10) / 10;
-  const detail =
-    reason.kind === "spare usage"
-      ? `spare usage (${percent(reason.used)}% used, ${percent(reason.elapsed)}% elapsed)`
-      : `chosen provider cannot launch (${reason.reason})`;
-  return `chosen \`${chosen}\`; ran \`${facts.provider}/${facts.model}\` as a stand-in: ${detail}`;
+  return `chosen \`${chosen}\`; ran \`${facts.provider}/${facts.model}\` as a stand-in: ${standInReason(reason)}`;
 }
 
 // One write: facts merged into one phase's, whose run facts and link stay
