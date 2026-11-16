@@ -108,9 +108,23 @@ export function parseRunResult(
   const { outcome, state, labels = [], body, reason } = value;
   if (!["done", "stop", "failed"].includes(outcome))
     return invalid("has no outcome of done, stop or failed");
-  if (typeof body !== "string" || body.trim() === "")
-    return invalid("has no body");
-  if (contain(body).length > bodyLimit)
+  if (typeof body !== "string") return invalid("has no body");
+  // Filing citations belong to finding issue bodies. Remove whole citation
+  // lines before containment, preserving all other text and line endings.
+  const cleanedBody = contain(
+    body
+      .split(/(?<=\n)|(?<=\r)(?!\n)/)
+      .filter((line) => {
+        const trimmed = line.trim();
+        return !(
+          trimmed.startsWith("<!-- scriptorium:filing-run ") &&
+          trimmed.endsWith("-->")
+        );
+      })
+      .join(""),
+  );
+  if (cleanedBody.trim() === "") return invalid("has no body");
+  if (cleanedBody.length > bodyLimit)
     return invalid(`has a body over ${bodyLimit} characters`);
   if (
     reason !== undefined &&
@@ -170,7 +184,7 @@ export function parseRunResult(
     outcome,
     ...(state !== undefined && { state }),
     ...(labels.length && { labels }),
-    body: contain(body),
+    body: cleanedBody,
     ...(reason !== undefined && {
       reason: contain(reason.trim().replace(/\.+$/, "")),
     }),
