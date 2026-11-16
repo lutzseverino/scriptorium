@@ -10,18 +10,19 @@ import {
   version2Permissions,
   type GitHubPermissions,
 } from "./github-token.ts";
+import { object, time, type ObjectValue } from "./status.ts";
 
-export const healths = ["healthy", "unhealthy", "unknown"] as const;
-export type Health = (typeof healths)[number];
+export const credentialHealths = ["healthy", "unhealthy", "unknown"] as const;
+export type CredentialHealth = (typeof credentialHealths)[number];
 
 // A fact the factory could not establish.
 export type Known<T> = T | "unknown";
 
-type Level = "read" | "write";
+type Level = NonNullable<GitHubPermissions[keyof GitHubPermissions]>;
 type Renewal = { at: string; outcome: "succeeded" | "failed" };
 
 export type ProviderCredentials = {
-  health: Health;
+  health: CredentialHealth;
   // When the login copy the factory holds expires.
   loginExpiry: Known<string>;
   // From the host's observations: the login's expiry minus the host's
@@ -31,14 +32,14 @@ export type ProviderCredentials = {
 };
 
 export type RunKindCredentials = {
-  health: Health;
+  health: CredentialHealth;
   // Each permission the run kind declares that the App installation does not
   // grant, with the level it needs.
   missingPermissions: Known<Record<string, Level>>;
 };
 
 export type Credentials = {
-  health: Health;
+  health: CredentialHealth;
   // When the factory computed this.
   observedAt: string;
   providers: Record<string, ProviderCredentials>;
@@ -251,14 +252,4 @@ export function credentialHealth({
     runKinds,
     problems: [...new Set(problems)],
   };
-}
-
-type ObjectValue = Record<string, unknown>;
-function object(value: unknown): ObjectValue | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as ObjectValue)
-    : null;
-}
-function time(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
 }

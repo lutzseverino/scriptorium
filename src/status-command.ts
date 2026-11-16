@@ -34,7 +34,7 @@ import {
 import { runKindNames, type RunKindName } from "./factory-configuration.ts";
 import { createRegistry, type ModelFacts } from "./providers.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
-import { healths, type Credentials } from "./credentials.ts";
+import { credentialHealths, type Credentials } from "./credentials.ts";
 
 export const statusUsage =
   "node src/main.ts status <host configuration> [--json] [--live-usage]";
@@ -555,7 +555,7 @@ function readCredentials(
   const credentials = object(work.data?.credentials);
   if (
     credentials &&
-    (healths as readonly unknown[]).includes(credentials.health) &&
+    (credentialHealths as readonly unknown[]).includes(credentials.health) &&
     time(credentials.observedAt) &&
     Date.parse(credentials.observedAt) <= now.getTime() &&
     object(credentials.providers) &&
@@ -940,6 +940,9 @@ function withProblem(observation: Observation, problem: string): Observation {
 export function formatStatus(budget: LaunchBudget): string {
   const value = (entry: unknown) =>
     entry === null ? "unavailable" : JSON.stringify(entry);
+  // A credential fact, or `unknown` as it stands.
+  const fact = (entry: unknown) =>
+    typeof entry === "string" ? entry : JSON.stringify(entry);
   // An available observation's null is a fact of its own; overdue runs are
   // null only while it is unavailable.
   const health = (entry: unknown) =>
@@ -998,11 +1001,11 @@ export function formatStatus(budget: LaunchBudget): string {
     `credentials health=${budget.credentials.health} observedAt=${value(budget.credentials.observedAt)}`,
     ...Object.entries(budget.credentials.providers).map(
       ([provider, { health, loginExpiry, renewalDueAt, lastRenewal }]) =>
-        `  ${provider}: health=${health} loginExpiry=${loginExpiry} renewalDueAt=${renewalDueAt} lastRenewal=${typeof lastRenewal === "string" ? lastRenewal : JSON.stringify(lastRenewal)}`,
+        `  ${provider}: health=${health} loginExpiry=${loginExpiry} renewalDueAt=${renewalDueAt} lastRenewal=${fact(lastRenewal)}`,
     ),
     ...Object.entries(budget.credentials.runKinds).map(
       ([kind, { health, missingPermissions }]) =>
-        `  ${kind}: health=${health} missingPermissions=${typeof missingPermissions === "string" ? missingPermissions : JSON.stringify(missingPermissions)}`,
+        `  ${kind}: health=${health} missingPermissions=${fact(missingPermissions)}`,
     ),
     `  problems=${JSON.stringify(budget.credentials.problems)}`,
   ].join("\n");
