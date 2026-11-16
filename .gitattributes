@@ -4,6 +4,7 @@ scripts/issue-contract-store.mjs linguist-vendored
 scripts/issue-contract-cutoff.mjs linguist-vendored
 operations/lib/rendered-markdown.mjs linguist-vendored
 .agents/skills/babysit/** linguist-vendored
+.agents/skills/code-review/** linguist-vendored
 .agents/skills/review/** linguist-vendored
 .agents/skills/triage/** linguist-vendored
 .agents/skills/diagnosing-bugs/** linguist-vendored
