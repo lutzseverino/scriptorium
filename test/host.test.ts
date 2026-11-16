@@ -10374,6 +10374,66 @@ test("a stop result posts its question and applies its state together, then rele
   assert.match(run.launched[1].options.prompt!, /Needs-input resume:/);
 });
 
+test("terminal result observation retries an unavailable report and survives a host restart", async (t) => {
+  let failReport = false;
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    wrapConnection(connection) {
+      return {
+        ...connection,
+        issueTracker: {
+          ...connection.issueTracker,
+          async updateComment(id, body) {
+            if (failReport) throw new Error("report unavailable");
+            return connection.issueTracker.updateComment(id, body);
+          },
+        },
+      };
+    },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  const observe = () =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        ["src/main.ts", "results", "--author", "factory[bot]"],
+        {
+          cwd: new URL("..", import.meta.url),
+          input: JSON.stringify([
+            { body: runComment(issue), author: { login: "factory[bot]" } },
+          ]),
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      ),
+    );
+  const original = runComment(issue);
+  const identity = recordOf(run.state, 4, 1).provenance.id;
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "factory:needs-input",
+    body: "Which database should the tests use?",
+  });
+  await run.drain();
+  failReport = true;
+  await run.tick();
+  assert.equal(runComment(issue), original);
+  assert.deepEqual(observe().results, []);
+  assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+  failReport = false;
+  await run.restart().tick();
+  assert.deepEqual(observe().results, [{ run: identity, outcome: "stop" }]);
+  assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+  assert.equal(runComments(issue).length, 1);
+  assert.equal(
+    issue.comments.length,
+    2,
+    "publication retries reuse the standalone result",
+  );
+});
+
 test("a failed result fails with its reason, and a run without a valid result fails with why", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },

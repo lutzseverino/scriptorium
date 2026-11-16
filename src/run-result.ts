@@ -25,6 +25,12 @@ export type RunResult = {
   reason?: string;
 };
 
+// Stable identity and outcome of a published, accepted run result.
+export type TerminalResult = {
+  run: string;
+  outcome: RunResult["outcome"];
+};
+
 // A result the host could not accept, which fails a normally exited run.
 export type ReadResult = RunResult | { invalid: string };
 

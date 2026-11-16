@@ -15,7 +15,7 @@ import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
 import { roleNames, type Labels, type RoleName } from "./label-roles.ts";
 import type { InputResume } from "./platform.ts";
-import type { RunResult } from "./run-result.ts";
+import type { RunResult, TerminalResult } from "./run-result.ts";
 import { reference } from "./readiness.ts";
 import { contractEvidenceIds } from "./contract-protocol.ts";
 
@@ -63,7 +63,7 @@ function standInText(facts: PhaseFacts): string | undefined {
 export type RunUpdate = {
   phase: Phase;
   facts: PhaseFacts;
-  result?: Pick<RunResult, "body">;
+  result?: Pick<RunResult, "body"> & { terminal?: TerminalResult };
   final?: true;
   resume?: InputResume;
 };
@@ -114,6 +114,7 @@ export function stopAction(
 
 type State = {
   phases: Partial<Record<Phase, PhaseFacts>>;
+  results?: TerminalResult[];
   final?: true;
   resume?: InputResume;
 };
@@ -131,10 +132,10 @@ const encode = (value: unknown) =>
     character === "<" ? "\\u003c" : "\\u003e",
   );
 
-// A run comment the factory's account wrote, with the state its marker holds.
-function runState(comment: Comment): State | null {
-  if (comment.body.includes("<!-- repo-canon:triage-attestation ")) return null;
-  const match = comment.author?.bot && runMarker.exec(lastLine(comment));
+// The run comment's owned state, independent of transport author selection.
+function readState(body: string): State | null {
+  if (body.includes("<!-- repo-canon:triage-attestation ")) return null;
+  const match = runMarker.exec(body.split(/\r\n?|\n/).at(-1) ?? "");
   if (!match) return null;
   try {
     const state = JSON.parse(match[1]);
@@ -147,6 +148,16 @@ function runState(comment: Comment): State | null {
   } catch {
     return null;
   }
+}
+
+function runState(comment: Comment): State | null {
+  return comment.author?.bot ? readState(comment.body) : null;
+}
+
+// Internal access for the supported reader: it validates the retained facts
+// after selecting the caller's trusted author, independently of bot marking.
+export function runCommentResults(body: string): unknown {
+  return readState(body)?.results;
 }
 
 // The mutable report role, without exposing its encoded state to the platform.
@@ -256,6 +267,10 @@ export function issueComments(
       );
       const pass =
         latest && (!latest.state.final || update.final) ? latest : undefined;
+      const results = [...(pass?.state.results ?? [])];
+      const terminal = update.result?.terminal;
+      if (terminal && !results.some((entry) => entry.run === terminal.run))
+        results.push(terminal);
       const state: State = {
         phases: {
           ...pass?.state.phases,
@@ -267,6 +282,7 @@ export function issueComments(
             ...update.facts,
           },
         },
+        ...(results.length && { results }),
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };

@@ -171,7 +171,11 @@ identity and creation times, complete PR inventories, ready PRs' return to draft
 identity. Host tests cover trigger consumption and finding verification across
 restarts, plus independent draft and ready PR review, ready PRs' return to draft, hand-back and explicit-target recovery. `test/run-ending.test.ts` drives the run-ending
 module's observation and outcome table for ended runs and orphaned claims, and
-`test/run-result.test.ts` the run-result interface, its containment and its
+`test/terminal-results.test.ts` invokes the supported read-only results command
+over real publication fixtures, covering stable identity, presentation edits,
+later results and publication into an existing report; host tests also cover
+report-publication retries across restart.
+`test/run-result.test.ts` covers the run-result interface, its containment and its
 frame. `test/run-comment.test.ts` drives the one writer of the run, action and
 close comments over a fake tracker: passes, final-write retries, actions told
 once and continuations. `test/label-roles.test.ts`

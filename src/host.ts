@@ -802,9 +802,6 @@ export function createHost(
           }
           if (link !== undefined) {
             issue.labels = postedLabels(issue.labels, post);
-            run.resultPosted = true;
-            record(run);
-            mark(run, "lastPublication");
             await tell(pass, issue, {
               phase: phaseOf(run),
               facts: {
@@ -812,8 +809,17 @@ export function createHost(
                 reason: run.result.reason,
                 link,
               },
-              result: run.result,
+              result: {
+                ...run.result,
+                terminal: {
+                  run: run.provenance?.id ?? run.startedAt,
+                  outcome: run.result.outcome,
+                },
+              },
             });
+            run.resultPosted = true;
+            record(run);
+            mark(run, "lastPublication");
           }
         }
         const ending = await observeEnding(reads, issue, ended);
@@ -1558,7 +1564,8 @@ export function createHost(
     try {
       await pass.platform!.comments.write(issue.number, update, action);
     } catch (error) {
-      if (action || update.final || update.resume) throw error;
+      if (action || update.final || update.resume || update.result?.terminal)
+        throw error;
       report(
         `${pass.name}#${issue.number} run comment was not written; a later write retries it: ${error}`,
       );
