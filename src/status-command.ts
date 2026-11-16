@@ -11,8 +11,10 @@ import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
 import type { OwnerControl, RunKindCounts } from "./factory.ts";
 import {
   capacityCounts,
+  configurationProblemStates,
   pauseCauses,
   type ConfigurationCoverage,
+  type ConfigurationProblemState,
   type RepositoryPause,
 } from "./status.ts";
 import { runKindNames } from "./factory-configuration.ts";
@@ -310,12 +312,14 @@ function configurationCoverage(value: unknown): ConfigurationCoverage | null {
       : null;
   }
   return fields === "problem,state" &&
-    (record.state === "missing" ||
-      record.state === "unreadable" ||
-      record.state === "invalid" ||
-      record.state === "not-read") &&
+    configurationProblemStates.includes(
+      record.state as ConfigurationProblemState,
+    ) &&
     typeof record.problem === "string"
-    ? { state: record.state, problem: record.problem }
+    ? {
+        state: record.state as ConfigurationProblemState,
+        problem: record.problem,
+      }
     : null;
 }
 

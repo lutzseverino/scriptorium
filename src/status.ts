@@ -11,17 +11,30 @@ import {
   type RunKindCounts,
 } from "./factory.ts";
 import type { ImplementLimits } from "./host-configuration.ts";
-import type { RunKindName } from "./factory-configuration.ts";
+import type {
+  FactoryConfigurationError,
+  RunKindName,
+} from "./factory-configuration.ts";
 import type { ProviderStatus } from "./events.ts";
 
 // What the pass read from the repository's `.scriptorium/config.json`. The
 // last valid configuration that settles existing runs is never reported here.
 export type ConfigurationCoverage =
   | { state: "valid"; version: 2 | 3; runKinds: RunKindName[] }
-  | {
-      state: "missing" | "unreadable" | "invalid" | "not-read";
-      problem: string;
-    };
+  | { state: ConfigurationProblemState; problem: string };
+
+// Why a pass has no valid configuration: the reader's refusal, or the pass
+// never reaching the file.
+export const configurationProblemStates = [
+  "missing",
+  "unreadable",
+  "invalid",
+  "not-read",
+] as const satisfies readonly (
+  FactoryConfigurationError["state"] | "not-read"
+)[];
+export type ConfigurationProblemState =
+  (typeof configurationProblemStates)[number];
 
 // Who acts on a repository's pause: a person's factory hold, the
 // repository's own inputs, or the host.

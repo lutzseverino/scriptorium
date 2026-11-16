@@ -108,6 +108,7 @@ import {
   writeStatus,
   type ConfigurationCoverage,
   type PauseCause,
+  type RepositoryPause,
 } from "./status.ts";
 import { createUsage } from "./usage.ts";
 import type { Action, Phase, RunUpdate } from "./run-comment.ts";
@@ -192,9 +193,7 @@ type HostRun = Run & {
 // platform reads this pass, so only its running sandboxes reach the snapshot.
 type Pass = {
   name: string;
-  paused: string | null;
-  // Who acts on `paused`; null while the pass has not paused it.
-  cause: PauseCause | null;
+  paused: RepositoryPause | null;
   // What this pass read from the repository's configuration file.
   configurationFile: ConfigurationCoverage;
   platform: RepositoryPlatform | null;
@@ -334,7 +333,6 @@ export function createHost(
     const pass: Pass = {
       name,
       paused: null,
-      cause: null,
       configurationFile: {
         state: "not-read",
         problem: "the pass has not reached it",
@@ -348,13 +346,11 @@ export function createHost(
     const { clone } = directory(name);
     // Reasons name repository inputs by their repository path, never by
     // the host's clone path.
-    const text = (reason: string) =>
+    const repositoryReason = (reason: string) =>
       redactor.redact(reason.replaceAll(`${clone}${sep}`, ""));
     // The last pause wins, with who acts on it.
-    const pause = (reason: string, cause: PauseCause) => {
-      pass.cause = cause;
-      return (pass.paused = text(reason));
-    };
+    const pause = (reason: string, cause: PauseCause) =>
+      (pass.paused = { cause, reason: repositoryReason(reason) }).reason;
     const notRead = (problem: string) =>
       (pass.configurationFile = { state: "not-read", problem });
     // A repository whose own token fails to print is paused for the pass.
@@ -646,7 +642,7 @@ export function createHost(
         configuration: pass.configuration,
         authorization: served.authorization,
         ownedPullRequests: recordedPullRequests(name),
-        paused: pass.paused,
+        paused: pass.paused?.reason ?? null,
         issues,
         ...(pass.releaseHold !== undefined && {
           releaseHold: pass.releaseHold,
@@ -1601,7 +1597,7 @@ export function createHost(
     };
     for (const pass of passes) {
       if (pass.paused !== null)
-        report(`${pass.name} is paused: ${pass.paused}`);
+        report(`${pass.name} is paused: ${pass.paused.reason}`);
       const held = repositoryHold("factory", pass)?.reason;
       if (held) report(`${pass.name} is held: ${held}`);
     }
@@ -1661,11 +1657,10 @@ export function createHost(
               name: pass.name,
               configuration: pass.configurationFile,
               paused:
-                pass.paused !== null
-                  ? { cause: pass.cause!, reason: pass.paused }
-                  : held
-                    ? { cause: "factory-hold" as const, reason: held }
-                    : null,
+                pass.paused ??
+                (held
+                  ? { cause: "factory-hold" as const, reason: held }
+                  : null),
             };
           }),
           decisions,
