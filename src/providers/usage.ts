@@ -1,18 +1,42 @@
-// A provider's usage window: its percentage used, and when it resets, as an
-// ISO time, or null when the provider reports no reset.
-export type UsageWindow = { used: number; reset: string | null };
+// One usage window a provider reports: its percentage used, when it resets,
+// as an ISO time, or null when the provider reports no reset, and its length
+// in minutes, or null when the provider reports none.
+export type ReportedWindow = {
+  used: number;
+  reset: string | null;
+  minutes: number | null;
+};
 
-// Usage is the fullest window, or null when no window holds a percentage. A
-// reset the provider reports as an ISO 8601 time or as Unix seconds is kept as
-// an ISO time; any other value is no reset.
+// A provider's usage: its fullest window's percentage and reset, which the
+// usage thresholds read, and every window it reports.
+export type UsageWindow = {
+  used: number;
+  reset: string | null;
+  windows?: ReportedWindow[];
+};
+
+// Usage is the fullest window, with every window that holds a percentage, or
+// null when none does. A reset the provider reports as an ISO 8601 time or as
+// Unix seconds is kept as an ISO time; any other value is no reset. A length
+// that is no positive number of minutes is no length.
 export function fullest(
-  windows: { used: unknown; reset: unknown }[],
+  reported: { used: unknown; reset: unknown; minutes: unknown }[],
 ): UsageWindow | null {
-  let fullest: UsageWindow | null = null;
-  for (const { used, reset } of windows)
-    if (typeof used === "number" && (fullest === null || used > fullest.used))
-      fullest = { used, reset: resetTime(reset) };
-  return fullest;
+  const windows: ReportedWindow[] = [];
+  for (const { used, reset, minutes } of reported)
+    if (typeof used === "number")
+      windows.push({
+        used,
+        reset: resetTime(reset),
+        minutes:
+          typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0
+            ? minutes
+            : null,
+      });
+  let fullest: ReportedWindow | null = null;
+  for (const window of windows)
+    if (fullest === null || window.used > fullest.used) fullest = window;
+  return fullest && { used: fullest.used, reset: fullest.reset, windows };
 }
 
 function resetTime(value: unknown): string | null {

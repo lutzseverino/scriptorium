@@ -58,8 +58,8 @@ export type ProviderAdapter = {
   // Runs the agent through Sandcastle, delivering the credential as it stands
   // at this launch.
   launch(request: LaunchRequest): Promise<LaunchResult>;
-  // The fullest usage window's percentage and reset, or null when the
-  // provider's answer holds no usage window. A read that failed throws, a
+  // The fullest usage window's percentage and reset, with every window the
+  // provider reports, or null when its answer holds no usage window. A read that failed throws, a
   // provider's refusal as a `UsageReadError`.
   readUsage(): Promise<UsageWindow | null>;
   // Whether an ended run's raw log ends with the provider's own usage-limit

@@ -27,6 +27,7 @@ import {
 } from "./repository-holds.ts";
 import { pauseDeadline } from "./pause.ts";
 import type { Model, Registry } from "./providers.ts";
+import type { ReportedWindow } from "./providers/usage.ts";
 import type { ReadResult } from "./run-result.ts";
 import type { MergeRelaunch, InputResume } from "./platform.ts";
 import { triageTrigger, draftTrigger, type Trigger } from "./triggers.ts";
@@ -205,8 +206,14 @@ export type Settings = {
 
 // A provider's usage reading recent enough to trust: its fullest window's
 // percentage, when it was read, and that window's reset when the provider
-// reported one.
-export type Usage = { used: number; at: string; reset?: string };
+// reported one, and every window it reported, except in a reading recorded
+// before readings kept them.
+export type Usage = {
+  used: number;
+  at: string;
+  reset?: string;
+  windows?: ReportedWindow[];
+};
 
 // A provider's usage hold: its latest reading at or above a threshold, which
 // still holds it once its usage is unknown, until `until`. Both `since`, when
@@ -1329,6 +1336,68 @@ export function reached(
   if (settings.drainThreshold !== null && used >= settings.drainThreshold)
     return "drain";
   return null;
+}
+
+// The window that sets a provider's pace: its longest window with a length
+// and a reset, and the percentage of that window already elapsed.
+export type Pace = {
+  used: number;
+  minutes: number;
+  reset: string;
+  elapsed: number;
+};
+
+// Whether a provider has spare usage, and why not when it has none: its fresh
+// reading's pace window is used less than its elapsed percentage, and every
+// shorter window is below the configured drain threshold, which a host that
+// sets none never reaches. Usage is unknown without a fresh reading or
+// without a window that has both a length and a reset.
+export type SpareUsage =
+  | { state: "yes"; pace: Pace }
+  | {
+      state: "no";
+      reason: "over-pace" | "shorter-window-at-drain-threshold";
+      pace: Pace;
+    }
+  | { state: "unknown"; reason: "no-fresh-reading" | "no-pace-window" };
+
+export function spareUsage(
+  reading: Usage | null,
+  now: string,
+  drainThreshold: number | null,
+): SpareUsage {
+  if (reading === null) return { state: "unknown", reason: "no-fresh-reading" };
+  const windows = reading.windows ?? [];
+  let longest: (ReportedWindow & { minutes: number; reset: string }) | null =
+    null;
+  for (const window of windows)
+    if (
+      window.minutes !== null &&
+      window.reset !== null &&
+      (longest === null || window.minutes > longest.minutes)
+    )
+      longest = { ...window, minutes: window.minutes, reset: window.reset };
+  if (longest === null) return { state: "unknown", reason: "no-pace-window" };
+  const remaining = (Date.parse(longest.reset) - Date.parse(now)) / 60_000;
+  const pace: Pace = {
+    used: longest.used,
+    minutes: longest.minutes,
+    reset: longest.reset,
+    elapsed: Math.min(1, Math.max(0, 1 - remaining / longest.minutes)) * 100,
+  };
+  if (pace.used >= pace.elapsed)
+    return { state: "no", reason: "over-pace", pace };
+  if (
+    drainThreshold !== null &&
+    windows.some(
+      (window) =>
+        window.minutes !== null &&
+        window.minutes < pace.minutes &&
+        window.used >= drainThreshold,
+    )
+  )
+    return { state: "no", reason: "shorter-window-at-drain-threshold", pace };
+  return { state: "yes", pace };
 }
 
 // A provider's usage in force: its reading while the snapshot trusts one, or

@@ -178,13 +178,14 @@ function timeout(): never {
 }
 
 // The result of the Codex app-server's `account/rateLimits/read`, whose
-// windows reset at Unix seconds.
+// windows reset at Unix seconds and give their lengths in minutes.
 export function codexUsage(result: any): UsageWindow | null {
   const limits = result?.rateLimits;
   return fullest(
     [limits?.primary, limits?.secondary].map((window) => ({
       used: window?.usedPercent,
       reset: window?.resetsAt,
+      minutes: window?.windowDurationMins,
     })),
   );
 }

@@ -18,7 +18,11 @@ import {
   type UsageHold,
 } from "./factory.ts";
 import { pauseDeadline } from "./pause.ts";
-import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
+import {
+  UsageReadError,
+  type ReportedWindow,
+  type UsageWindow,
+} from "./providers/usage.ts";
 
 // How long a good reading stays usable, counted from when it was read; failed
 // and skipped reads don't renew it.
@@ -150,6 +154,7 @@ export function createUsage(ports: UsagePorts) {
           used: window.used,
           at: ports.now().toISOString(),
           ...(window.reset !== null && { reset: window.reset }),
+          ...(window.windows && { windows: window.windows }),
         };
         if (current.failure !== null)
           ports.report(
@@ -323,7 +328,8 @@ function httpDate(value: string, receivedAt: Date): number | null {
   return null;
 }
 
-// A record from before readings kept their reset has none.
+// A record from before readings kept their reset or their windows has none,
+// and so has one whose windows are damaged.
 function validReading(value: unknown): Usage | null {
   const reading = value as Partial<Usage> | null;
   if (
@@ -333,15 +339,55 @@ function validReading(value: unknown): Usage | null {
   )
     return null;
   const reset = validTime(reading.reset);
-  return { used: reading.used, at: reading.at!, ...(reset && { reset }) };
+  const windows = validWindows(reading.windows);
+  return {
+    used: reading.used,
+    at: reading.at!,
+    ...(reset && { reset }),
+    ...(windows && { windows }),
+  };
 }
 
+function validWindows(value: unknown): ReportedWindow[] | null {
+  if (!Array.isArray(value)) return null;
+  const windows: ReportedWindow[] = [];
+  for (const entry of value) {
+    const window = entry as Partial<ReportedWindow> | null;
+    const reset = validTime(window?.reset);
+    if (
+      typeof window?.used !== "number" ||
+      !Number.isFinite(window.used) ||
+      (window.reset !== null && reset === null) ||
+      (window.minutes !== null &&
+        !(
+          typeof window.minutes === "number" &&
+          Number.isFinite(window.minutes) &&
+          window.minutes > 0
+        ))
+    )
+      return null;
+    windows.push({
+      used: window.used,
+      reset,
+      minutes: window.minutes ?? null,
+    });
+  }
+  return windows;
+}
+
+// A hold keeps the reading's fullest window, which the thresholds read.
 function validHold(value: unknown): UsageHold | null {
   const reading = validReading(value);
   const hold = value as Partial<UsageHold> | null;
   const since = validTime(hold?.since);
   const until = validTime(hold?.until);
-  return reading && since && until ? { ...reading, since, until } : null;
+  return reading && since && until
+    ? { ...fullestReading(reading), since, until }
+    : null;
+}
+
+function fullestReading({ used, at, reset }: Usage): Usage {
+  return { used, at, ...(reset && { reset }) };
 }
 
 function validTime(value: unknown): string | null {
@@ -378,7 +424,7 @@ export function usageHoldAfter(
   if (reading === null) return current;
   if (reached(reading.used, thresholds) === null) return null;
   return {
-    ...reading,
+    ...fullestReading(reading),
     since: current?.since ?? reading.at,
     until:
       current?.until ??

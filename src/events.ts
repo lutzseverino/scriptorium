@@ -69,6 +69,13 @@ export function providerStatus(
     ...(usage.reset && Number.isFinite(Date.parse(usage.reset))
       ? { reset: safeTime(usage.reset) }
       : {}),
+    ...(usage.windows && {
+      windows: usage.windows.map(({ used, reset, minutes }) => ({
+        used,
+        reset: reset && safeTime(reset),
+        minutes,
+      })),
+    }),
   });
   const usageHold = hold && {
     ...safeReading(hold),
