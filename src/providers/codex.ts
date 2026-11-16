@@ -45,8 +45,24 @@ export function codexAdapter(
       );
     },
     readUsage: () => readCodexUsage(credential, ports.codexExecutable),
+    loginExpiry: () => codexLoginExpiry(credential),
     usageLimit: (log) => limitError(log, codexLimitErrors),
   };
+}
+
+// The `exp` claim, in Unix seconds, of the login's access token, a JWT.
+async function codexLoginExpiry(path: string): Promise<Date | null> {
+  try {
+    const login = JSON.parse(await readFile(path, "utf8"));
+    const payload = login?.tokens?.access_token?.split(".")[1];
+    const expiry = JSON.parse(
+      Buffer.from(payload, "base64url").toString(),
+    )?.exp;
+    const date = new Date(typeof expiry === "number" ? expiry * 1000 : NaN);
+    return Number.isFinite(date.getTime()) ? date : null;
+  } catch {
+    return null;
+  }
 }
 
 // Codex's usage-limit error, which Sandcastle's failure detail may carry

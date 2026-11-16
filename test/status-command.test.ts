@@ -18,6 +18,7 @@ import {
 import type { Run } from "../src/factory.ts";
 import { providerStatus } from "../src/events.ts";
 import { UsageReadError, type ReportedWindow } from "../src/providers/usage.ts";
+import { credentialHealth } from "../src/credentials.ts";
 import { directory } from "./fakes.ts";
 import { execFileSync } from "node:child_process";
 
@@ -1235,3 +1236,220 @@ for (const fault of [
       );
     assert.ok(text.includes("overdue runs=unavailable"), text.join("\n"));
   });
+
+test("text and JSON show the last pass's credential health and detail as an additive field", async (t) => {
+  const { path, state } = fixture(t);
+  mkdirSync(state);
+  const computedAt = new Date("2026-11-08T11:58:00.000Z");
+  const later = "2026-11-09T12:00:00.000Z";
+  const section = {
+    observedAt: "2026-11-08T11:00:00.000Z",
+    validUntil: later,
+  };
+  const provider = {
+    ...section,
+    renewalDueAt: later,
+    lastRenewal: { at: "2026-11-08T10:00:00.000Z", outcome: "succeeded" },
+  };
+  const grantedPermissions: Record<string, string> = {
+    actions: "read",
+    checks: "read",
+    contents: "write",
+    issues: "read",
+    metadata: "read",
+    pull_requests: "write",
+    statuses: "read",
+  };
+  const document = (change: (document: any) => void = () => {}) => {
+    const value = {
+      version: 1,
+      providers: { "claude-code": { ...provider }, codex: { ...provider } },
+      githubApp: { ...section, grantedPermissions: { ...grantedPermissions } },
+    };
+    change(value);
+    return { document: value };
+  };
+  const expiries = { "claude-code": new Date(later), codex: new Date(later) };
+  const cases = {
+    healthy: { observations: document(), loginExpiries: expiries },
+    expired: {
+      observations: document(),
+      loginExpiries: { ...expiries, codex: new Date("2026-11-08T11:00:00Z") },
+    },
+    "renewal due": {
+      observations: document((value) => {
+        value.providers.codex.renewalDueAt = section.observedAt;
+      }),
+      loginExpiries: expiries,
+    },
+    "renewal failed": {
+      observations: document((value) => {
+        value.providers["claude-code"].lastRenewal = {
+          at: section.observedAt,
+          outcome: "failed",
+        };
+      }),
+      loginExpiries: expiries,
+    },
+    "missing permission": {
+      observations: document((value) => {
+        delete value.githubApp.grantedPermissions.statuses;
+      }),
+      loginExpiries: expiries,
+    },
+    "not configured": {
+      observations: {
+        document: null,
+        problem: "credentialObservations is not configured",
+      },
+      loginExpiries: expiries,
+    },
+    "past validUntil": {
+      observations: document((value) => {
+        value.githubApp.validUntil = section.observedAt;
+      }),
+      loginExpiries: expiries,
+    },
+    "unreadable login": {
+      observations: document(),
+      loginExpiries: { ...expiries, "claude-code": null },
+    },
+  } as const;
+  const expected = {
+    healthy: "healthy",
+    expired: "unhealthy",
+    "renewal due": "unhealthy",
+    "renewal failed": "unhealthy",
+    "missing permission": "unhealthy",
+    "not configured": "unknown",
+    "past validUntil": "unknown",
+    "unreadable login": "unknown",
+  };
+  const snapshot = hostStatus(
+    now.toISOString(),
+    [
+      { name: "acme/widgets", paused: null, configuration: valid },
+      { name: "acme/gadgets", paused: null, configuration: valid },
+    ],
+    [],
+  );
+  writeFileSync(join(state, "status.json"), JSON.stringify(snapshot));
+  const { credentials: absent, ...before } = JSON.parse(
+    (await command([path, "--json"])).output[0],
+  );
+  for (const [name, input] of Object.entries(cases)) {
+    const credentials = credentialHealth({
+      now: computedAt,
+      version2: false,
+      ...(input as Omit<
+        Parameters<typeof credentialHealth>[0],
+        "now" | "version2"
+      >),
+    });
+    writeFileSync(
+      join(state, "status.json"),
+      JSON.stringify({ ...snapshot, credentials }),
+    );
+    const projected = JSON.parse(
+      readFileSync(join(state, "status.json"), "utf8"),
+    ).credentials;
+    assert.equal(
+      projected.health,
+      expected[name as keyof typeof expected],
+      name,
+    );
+    assert.equal(projected.observedAt, computedAt.toISOString(), name);
+    const json = await command([path, "--json"]);
+    assert.equal(json.code, 0, json.errors.join("\n"));
+    const { credentials: shown, ...rest } = JSON.parse(json.output[0]);
+    assert.equal(rest.version, 1);
+    // Every existing field is unchanged.
+    assert.deepEqual(rest, before, name);
+    assert.deepEqual(shown, projected, name);
+    const text = (await command([path])).output[0];
+    assert.ok(
+      text.includes(
+        `credentials health=${projected.health} observedAt="${projected.observedAt}"`,
+      ),
+      text,
+    );
+    for (const [provider, detail] of Object.entries(projected.providers) as [
+      string,
+      any,
+    ][])
+      assert.ok(
+        text.includes(
+          `  ${provider}: health=${detail.health} loginExpiry=${detail.loginExpiry}`,
+        ),
+        text,
+      );
+  }
+  const text = (await command([path])).output[0];
+  assert.match(text, /claude-code: health=unknown loginExpiry=unknown/);
+
+  writeFileSync(
+    join(state, "status.json"),
+    JSON.stringify({
+      ...snapshot,
+      credentials: credentialHealth({
+        now: computedAt,
+        version2: false,
+        ...cases["missing permission"],
+      }),
+    }),
+  );
+  assert.match(
+    (await command([path])).output[0],
+    /\n {2}implement: health=unhealthy missingPermissions=\{"statuses":"read"\}\n/,
+  );
+  assert.deepEqual(absent.health, "unknown");
+});
+
+test("status reports credential health unknown when it cannot read the projection", async (t) => {
+  const { path, state } = fixture(t);
+  const unknown = async () => {
+    const json = await command([path, "--json"]);
+    assert.equal(json.code, 0, json.errors.join("\n"));
+    const { credentials } = JSON.parse(json.output[0]);
+    assert.equal(credentials.health, "unknown");
+    assert.equal(credentials.observedAt, null);
+    assert.deepEqual(credentials.providers.codex, {
+      health: "unknown",
+      loginExpiry: "unknown",
+      renewalDueAt: "unknown",
+      lastRenewal: "unknown",
+    });
+    assert.deepEqual(credentials.runKinds.implement, {
+      health: "unknown",
+      missingPermissions: "unknown",
+    });
+    const text = (await command([path])).output[0];
+    assert.match(text, /credentials health=unknown observedAt=unavailable/);
+    return credentials.problems;
+  };
+  assert.deepEqual(await unknown(), ["status.json: missing record"]);
+  mkdirSync(state);
+  writeFileSync(join(state, "status.json"), "{");
+  assert.deepEqual(await unknown(), ["status.json: unreadable record"]);
+  const snapshot = hostStatus(now.toISOString(), [], []);
+  writeFileSync(join(state, "status.json"), JSON.stringify(snapshot));
+  assert.deepEqual(await unknown(), [
+    "status.json: missing, legacy or inconsistent credential observation",
+  ]);
+  for (const credentials of [
+    { health: "fine", observedAt: now.toISOString() },
+    {
+      health: "healthy",
+      observedAt: "2026-11-09T00:00:00.000Z",
+      providers: {},
+      runKinds: {},
+      problems: [],
+    },
+  ]) {
+    writeFileSync(
+      join(state, "status.json"),
+      JSON.stringify({ ...snapshot, credentials }),
+    );
+    await unknown();
+  }
+});

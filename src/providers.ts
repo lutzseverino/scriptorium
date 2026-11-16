@@ -62,6 +62,9 @@ export type ProviderAdapter = {
   // provider reports, or null when its answer holds no usage window. A read that failed throws, a
   // provider's refusal as a `UsageReadError`.
   readUsage(): Promise<UsageWindow | null>;
+  // When the login copy the factory holds expires, or null without a copy
+  // whose expiry it can read. Never rejects, and reveals no credential.
+  loginExpiry(): Promise<Date | null>;
   // Whether an ended run's raw log ends with the provider's own usage-limit
   // error, judged from that error's wording, never the model's prose.
   usageLimit(log: string): UsageLimit | null;
