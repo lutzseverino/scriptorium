@@ -1995,8 +1995,9 @@ The top-level `models` field (rendered as `models=<JSON>` in text) contains:
   each with `provider`, `model` and resolved `effort`. Omitted per-kind defaults
   inherit the full `default` selection, including explicit effort.
 - `catalog`: one entry per canonical `identity`, with `provider`, `model`,
-  optional `guidance`, optional `effort` override and `effectiveEffort` for a
-  selection omitting effort. A default selection's explicit effort can differ
+  optional `guidance`, optional `effort` override, optional
+  [`narrowerThan`](#stand-ins) list and `effectiveEffort` for a selection
+  omitting effort. A default selection's explicit effort can differ
   from its catalog entry's effective effort.
 
 Model facts come from the configuration validated for this command, rather

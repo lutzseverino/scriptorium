@@ -285,6 +285,14 @@ export type StandIn = {
     | { kind: "chosen provider cannot launch"; reason: string };
 };
 
+// A stand-in's reason as the run comment and `status` both word it.
+export function standInReason(reason: StandIn["reason"]): string {
+  const percent = (value: number) => Math.round(value * 10) / 10;
+  return reason.kind === "spare usage"
+    ? `spare usage (${percent(reason.used)}% used, ${percent(reason.elapsed)}% elapsed)`
+    : `chosen provider cannot launch (${reason.reason})`;
+}
+
 export type Launch = {
   kind: "launch";
   repository: string;

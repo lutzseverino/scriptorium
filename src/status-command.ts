@@ -11,6 +11,7 @@ import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
 import {
   freshStandIn,
   spareUsage,
+  standInReason,
   type NoStandIn,
   type OwnerControl,
   type RunKindCounts,
@@ -1157,11 +1158,7 @@ function pickText({ model, pick }: NarrowerModel): string {
   const percent = (value: number) => Math.round(value * 10) / 10;
   const runs = `runs ${pick.runs.provider}/${pick.runs.model}@${pick.runs.effort}`;
   if (pick.state === "stand-in")
-    return `${prefix} ${runs}; stand-in: ${
-      pick.reason.kind === "spare usage"
-        ? `spare usage (${percent(pick.reason.used)}% used, ${percent(pick.reason.elapsed)}% elapsed)`
-        : `chosen provider cannot launch (${pick.reason.reason})`
-    }`;
+    return `${prefix} ${runs}; stand-in: ${standInReason(pick.reason)}`;
   const declined = pick.declined.map((entry) => {
     switch (entry.kind) {
       case "outside capabilities":
