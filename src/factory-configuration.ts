@@ -90,13 +90,39 @@ export function launchArguments(
     : text;
 }
 
+// The run kinds a configuration enables, in their canonical order.
+export function enabledRunKinds(
+  configuration: FactoryConfiguration,
+): RunKindName[] {
+  return runKindNames.filter((kind) => runKind(configuration, kind));
+}
+
+// Why the configuration could not be read, named by its repository path.
+export class FactoryConfigurationError extends Error {
+  readonly state: "missing" | "unreadable" | "invalid";
+  constructor(
+    state: FactoryConfigurationError["state"],
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "FactoryConfigurationError";
+    this.state = state;
+  }
+}
+
+// The configuration at `path`, the repository's `factoryConfigurationPath`.
 export function readFactoryConfiguration(path: string): FactoryConfiguration {
   let source;
   try {
     source = readFileSync(path, "utf8");
   } catch (error) {
-    throw new Error(
-      `The factory configuration ${path} is unreadable: ${error}`,
+    const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+    throw new FactoryConfigurationError(
+      missing ? "missing" : "unreadable",
+      missing
+        ? `The factory configuration ${factoryConfigurationPath} is missing`
+        : `The factory configuration ${factoryConfigurationPath} is unreadable: ${error}`,
       { cause: error },
     );
   }
@@ -104,9 +130,11 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
   try {
     value = JSON.parse(source);
   } catch (error) {
-    throw new Error(`The factory configuration ${path} is not JSON: ${error}`, {
-      cause: error,
-    });
+    throw new FactoryConfigurationError(
+      "invalid",
+      `The factory configuration ${factoryConfigurationPath} is not JSON: ${error}`,
+      { cause: error },
+    );
   }
   const problems: string[] = [];
   const object = (
@@ -284,8 +312,9 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     }
   }
   if (problems.length > 0)
-    throw new Error(
-      `The factory configuration ${path} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+    throw new FactoryConfigurationError(
+      "invalid",
+      `The factory configuration ${factoryConfigurationPath} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
     );
   return value;
 }

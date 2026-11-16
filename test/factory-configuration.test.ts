@@ -5,6 +5,7 @@ import { directory } from "./fakes.ts";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  FactoryConfigurationError,
   factoryConfigurationPath,
   launchArguments,
   readFactoryConfiguration,
@@ -70,7 +71,7 @@ test("the contract result's marker and author are required, with no default", (t
   delete configuration.contractResult;
   writeFileSync(path, JSON.stringify(configuration));
   assert.throws(() => readFactoryConfiguration(path), {
-    message: `The factory configuration ${path} is invalid:\n- contractResult: is missing`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- contractResult: is missing`,
   });
   for (const [contractResult, problems] of [
     [
@@ -92,7 +93,7 @@ test("the contract result's marker and author are required, with no default", (t
   ] as const) {
     writeFileSync(path, JSON.stringify({ ...configuration, contractResult }));
     assert.throws(() => readFactoryConfiguration(path), {
-      message: `The factory configuration ${path} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+      message: `The factory configuration ${factoryConfigurationPath} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
     });
   }
 });
@@ -111,7 +112,7 @@ test("version 1 prompt configurations are outside the compatibility window", (t)
     }),
   );
   assert.throws(() => readFactoryConfiguration(path), {
-    message: `The factory configuration ${path} is invalid:\n- prompt: is not a factory configuration field\n- skill: is missing\n- arguments: is missing\n- version: must be 2 or 3`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- prompt: is not a factory configuration field\n- skill: is missing\n- arguments: is missing\n- version: must be 2 or 3`,
   });
 
   writeFileSync(
@@ -125,7 +126,7 @@ test("version 1 prompt configurations are outside the compatibility window", (t)
     }),
   );
   assert.throws(() => readFactoryConfiguration(path), {
-    message: `The factory configuration ${path} is invalid:\n- prompt: is not a factory configuration field`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- prompt: is not a factory configuration field`,
   });
 });
 
@@ -160,39 +161,39 @@ test("a skip label is optional, trimmed and distinct from every other label", (t
     configuration.labels.skip = skip;
     writeFileSync(path, JSON.stringify(configuration));
     assert.throws(() => readFactoryConfiguration(path), {
-      message: `The factory configuration ${path} is invalid:\n- labels.skip: is not a non-empty trimmed string`,
+      message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- labels.skip: is not a non-empty trimmed string`,
     });
   }
   for (const name of ["ready", "running", "failed", "needsInput", "paused"]) {
     configuration.labels.skip = configuration.labels[name].toUpperCase();
     writeFileSync(path, JSON.stringify(configuration));
     assert.throws(() => readFactoryConfiguration(path), {
-      message: `The factory configuration ${path} is invalid:\n- labels.skip: must differ from labels.${name}, ignoring case`,
+      message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- labels.skip: must differ from labels.${name}, ignoring case`,
     });
   }
 });
 
 test("missing fields are refused instead of supplied from defaults", () => {
   assert.throws(() => readFactoryConfiguration(fixture("missing")), {
-    message: `The factory configuration ${fixture("missing")} is invalid:\n- version: is missing\n- contractResult: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.paused: is missing\n- labels.needsInput: is missing`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- version: is missing\n- contractResult: is missing\n- modelLabelPrefix: is missing\n- skill: is missing\n- arguments: is missing\n- labels.paused: is missing\n- labels.needsInput: is missing`,
   });
 });
 
 test("unknown fields at either level are invalid", () => {
   assert.throws(() => readFactoryConfiguration(fixture("unknown")), {
-    message: `The factory configuration ${fixture("unknown")} is invalid:\n- fallback: is not a factory configuration field\n- labels.other: is not a factory configuration field`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- fallback: is not a factory configuration field\n- labels.other: is not a factory configuration field`,
   });
 });
 
 test("malformed fields and an unsupported version are invalid", () => {
   assert.throws(() => readFactoryConfiguration(fixture("malformed")), {
-    message: `The factory configuration ${fixture("malformed")} is invalid:\n- version: must be 2 or 3\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- contractResult.marker: is not a non-empty trimmed string\n- contractResult.author: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- version: must be 2 or 3\n- labels.ready: is not a non-empty trimmed string\n- labels.running: is not a non-empty trimmed string\n- labels.failed: is not a non-empty trimmed string\n- labels.paused: is not a non-empty trimmed string\n- labels.needsInput: is not a non-empty trimmed string\n- contractResult.marker: is not a non-empty trimmed string\n- contractResult.author: is not a non-empty trimmed string\n- modelLabelPrefix: is not a non-empty trimmed string\n- skill: is not a non-empty trimmed string\n- arguments: is not a string`,
   });
 });
 
 test("state labels cannot alias readiness, which the factory never writes", () => {
   assert.throws(() => readFactoryConfiguration(fixture("overlapping-labels")), {
-    message: `The factory configuration ${fixture("overlapping-labels")} is invalid:\n- labels.failed: must differ from labels.ready, ignoring case`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- labels.failed: must differ from labels.ready, ignoring case`,
   });
 });
 
@@ -222,25 +223,12 @@ test("the paused label is required, trimmed and distinct from the other four", (
   ] as const) {
     const path = withPaused(t, paused);
     assert.throws(() => readFactoryConfiguration(path), {
-      message: `The factory configuration ${path} is invalid:\n- ${problem}`,
+      message: `The factory configuration ${factoryConfigurationPath} is invalid:\n- ${problem}`,
     });
   }
   assert.equal(
     readFactoryConfiguration(withPaused(t, "waiting")).labels.paused,
     "waiting",
-  );
-});
-
-test("unreadable and non-JSON configurations have a stated reason", (t) => {
-  const path = join(directory(t), "config.json");
-  assert.throws(
-    () => readFactoryConfiguration(path),
-    /factory configuration.*unreadable/,
-  );
-  writeFileSync(path, "{\n");
-  assert.throws(
-    () => readFactoryConfiguration(path),
-    /factory configuration.*not JSON/,
   );
 });
 
@@ -396,7 +384,7 @@ function invalid(t: TestContext, value: unknown, problems: string[]) {
   const path = join(directory(t), "config.json");
   writeFileSync(path, JSON.stringify(value));
   assert.throws(() => readFactoryConfiguration(path), {
-    message: `The factory configuration ${path} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+    message: `The factory configuration ${factoryConfigurationPath} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
   });
 }
 
@@ -557,4 +545,25 @@ test("arguments expand {issue}, and in version 3 {pullRequest}, which a launch w
   const v2 = readFactoryConfiguration(fixture("valid"));
   if (v2.version === 2) v2.arguments = "#{issue} {pullRequest}";
   assert.equal(launchArguments(v2, "implement", 4, 42), "#4 {pullRequest}");
+});
+
+test("a configuration that cannot be read says why, by its repository path", (t) => {
+  const root = directory(t);
+  const notJson = join(root, "config.json");
+  writeFileSync(notJson, "{");
+  for (const [path, state] of [
+    [join(root, "absent.json"), "missing"],
+    [root, "unreadable"],
+    [notJson, "invalid"],
+    [fixture("malformed"), "invalid"],
+  ] as const)
+    assert.throws(
+      () => readFactoryConfiguration(path),
+      (error: unknown) =>
+        error instanceof FactoryConfigurationError &&
+        error.state === state &&
+        error.message.startsWith(
+          `The factory configuration ${factoryConfigurationPath} is ${state === "invalid" ? (path === notJson ? "not JSON" : "invalid") : state}`,
+        ),
+    );
 });

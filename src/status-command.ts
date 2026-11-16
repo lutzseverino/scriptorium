@@ -9,7 +9,15 @@ import { providerStatus, type ProviderStatus } from "./events.ts";
 import { fresh, usageReading, usageHold, usageHoldAfter } from "./usage.ts";
 import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
 import type { OwnerControl, RunKindCounts } from "./factory.ts";
-import { capacityCounts } from "./status.ts";
+import {
+  capacityCounts,
+  configurationProblemStates,
+  pauseCauses,
+  type ConfigurationCoverage,
+  type ConfigurationProblemState,
+  type RepositoryPause,
+} from "./status.ts";
+import { runKindNames } from "./factory-configuration.ts";
 import { createRegistry, type ModelFacts } from "./providers.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 
@@ -68,11 +76,23 @@ type BudgetCapacity = {
   repositories: (ObservedCapacityCounts & { repository: string })[];
 };
 
+// Null configuration and pause establish nothing while the observation is
+// unavailable.
+type Coverage = {
+  observation: Observation;
+  repositories: {
+    repository: string;
+    configuration: ConfigurationCoverage | null;
+    paused: RepositoryPause | null;
+  }[];
+};
+
 export type LaunchBudget = {
   version: 1;
   observedAt: string;
   models: ModelFacts;
   capacity: BudgetCapacity;
+  coverage: Coverage;
   providers: BudgetProvider[];
 };
 
@@ -269,6 +289,101 @@ function readCapacity(
   };
 }
 
+// The configuration a status file entry records, or null when it is not one
+// a pass writes.
+function configurationCoverage(value: unknown): ConfigurationCoverage | null {
+  const record = object(value);
+  if (!record) return null;
+  const fields = Object.keys(record).sort().join();
+  if (record.state === "valid") {
+    const kinds = record.runKinds;
+    // Known kinds, each once, in canonical order; implement is the minimum
+    // and version 2's only kind.
+    const ordered = Array.isArray(kinds)
+      ? runKindNames.filter((kind) => kinds.includes(kind))
+      : [];
+    return fields === "runKinds,state,version" &&
+      (record.version === 2 || record.version === 3) &&
+      Array.isArray(kinds) &&
+      ordered.join() === kinds.join() &&
+      ordered.includes("implement") &&
+      (record.version === 3 || ordered.length === 1)
+      ? { state: "valid", version: record.version, runKinds: ordered }
+      : null;
+  }
+  return fields === "problem,state" &&
+    configurationProblemStates.includes(
+      record.state as ConfigurationProblemState,
+    ) &&
+    typeof record.problem === "string"
+    ? {
+        state: record.state as ConfigurationProblemState,
+        problem: record.problem,
+      }
+    : null;
+}
+
+// Coverage is the last pass's account of each listed repository. Any doubt
+// about the record makes it unavailable rather than guessed; a pending
+// transaction concerns provider work and leaves it available.
+function readCoverage(
+  configuration: HostConfiguration,
+  work: ReturnType<typeof readObservation>,
+  now: Date,
+): Coverage {
+  const entries = new Map<
+    string,
+    { configuration: ConfigurationCoverage; paused: RepositoryPause | null }
+  >();
+  const recorded = work.data?.repositories;
+  let valid = Array.isArray(recorded);
+  if (Array.isArray(recorded))
+    for (const value of recorded) {
+      const entry = object(value);
+      const read = configurationCoverage(entry?.configuration);
+      const paused =
+        entry?.state === "paused" &&
+        pauseCauses.includes(entry.cause as RepositoryPause["cause"]) &&
+        typeof entry.reason === "string"
+          ? {
+              cause: entry.cause as RepositoryPause["cause"],
+              reason: entry.reason,
+            }
+          : null;
+      if (
+        !entry ||
+        typeof entry.repository !== "string" ||
+        entries.has(entry.repository) ||
+        !read ||
+        (entry.state === "running"
+          ? "cause" in entry || "reason" in entry || read.state !== "valid"
+          : paused === null)
+      )
+        valid = false;
+      else entries.set(entry.repository, { configuration: read, paused });
+    }
+  const updatedAt = work.data?.updatedAt;
+  const known =
+    valid &&
+    time(updatedAt) &&
+    Date.parse(updatedAt) <= now.getTime() &&
+    configuration.repositories.every((repository) => entries.has(repository));
+  return {
+    observation: known
+      ? { ...work.observation, at: updatedAt }
+      : unavailable(
+          "status.json",
+          work.observation.problem ??
+            "missing, legacy or inconsistent coverage observation",
+        ),
+    repositories: configuration.repositories.map((repository) => ({
+      repository,
+      configuration: known ? entries.get(repository)!.configuration : null,
+      paused: known ? entries.get(repository)!.paused : null,
+    })),
+  };
+}
+
 export async function readBudget(
   configuration: HostConfiguration,
   ports: Pick<StatusPorts, "now" | "readUsage">,
@@ -291,6 +406,7 @@ export async function readBudget(
       checkpoint.data?.pending !== undefined,
       now,
     ),
+    coverage: readCoverage(configuration, workFile, now),
     models: createRegistry(configuration.providers, configuration.models)
       .modelFacts,
     providers: await Promise.all(
@@ -625,6 +741,11 @@ export function formatStatus(budget: LaunchBudget): string {
         `${name}: implement limit=${implement.limit === null ? "unset" : implement.limit} running=${value(implement.running)} free=${implement.limit === null && implement.running !== null ? "unlimited" : value(implement.free)} runKinds=${value(runKinds)}`,
     ),
     `capacity observation=${JSON.stringify(budget.capacity.observation)}`,
+    ...budget.coverage.repositories.map(
+      ({ repository, configuration, paused }) =>
+        `${repository}: configuration=${value(configuration)} paused=${configuration === null ? "unavailable" : paused === null ? "none" : JSON.stringify(paused)}`,
+    ),
+    `coverage observation=${JSON.stringify(budget.coverage.observation)}`,
     ...budget.providers.flatMap((provider) => [
       `${provider.provider}: cap=${provider.cap} running=${value(provider.running)} free=${value(provider.free)} paused=${value(provider.paused)} retained=${value(provider.retained)}`,
       ...[

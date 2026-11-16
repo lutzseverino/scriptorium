@@ -1555,7 +1555,8 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 
 - its token command fails;
 - its clone does not update;
-- its `.scriptorium/config.json` is missing or invalid;
+- its `.scriptorium/config.json` is missing, unreadable or invalid, or its
+  version 3 model policy is unreadable or invalid;
 - it has no `.scriptorium/Dockerfile`, its sandbox image does not build, or storage admission holds a new build;
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
@@ -1563,6 +1564,15 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - an open issue or PR carries its [factory hold](factory-configuration.md#factory-hold)
   label, or that hold cannot be read. A merge relaunch whose target PR alone
   carries the label still launches.
+
+The status file and the [`status` command's coverage](#coverage) record the
+pause with its cause: `repository-input` for the repository's own inputs,
+`host` for the token command, the clone, the platform, the state labels and
+storage admission, and `factory-hold` for the factory hold. When several
+conditions apply, the pass's final pause reason is the one reported, and a
+factory hold never replaces a pass pause. Pause reasons name repository inputs
+by their repository path, such as `.scriptorium/config.json`, never by the
+host's clone path.
 
 Its ended runs keep settling while its platform reads succeed, and the other
 repositories continue. A repository pause is no [paused run](#paused-runs): it
@@ -1671,6 +1681,70 @@ and its [granted live acceptance](https://github.com/lutzseverino/homelab/issues
 using the released configuration interface. This generic source change installs
 neither those values nor that deployment; guidance rollout remains separate.
 
+### Coverage
+
+The `coverage` field in status JSON tells a hand launcher whether this host's
+factory covers a repository's work, from the last pass's view of the
+repository's own default branch:
+
+```text
+coverage.observation             same shape as capacity.observation: state (last-observed | unavailable),
+                                 source "status.json", at, optional problem
+coverage.repositories[]          one entry per repository the host configuration lists, in its order
+  .repository                    "owner/name"
+  .configuration                 null while the observation is unavailable; otherwise:
+    .state                       valid | missing | unreadable | invalid | not-read
+    .version                     2 or 3; only when valid
+    .runKinds                    the enabled run kinds, ordered triage, implement, review; only when valid
+                                 (version 2: ["implement"])
+    .problem                     why the configuration is not valid; only when not valid
+  .paused                        null when the pass left no repository pause or factory hold
+                                 (and while the observation is unavailable); otherwise:
+    .cause                       factory-hold | repository-input | host
+    .reason                      the pass's pause reason
+```
+
+- A repository the host configuration does not list is not served by this
+  host.
+- `configuration` is what the pass read from `.scriptorium/config.json`:
+  `missing` when there is no such file, `unreadable` when it cannot be read,
+  `invalid` when it is not JSON or fails its version's contract, including a
+  version other than 2 or 3, and `not-read` when the token command or clone
+  update failed first. A repository whose inputs are only in a legacy
+  directory reads `missing`. The last valid configuration the factory keeps to
+  settle existing runs is never reported as the current one.
+- `runKinds` names only kinds from the closed set Scriptorium owns, never their
+  skills or arguments.
+- `paused` is the repository pause or factory hold described under
+  [Repository pauses](#repository-pauses), with the same reason as the status
+  file. A `repository-input` or `host` pause claims and launches nothing that
+  pass. A `factory-hold` holds ordinary pickup but keeps the existing
+  exceptions for a run's own pull requests, including the held PR's own merge
+  relaunch, so it does not assert that nothing launches. Provider usage and
+  owner holds stay under `providers`, and paused runs are not reported here.
+
+The factory covers a run kind's work in a repository only when all of these
+hold:
+
+- the repository is listed;
+- the coverage observation is available;
+- `configuration.state` is `valid` and lists that kind in `runKinds`;
+- `paused` is `null`.
+
+Coverage is always `last-observed`, at the status file's `updatedAt`; it is
+never current. It is `unavailable`, with every entry's `configuration` and
+`paused` set to `null`, when the status file is missing, unreadable (including
+for a user who cannot read the host's state directory), future-dated, written
+by a release that does not record coverage, inconsistent, or lacks an entry for
+a listed repository. Then `null` establishes nothing: neither coverage nor its
+absence. A pending operational transaction concerns provider work counts and
+leaves coverage available. The command reads coverage only from the status
+file: it clones, fetches and reads no repository, runs no token command and
+writes nothing. Text output shows each repository as
+`<repository>: configuration=<JSON> paused=<JSON>`, with `paused=none` when
+the observation is available and nothing pauses it, and `unavailable` values
+otherwise, followed by `coverage observation=<JSON>`.
+
 ### Observation provenance
 
 There is no liveness or operational-observation timeout. Reading a file cannot
@@ -1704,8 +1778,9 @@ modification time establishes no daemon liveness. `unavailable` has `at: null`.
 ### JSON contract, version 1
 
 The command's JSON document has `version: 1`, `observedAt` (when inspection
-began), and `providers`. Each provider reuses the operational fields documented
-under [Status file](#status-file), with the following additions and unavailable
+began), `capacity`, [`coverage`](#coverage), `models` and `providers`. Each
+provider reuses the operational fields documented under
+[Status file](#status-file), with the following additions and unavailable
 representations. Its `observedAt` identifies the projection time, while the
 `observations` entries identify the underlying evidence. Configured caps and
 thresholds come from the configuration read for this command.
@@ -1772,7 +1847,11 @@ Warnings and configuration errors go to stderr, leaving JSON stdout parseable.
 
 After every pass the factory replaces `status.json` whole. It lists each
 repository in the host configuration's order with its state, `running` or
-`paused` with the reason, and the issues the pass held with their skip reasons.
+`paused` with the `cause` and `reason`, its `configuration` as the pass read
+it, in the shape [coverage](#coverage) reports, and the issues the pass held
+with their skip reasons. A paused entry's `cause` and `reason` describe the
+pass's final pause reason, or the factory hold when the pass has no pause
+reason.
 It also lists every configured provider in configuration order, even with no
 frontier issue or running work. A repository with active merge relaunches has
 `mergeRelaunches` entries naming each `issue`, `pullRequest` and `headCommit`;
@@ -1807,6 +1886,11 @@ each provider's `observedAt` identifies that observation.
     {
       "repository": "acme/widgets",
       "state": "running",
+      "configuration": {
+        "state": "valid",
+        "version": 3,
+        "runKinds": ["triage", "implement", "review"]
+      },
       "held": [
         { "issue": 5, "reason": "blocked by #4" },
         {
@@ -1818,7 +1902,13 @@ each provider's `observedAt` identifies that observation.
     {
       "repository": "acme/gadgets",
       "state": "paused",
+      "cause": "repository-input",
       "reason": "it has no .scriptorium/Dockerfile",
+      "configuration": {
+        "state": "valid",
+        "version": 2,
+        "runKinds": ["implement"]
+      },
       "held": [
         {
           "issue": 2,

@@ -2,12 +2,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { providerStatus } from "../src/events.ts";
 import { emptyRunKindCounts, type Run } from "../src/factory.ts";
-import { hostStatus } from "../src/status.ts";
+import { hostStatus, type ConfigurationCoverage } from "../src/status.ts";
+
+const configuration: ConfigurationCoverage = {
+  state: "valid",
+  version: 3,
+  runKinds: ["implement"],
+};
 
 test("host status accepts the original three arguments with no provider statuses", () => {
   const now = "2026-10-18T00:00:00.000Z";
   assert.deepEqual(
-    hostStatus(now, [{ name: "acme/widgets", paused: null }], []),
+    hostStatus(
+      now,
+      [{ name: "acme/widgets", paused: null, configuration }],
+      [],
+    ),
     {
       updatedAt: now,
       providers: [],
@@ -27,7 +37,12 @@ test("host status accepts the original three arguments with no provider statuses
         ],
       },
       repositories: [
-        { repository: "acme/widgets", state: "running", held: [] },
+        {
+          repository: "acme/widgets",
+          state: "running",
+          configuration,
+          held: [],
+        },
       ],
     },
   );
@@ -107,9 +122,13 @@ test("capacity projection counts run exits independently of retained endings acr
     ),
   ];
   const repos = [
-    { name: "acme/widgets", paused: null },
-    { name: "acme/gadgets", paused: "held" },
-    { name: "acme/empty", paused: null },
+    { name: "acme/widgets", paused: null, configuration },
+    {
+      name: "acme/gadgets",
+      paused: { cause: "factory-hold" as const, reason: "held" },
+      configuration,
+    },
+    { name: "acme/empty", paused: null, configuration },
   ];
   for (const limits of [
     undefined,

@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   PlatformError,
   type ConnectOptions,
@@ -24,6 +24,8 @@ import {
 } from "@lutzseverino/postern";
 import { updateClone, readRecovery, type Git } from "./clone.ts";
 import {
+  enabledRunKinds,
+  FactoryConfigurationError,
   factoryConfigurationPath,
   launchArguments,
   readFactoryConfiguration,
@@ -101,7 +103,13 @@ import { createRedactor } from "./redaction.ts";
 import { pauseDeadline } from "./pause.ts";
 import { followRunLog, readLogEnd } from "./run-log.ts";
 import { prompt } from "./prompt.ts";
-import { hostStatus, writeStatus } from "./status.ts";
+import {
+  hostStatus,
+  writeStatus,
+  type ConfigurationCoverage,
+  type PauseCause,
+  type RepositoryPause,
+} from "./status.ts";
 import { createUsage } from "./usage.ts";
 import type { Action, Phase, RunUpdate } from "./run-comment.ts";
 import { createEvents, providerStatus } from "./events.ts";
@@ -185,7 +193,9 @@ type HostRun = Run & {
 // platform reads this pass, so only its running sandboxes reach the snapshot.
 type Pass = {
   name: string;
-  paused: string | null;
+  paused: RepositoryPause | null;
+  // What this pass read from the repository's configuration file.
+  configurationFile: ConfigurationCoverage;
   platform: RepositoryPlatform | null;
   image: string | null;
   read: Repository | null;
@@ -323,22 +333,36 @@ export function createHost(
     const pass: Pass = {
       name,
       paused: null,
+      configurationFile: {
+        state: "not-read",
+        problem: "the pass has not reached it",
+      },
       platform: null,
       image: null,
       read: null,
       configuration: conventions.get(name) ?? null,
       modelPolicy: null,
     };
-    const pause = (reason: string) => (pass.paused = redactor.redact(reason));
+    const { clone } = directory(name);
+    // Reasons name repository inputs by their repository path, never by
+    // the host's clone path.
+    const repositoryReason = (reason: string) =>
+      redactor.redact(reason.replaceAll(`${clone}${sep}`, ""));
+    // The last pause wins, with who acts on it.
+    const pause = (reason: string, cause: PauseCause) =>
+      (pass.paused = { cause, reason: repositoryReason(reason) }).reason;
+    const notRead = (problem: string) =>
+      (pass.configurationFile = { state: "not-read", problem });
     // A repository whose own token fails to print is paused for the pass.
     try {
       await tokens.get(name);
     } catch (error) {
-      pause(`${error instanceof Error ? error.message : error}`);
+      notRead(
+        pause(`${error instanceof Error ? error.message : error}`, "host"),
+      );
       return pass;
     }
     const git = hostGit(name);
-    const { clone } = directory(name);
     try {
       await updateClone(
         git,
@@ -351,8 +375,23 @@ export function createHost(
           join(clone, factoryConfigurationPath),
         );
         conventions.set(name, pass.configuration);
+        pass.configurationFile = {
+          state: "valid",
+          version: pass.configuration.version,
+          runKinds: enabledRunKinds(pass.configuration),
+        };
       } catch (error) {
-        pause(`${error instanceof Error ? error.message : error}`);
+        const problem = pause(
+          `${error instanceof Error ? error.message : error}`,
+          "repository-input",
+        );
+        pass.configurationFile = {
+          state:
+            error instanceof FactoryConfigurationError
+              ? error.state
+              : "unreadable",
+          problem,
+        };
       }
       // Model policy belongs to version 3. Version 2 keeps its configured
       // issue-label selection and host defaults, regardless of this file.
@@ -363,30 +402,35 @@ export function createHost(
           pass.modelPolicy = readModelPolicy(join(clone, modelPolicyPath));
         } catch (error) {
           if (pass.paused === null)
-            pause(`${error instanceof Error ? error.message : error}`);
+            pause(
+              `${error instanceof Error ? error.message : error}`,
+              "repository-input",
+            );
         }
       const dockerfile = join(clone, dockerfilePath);
       if (pass.paused === null && !existsSync(dockerfile))
-        pause(`it has no ${dockerfilePath}`);
+        pause(`it has no ${dockerfilePath}`, "repository-input");
       else if (pass.paused === null)
         try {
           pass.image = await ports.buildImage(
             await readFile(dockerfile, "utf8"),
           );
         } catch (error) {
-          pause(
-            error instanceof ImageStorageHold
-              ? error.message
-              : `its sandbox image did not build from ${dockerfilePath}: ${error}`,
-          );
+          if (error instanceof ImageStorageHold) pause(error.message, "host");
+          else
+            pause(
+              `its sandbox image did not build from ${dockerfilePath}: ${error}`,
+              "repository-input",
+            );
         }
     } catch (error) {
-      pause(`its clone did not update: ${error}`);
+      const reason = pause(`its clone did not update: ${error}`, "host");
+      if (pass.configurationFile.state === "not-read") notRead(reason);
     }
     if (!pass.configuration) return pass;
     const served = connect(name);
     if ("refused" in served) {
-      pause(served.refused);
+      pause(served.refused, "host");
       return pass;
     }
     const platform = repositoryPlatform(served.connection, pass.configuration);
@@ -395,7 +439,7 @@ export function createHost(
       await platform.createStateLabels();
     } catch (error) {
       if (pass.paused === null)
-        pause(`its state labels could not be created: ${error}`);
+        pause(`its state labels could not be created: ${error}`, "host");
     }
     if (pass.configuration.labels.releaseHold !== undefined) {
       try {
@@ -598,7 +642,7 @@ export function createHost(
         configuration: pass.configuration,
         authorization: served.authorization,
         ownedPullRequests: recordedPullRequests(name),
-        paused: pass.paused,
+        paused: pass.paused?.reason ?? null,
         issues,
         ...(pass.releaseHold !== undefined && {
           releaseHold: pass.releaseHold,
@@ -611,7 +655,7 @@ export function createHost(
         claims: await readClaims(name, platform, issues, reads),
       };
     } catch (error) {
-      pause(`its platform reads failed: ${error}`);
+      pause(`its platform reads failed: ${error}`, "host");
     }
     return pass;
   }
@@ -1553,7 +1597,7 @@ export function createHost(
     };
     for (const pass of passes) {
       if (pass.paused !== null)
-        report(`${pass.name} is paused: ${pass.paused}`);
+        report(`${pass.name} is paused: ${pass.paused.reason}`);
       const held = repositoryHold("factory", pass)?.reason;
       if (held) report(`${pass.name} is held: ${held}`);
     }
@@ -1607,11 +1651,18 @@ export function createHost(
         join(configuration.stateDirectory, "status.json"),
         hostStatus(
           snapshot.now,
-          passes.map((pass) => ({
-            name: pass.name,
-            paused:
-              pass.paused ?? repositoryHold("factory", pass)?.reason ?? null,
-          })),
+          passes.map((pass) => {
+            const held = repositoryHold("factory", pass)?.reason;
+            return {
+              name: pass.name,
+              configuration: pass.configurationFile,
+              paused:
+                pass.paused ??
+                (held
+                  ? { cause: "factory-hold" as const, reason: held }
+                  : null),
+            };
+          }),
           decisions,
           providers,
           imageStorage
