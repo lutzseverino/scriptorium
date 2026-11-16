@@ -18,7 +18,8 @@ export type RunResult = {
   state?: string;
   // Other labels, from the families the kind may request.
   labels?: string[];
-  // Markdown, contained so that it holds no HTML comment and so no marker.
+  // Markdown without filing citation lines, contained so that it holds no HTML
+  // comment and so no marker.
   body: string;
   // One line on why the run ended; a failed result always has one.
   reason?: string;
@@ -108,9 +109,24 @@ export function parseRunResult(
   const { outcome, state, labels = [], body, reason } = value;
   if (!["done", "stop", "failed"].includes(outcome))
     return invalid("has no outcome of done, stop or failed");
-  if (typeof body !== "string" || body.trim() === "")
-    return invalid("has no body");
-  if (contain(body).length > bodyLimit)
+  if (typeof body !== "string") return invalid("has no body");
+  // Filing citations belong to finding issue bodies. Remove whole citation
+  // lines before containment, preserving all other text and line endings.
+  const cleanedBody = contain(
+    body
+      .split(/(?<=\n)|(?<=\r)(?!\n)/)
+      .filter((line) => {
+        // A citation line is one comment: its first closer ends the line.
+        const trimmed = line.trim();
+        return !(
+          trimmed.startsWith("<!-- scriptorium:filing-run ") &&
+          trimmed.indexOf("-->") === trimmed.length - 3
+        );
+      })
+      .join(""),
+  );
+  if (cleanedBody.trim() === "") return invalid("has no body");
+  if (cleanedBody.length > bodyLimit)
     return invalid(`has a body over ${bodyLimit} characters`);
   if (
     reason !== undefined &&
@@ -170,7 +186,7 @@ export function parseRunResult(
     outcome,
     ...(state !== undefined && { state }),
     ...(labels.length && { labels }),
-    body: contain(body),
+    body: cleanedBody,
     ...(reason !== undefined && {
       reason: contain(reason.trim().replace(/\.+$/, "")),
     }),

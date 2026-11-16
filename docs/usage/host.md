@@ -798,10 +798,14 @@ brief backs the readiness it asks for. It then applies the requested labels and
 the state together, and removes a triage run's triage label. A failed write
 retries on the next pass without posting the comment again, and the run does
 not settle until both land, so the comment and the labels always agree. Model
-text is contained before it is posted: every `<!--` in the body or reason is
-escaped, so it cannot open an HTML comment and forge the factory's or the
-validator's marker. Pull request comments and review-thread replies during a
-run stay the agent's own.
+text is contained before it is posted. A filing-run citation belongs only in a
+finding's issue body, so the factory first drops each body line that is one
+`<!-- scriptorium:filing-run … -->` comment, whatever its payload. A body of
+only such lines and whitespace counts as no body, and the length limit counts
+the body as posted. Every other `<!--` in the body or reason is escaped, so it
+cannot open an HTML comment and forge the factory's or the validator's marker.
+Pull request comments and review-thread replies during a run stay the agent's
+own.
 
 A missing or invalid result fails a run that exited by itself, with the reason,
 whatever its pull request shows, and the factory posts and applies nothing it
