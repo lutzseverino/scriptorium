@@ -9,10 +9,13 @@ import { providerStatus, type ProviderStatus } from "./events.ts";
 import { fresh, usageReading, usageHold, usageHoldAfter } from "./usage.ts";
 import { ownerHold, ownerReserve, reserveExpiry } from "./owner.ts";
 import {
+  freshStandIn,
   spareUsage,
+  type NoStandIn,
   type OwnerControl,
   type RunKindCounts,
   type SpareUsage,
+  type StandIn,
 } from "./factory.ts";
 import {
   capacityCounts,
@@ -32,7 +35,12 @@ import {
   type UnresolvedRun,
 } from "./status.ts";
 import { runKindNames, type RunKindName } from "./factory-configuration.ts";
-import { createRegistry, type ModelFacts } from "./providers.ts";
+import {
+  createRegistry,
+  type Model,
+  type ModelFacts,
+  type Registry,
+} from "./providers.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 import { credentialHealths, type Credentials } from "./credentials.ts";
 
@@ -122,10 +130,36 @@ type BudgetCredentials = Omit<Credentials, "observedAt"> & {
   observedAt: string | null;
 };
 
+// What a fresh launch without diversity would run right now for a model
+// declared narrower than another, by the factory's own stand-in step, or
+// unknown while status cannot establish a fact that step reads. It is advice,
+// never a launch grant.
+type LaunchPick =
+  | {
+      state: "stand-in";
+      runs: Model;
+      reason: StandIn["reason"];
+      declined: NoStandIn[];
+    }
+  | {
+      state: "chosen model";
+      runs: Model;
+      chosenCannotLaunch: string | null;
+      declined: NoStandIn[];
+    }
+  | { state: "unknown"; unavailable: string[] };
+
+type NarrowerModel = {
+  model: string;
+  narrowerThan: readonly string[];
+  pick: LaunchPick;
+};
+
 export type LaunchBudget = {
   version: 1;
   observedAt: string;
   models: ModelFacts;
+  narrowerModels: NarrowerModel[];
   capacity: BudgetCapacity;
   coverage: Coverage;
   health: Health;
@@ -603,8 +637,12 @@ export async function readBudget(
     "events-state.json",
   );
   const entries = coverageEntries(configuration, workFile, now);
-  return {
-    version: 1,
+  const registry = createRegistry(
+    configuration.providers,
+    configuration.models,
+  );
+  const budget = {
+    version: 1 as const,
     observedAt,
     capacity: readCapacity(
       configuration,
@@ -615,8 +653,7 @@ export async function readBudget(
     coverage: readCoverage(configuration, workFile, entries),
     health: readHealth(configuration, workFile, entries, now),
     credentials: readCredentials(configuration, workFile, now),
-    models: createRegistry(configuration.providers, configuration.models)
-      .modelFacts,
+    models: registry.modelFacts,
     providers: await Promise.all(
       Object.entries(configuration.providers).map(
         async ([provider, { cap }]): Promise<BudgetProvider> => {
@@ -928,6 +965,106 @@ export async function readBudget(
       ),
     ),
   };
+  return {
+    ...budget,
+    narrowerModels: narrowerModels(
+      configuration,
+      registry,
+      budget.providers,
+      ports.now(),
+    ),
+  };
+}
+
+// Each model the host declares narrower than another, with the factory's
+// stand-in step run over the provider facts this command projected: their
+// usage, live with `--live-usage`, holds, owner control and running counts.
+function narrowerModels(
+  configuration: HostConfiguration,
+  registry: Registry,
+  providers: BudgetProvider[],
+  now: Date,
+): NarrowerModel[] {
+  const byName = new Map(
+    providers.map((provider) => [provider.provider, provider]),
+  );
+  const running = new Map(
+    providers.map((provider) => [provider.provider, provider.running ?? 0]),
+  );
+  const facts = {
+    now: now.toISOString(),
+    usage: Object.fromEntries(
+      providers.map((provider) => [
+        provider.provider,
+        provider.usage.state === "known" ? provider.usage.reading : null,
+      ]),
+    ),
+    holds: Object.fromEntries(
+      providers.map((provider) => [provider.provider, provider.usageHold]),
+    ),
+    owners: Object.fromEntries(
+      providers.map((provider) => [
+        provider.provider,
+        { hold: provider.ownerHold, reserve: provider.reserve },
+      ]),
+    ),
+    settings: {
+      caps: Object.fromEntries(
+        providers.map((provider) => [provider.provider, provider.cap]),
+      ),
+      drainThreshold: configuration.usage.drainThreshold,
+      pauseThreshold: configuration.usage.pauseThreshold,
+    },
+  };
+  return registry.modelFacts.catalog.flatMap(
+    ({ identity, narrowerThan }): NarrowerModel[] => {
+      if (!narrowerThan) return [];
+      // Configuration validation resolved every identity in a pair.
+      const chosen = registry.resolveModel(identity) as Model;
+      const involved = new Set([
+        chosen.provider,
+        ...narrowerThan.map((broader) => broader.split("/")[0]),
+      ]);
+      const unavailable = [...involved].flatMap((name) => {
+        const provider = byName.get(name)!;
+        return [
+          provider.running === null && `${name} work`,
+          provider.observations.usage.state === "unavailable" &&
+            `${name} usage`,
+          provider.observations.owner.state === "unavailable" &&
+            `${name} owner control`,
+        ].filter((fact): fact is string => typeof fact === "string");
+      });
+      if (unavailable.length > 0)
+        return [
+          {
+            model: identity,
+            narrowerThan,
+            pick: { state: "unknown", unavailable },
+          },
+        ];
+      const step = freshStandIn(chosen, facts, running, registry);
+      return [
+        {
+          model: identity,
+          narrowerThan,
+          pick: step.standIn
+            ? {
+                state: "stand-in",
+                runs: step.model,
+                reason: step.standIn.reason,
+                declined: step.declined,
+              }
+            : {
+                state: "chosen model",
+                runs: step.model,
+                chosenCannotLaunch: step.chosenCannotLaunch,
+                declined: step.declined,
+              },
+        },
+      ];
+    },
+  );
 }
 
 function withProblem(observation: Observation, problem: string): Observation {
@@ -950,6 +1087,7 @@ export function formatStatus(budget: LaunchBudget): string {
   return [
     `Observed ${budget.observedAt}; not a launch grant or reservation.`,
     `models=${JSON.stringify(budget.models)}`,
+    ...budget.narrowerModels.map(pickText),
     ...[
       { name: "host", ...budget.capacity.host },
       ...budget.capacity.repositories.map(({ repository, ...counts }) => ({
@@ -1009,4 +1147,43 @@ export function formatStatus(budget: LaunchBudget): string {
     ),
     `  problems=${JSON.stringify(budget.credentials.problems)}`,
   ].join("\n");
+}
+
+// One narrower model's pick: the model a fresh launch would run and why.
+function pickText({ model, pick }: NarrowerModel): string {
+  const prefix = `narrower ${model}:`;
+  if (pick.state === "unknown")
+    return `${prefix} pick unknown; unavailable: ${pick.unavailable.join(", ")}`;
+  const percent = (value: number) => Math.round(value * 10) / 10;
+  const runs = `runs ${pick.runs.provider}/${pick.runs.model}@${pick.runs.effort}`;
+  if (pick.state === "stand-in")
+    return `${prefix} ${runs}; stand-in: ${
+      pick.reason.kind === "spare usage"
+        ? `spare usage (${percent(pick.reason.used)}% used, ${percent(pick.reason.elapsed)}% elapsed)`
+        : `chosen provider cannot launch (${pick.reason.reason})`
+    }`;
+  const declined = pick.declined.map((entry) => {
+    switch (entry.kind) {
+      case "outside capabilities":
+        return `${entry.broader} is outside this host's capabilities (${entry.reason})`;
+      case "implemented the change":
+        return `${entry.broader} implemented the change`;
+      case "cannot launch":
+        return `${entry.broader} cannot launch (${entry.reason})`;
+      case "no spare usage": {
+        const spare = entry.spareUsage;
+        return spare.state === "unknown"
+          ? `${entry.broader} spare usage unknown (${spare.reason})`
+          : `${entry.broader} has no spare usage (${spare.reason}, ${percent(spare.pace.used)}% used, ${percent(spare.pace.elapsed)}% elapsed)`;
+      }
+    }
+  });
+  return `${prefix} ${runs}; chosen model: ${[
+    ...declined,
+    ...(pick.chosenCannotLaunch
+      ? [
+          `the chosen provider cannot launch either (${pick.chosenCannotLaunch})`,
+        ]
+      : []),
+  ].join("; ")}`;
 }

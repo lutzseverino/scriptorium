@@ -84,7 +84,10 @@ and nothing comes from environment variables.
     "default": "claude-sonnet-5-5",
     "retry": "claude-opus-5-5@xhigh",
     "metadata": {
-      "claude-sonnet-5-5": { "guidance": "Routine implementation and triage" },
+      "claude-sonnet-5-5": {
+        "guidance": "Routine implementation and triage",
+        "narrowerThan": ["codex/gpt-5.5"]
+      },
       "codex/gpt-5.5": {
         "guidance": "Complex implementation",
         "effort": "xhigh"
@@ -128,7 +131,7 @@ and nothing comes from environment variables.
 | `models.allowed`                        | Optional non-empty list of unique model names, without efforts. Every entry must resolve through a configured provider. Default and retry must be listed; provider and model are compared, ignoring effort. Without it, no membership check applies. |
 | `models.retry`                          | The model a failed first implement attempt retries on, unless the repository's model policy prefers another.                                                                                                                                         |
 | `models.effort`                         | Required nonempty host-wide reasoning effort. Each provider validates it wherever it is effective. There is no implicit adapter default.                                                                                                             |
-| `models.metadata`                       | Optional object keyed by model identity, with nonempty `guidance` and/or an `effort` override per entry. Metadata must stay within configured providers and `models.allowed`.                                                                        |
+| `models.metadata`                       | Optional object keyed by model identity, with nonempty `guidance`, an `effort` override and/or a [`narrowerThan`](#stand-ins) list per entry. Metadata must stay within configured providers and `models.allowed`.                                   |
 | `timeLimitMinutes`                      | How long a run may take before it is stopped, and its sandbox's idle limit.                                                                                                                                                                          |
 | `usage.drainThreshold`                  | The provider usage percentage, from 0 to 100, at or above which that provider claims no new issue, or `null` for none. See [usage thresholds](#usage-thresholds).                                                                                    |
 | `usage.pauseThreshold`                  | The provider usage percentage, from `usage.drainThreshold` to 100, at or above which that provider's running runs stop too, or `null` for none. Optional; the default is `null`.                                                                     |
@@ -419,8 +422,9 @@ selection), the chosen model's `models.metadata` override, then
 `models.effort`. This applies to every run kind, fallback and diversity
 alternative. The provider's accepted effort list still applies, including to
 later explicit selections. A valid per-model override shadows the host effort
-on that model. Metadata never selects a model, adds a provider, changes
-`models.allowed` or grants a capability.
+on that model. Metadata never adds a provider, changes `models.allowed` or
+grants a capability, and selects a model only as a declared narrower-than
+pair's [stand-in](#stand-ins).
 
 Metadata uses the resolver's canonical `<provider>/<model>` identity. Bare
 and qualified aliases are deduplicated; conflicting metadata is refused.
@@ -440,7 +444,7 @@ diversity. Per-issue factory review-model selection remains deferred.
 
 Each launch resolves its model in this order, and records the model and where
 it came from (`selection` in its run record: `issue-label`, `policy`,
-`host-default`, `fallback`, `diversity` or `recorded`):
+`host-default`, `fallback`, `diversity`, `stand-in` or `recorded`):
 
 - An initial implement attempt: the issue's model label, then the repository
   policy's `runKinds.implement.initial`, then `models.default`.
@@ -450,6 +454,16 @@ it came from (`selection` in its run record: `issue-label`, `policy`,
   then `models.triage` or `models.review`, then `models.default`.
 - A hand-back from review resolves as an initial implement attempt; an
   interrupted, paused or merge relaunch keeps the model it recorded.
+
+Every fresh choice then passes through these steps before it launches:
+
+```text
+choose the stage's model → review diversity → stand-in step
+  → availability and the policy's fallback → launch
+```
+
+A relaunch that keeps its recorded model skips the stand-in step, and keeps a
+stand-in it recorded.
 
 A stage preference of `{ "source": "issue-label" }` reuses the issue's model
 label, for example to keep retries on it; without a label that stage holds
@@ -508,6 +522,58 @@ when the repository has no model policy or its fallback is `host-default`, and
 that model is available on another provider. Otherwise it runs on its choice,
 and the log says provider diversity was unavailable. It never searches the
 host's models for another provider and never waits for diversity alone.
+
+### Stand-ins
+
+A host can declare that one model's suitable work is a subset of another's
+with `models.metadata.<model>.narrowerThan`, a non-empty list of broader models:
+
+```json
+"metadata": {
+  "claude-sonnet-5-5": { "narrowerThan": ["codex/gpt-5.5"] }
+}
+```
+
+Each entry must be a canonical `<provider>/<model>` identity without
+`@<effort>` or surrounding whitespace, on a configured provider and within
+`models.allowed`, and other than the model it is declared on. Declarations
+form no cycle, and each pair stands alone: a model narrower than one narrower
+than a third is not narrower than the third. Aliases of one model carry the
+same list or are refused as conflicting metadata. A broader model joins the
+catalog. The pair is the only setting; a host that declares none launches as
+before. [ADR 0009](../adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md)
+records why.
+
+A provider has **spare usage** while its fresh reading's longest window with
+both a length and a reset is used less than the percentage of that window
+already elapsed, and every shorter window it reports is below the configured
+drain threshold, which a host that sets none never reaches. Its usage is
+unknown, never spare, without a fresh reading or without such a window. The
+[launch budget](#read-only-launch-budget) shows each provider's `spareUsage`.
+
+The stand-in step takes the fresh choice and tries its declared broader
+models in declaration order. A broader model stands in, and launches with
+`selection: "stand-in"`, when its provider can launch now, under its cap, its
+usage hold and threshold and its owner hold, and either:
+
+- its provider has spare usage; or
+- the chosen model's provider cannot launch, and the broader provider has a
+  fresh reading below the configured drain threshold, which a reserve raise
+  does not lift.
+
+Otherwise the next one is tried, and without a stand-in the choice stands.
+A review never stands in onto the provider that implemented its change. The
+stand-in resolves its own effort, from its `models.metadata` override, then
+`models.effort`; an explicit effort on the chosen model does not carry over.
+The availability gate and the policy's `fallback` then apply to the model the
+step returned. The run record keeps the chosen identity and the reason as
+`standIn`, and the run comment says the chosen model and why a stand-in ran,
+with the numbers: `spare usage (30% used, 50% elapsed)`, or `chosen provider
+cannot launch` with the gate's reason.
+
+`scriptorium status` prints the same step's pick for each narrower model, so
+a hand launch runs what the factory would, as
+[Narrower models](#narrower-models) describes.
 
 ## Repository conventions
 
@@ -1881,7 +1947,8 @@ modification time establishes no daemon liveness. `unavailable` has `at: null`.
 ### JSON contract, version 1
 
 The command's JSON document has `version: 1`, `observedAt` (when inspection
-began), `capacity`, [`coverage`](#coverage), [`health`](#health), `models` and `providers`. Each
+began), `capacity`, [`coverage`](#coverage), [`health`](#health), `models`,
+[`narrowerModels`](#narrower-models) and `providers`. Each
 provider reuses the operational fields documented under
 [Status file](#status-file), with the following additions and unavailable
 representations. Its `observedAt` identifies the projection time, while the
@@ -1949,6 +2016,42 @@ the command cannot read it from `status.json`, `credentials.health` is
 `unknown`, `observedAt` is `null`, every fact is `unknown`, and `problems`
 names why. The command reads no credential copy and adds no staleness limit of
 its own.
+
+### Narrower models
+
+The top-level `narrowerModels` field lists each model the host declares
+narrower than another, in catalog order, with the model a fresh launch of it
+without diversity would run right now. The command runs the factory's own
+[stand-in step](#stand-ins) over the provider facts it projects: each
+provider's usage, live with `--live-usage`, its usage and owner holds, its
+reserve raise, its last-observed running work and its configured cap and
+thresholds. Implement capacity, which holds every provider alike, is left
+out. A host that declares no pair has an empty list and no text line. Each
+entry has `model`, its `narrowerThan` list and a `pick`:
+
+| `pick.state`   | Fields and meaning                                                                                                                                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stand-in`     | `runs`, the broader model with its resolved effort; `reason`, `{ "kind": "spare usage", "used", "elapsed" }` or `{ "kind": "chosen provider cannot launch", "reason" }`; and `declined`, for any broader model tried before it.                          |
+| `chosen model` | `runs`, the narrower model with its resolved effort; `chosenCannotLaunch`, the gate's reason when even the chosen model would wait, otherwise `null`; and `declined`, why each broader model did not stand in.                                           |
+| `unknown`      | `unavailable`, the facts this command cannot establish for a provider the step reads: `<provider> work`, `<provider> usage` or `<provider> owner control`. The command never guesses a pick from missing observations and never shows one as a stand-in. |
+
+Each `declined` entry names its `broader` model and its `kind`:
+`cannot launch` with the gate's `reason`; `no spare usage` with that
+provider's `spareUsage`, whose `unknown` state covers a stale or missing
+reading; or `outside capabilities` with the resolver's `reason`. Text renders
+one line per entry after `models=`:
+
+```text
+narrower codex/gpt-narrow: runs claude-code/claude-broad@xhigh; stand-in: spare usage (30% used, 50% elapsed)
+narrower codex/gpt-narrow: runs codex/gpt-narrow@high; chosen model: claude-code/claude-broad has no spare usage (over-pace, 60% used, 50% elapsed)
+narrower codex/gpt-narrow: runs codex/gpt-narrow@high; chosen model: claude-code/claude-broad spare usage unknown (no-fresh-reading)
+narrower codex/gpt-narrow: pick unknown; unavailable: codex work, claude-code work
+```
+
+The pick is advice for a hand launch labelled with the narrower model, never a
+launch grant: `launchPermission` stays `not-established`, and the factory
+decides again at its own launch. Its run kind's gates, repository policy and
+review diversity still apply there.
 
 Exit status is `0` for an observation (including unavailable facts), `1` for
 invalid or unreadable host configuration, and `2` for malformed arguments.

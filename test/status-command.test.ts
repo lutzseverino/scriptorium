@@ -15,7 +15,13 @@ import {
   type ConfigurationCoverage,
   type UnresolvedRun,
 } from "../src/status.ts";
-import type { Run } from "../src/factory.ts";
+import {
+  decideFactory,
+  type Issue,
+  type Run,
+  type Snapshot,
+} from "../src/factory.ts";
+import { createRegistry } from "../src/providers.ts";
 import { providerStatus } from "../src/events.ts";
 import { UsageReadError, type ReportedWindow } from "../src/providers/usage.ts";
 import { credentialHealth } from "../src/credentials.ts";
@@ -434,6 +440,438 @@ test("text and JSON show each provider's windows and its spare usage, or why it 
     .providers[0];
   assert.deepEqual(fallback.usage, { state: "known", reading });
   assert.deepEqual(fallback.spareUsage, { state: "yes", pace: pace(31) });
+});
+
+// A host that declares `codex/gpt-narrow` narrower than
+// `claude-code/claude-broad`, with each provider's usage, running work and
+// owner control written as a pass leaves them. Half of the week has elapsed
+// at `now`.
+type PairFacts = {
+  usage: Record<string, ReturnType<typeof weekly> | null>;
+  running?: Record<string, number>;
+  owners?: Snapshot["owners"];
+};
+
+function weekly(used: number, at = "2026-11-08T11:55:00.000Z") {
+  const reset = "2026-11-12T00:00:00.000Z";
+  return { used, at, reset, windows: [{ used, reset, minutes: 10080 }] };
+}
+
+const pairPolicy = {
+  drainThreshold: 90,
+  pauseThreshold: 95,
+  afterDrain: "auto-resume" as const,
+};
+
+function pairFixture(t: TestContext) {
+  const { path, state } = fixture(t);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  config.models = {
+    effort: "high",
+    default: "claude-sonnet-5-5",
+    retry: "claude-opus-5-5@xhigh",
+    metadata: {
+      "codex/gpt-narrow": { narrowerThan: ["claude-code/claude-broad"] },
+      "claude-code/claude-broad": { effort: "xhigh" },
+    },
+  };
+  writeFileSync(path, JSON.stringify(config));
+  mkdirSync(state);
+  const write = ({ usage, running = {}, owners = {} }: PairFacts) => {
+    const at = "2026-11-08T11:55:00.000Z";
+    const caps: Record<string, number> = { "claude-code": 2, codex: 1 };
+    writeFileSync(
+      join(state, "status.json"),
+      JSON.stringify({
+        updatedAt: at,
+        providers: Object.entries(caps).map(([provider, cap]) => ({
+          ...providerStatus(
+            provider,
+            at,
+            usage[provider] ?? null,
+            null,
+            owners[provider] ?? null,
+            pairPolicy,
+            running[provider] ?? 0,
+            0,
+          ),
+          counting: "non-ended-runs",
+          cap,
+          free: Math.max(0, cap - (running[provider] ?? 0)),
+          retained: 0,
+        })),
+      }),
+    );
+    writeFileSync(
+      join(state, "usage.json"),
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(caps).map((provider) => [
+            provider,
+            {
+              reading: usage[provider] ?? null,
+              hold: null,
+              nextRead: null,
+              failure: null,
+            },
+          ]),
+        ),
+      ),
+    );
+    writeFileSync(
+      join(state, "owner.json"),
+      JSON.stringify({
+        providers: Object.fromEntries(
+          Object.keys(caps).map((provider) => [
+            provider,
+            {
+              hold: owners[provider]?.hold ?? null,
+              reserve: owners[provider]?.reserve ?? null,
+              draining: false,
+            },
+          ]),
+        ),
+        applied: [],
+      }),
+    );
+  };
+  const read = async (extra: Partial<StatusPorts> = {}) => {
+    const live = extra.readUsage ? ["--live-usage"] : [];
+    const json = await command([path, "--json", ...live], extra);
+    assert.equal(json.code, 0, json.errors.join("\n"));
+    const text = await command([path, ...live], extra);
+    assert.equal(text.code, 0, text.errors.join("\n"));
+    const budget = JSON.parse(json.output[0]);
+    const lines = text.output[0]
+      .split("\n")
+      .filter((line) => line.startsWith("narrower "));
+    return { picks: budget.narrowerModels, lines, config };
+  };
+  return { path, state, write, read, config };
+}
+
+const narrow = { provider: "codex", model: "gpt-narrow", effort: "high" };
+const broad = {
+  provider: "claude-code",
+  model: "claude-broad",
+  effort: "xhigh",
+};
+const pace = (used: number) => ({
+  used,
+  minutes: 10080,
+  reset: "2026-11-12T00:00:00.000Z",
+  elapsed: 50,
+});
+
+test("text and JSON show a narrower model's stand-in or chosen model, with why, and unknown usage as unknown", async (t) => {
+  const { write, read } = pairFixture(t);
+  const entry = (pick: object) => [
+    {
+      model: "codex/gpt-narrow",
+      narrowerThan: ["claude-code/claude-broad"],
+      pick,
+    },
+  ];
+
+  // The broader provider has spare usage.
+  write({ usage: { codex: weekly(20), "claude-code": weekly(30) } });
+  let shown = await read();
+  assert.deepEqual(
+    shown.picks,
+    entry({
+      state: "stand-in",
+      runs: broad,
+      reason: { kind: "spare usage", used: 30, elapsed: 50 },
+      declined: [],
+    }),
+  );
+  assert.deepEqual(shown.lines, [
+    "narrower codex/gpt-narrow: runs claude-code/claude-broad@xhigh; stand-in: spare usage (30% used, 50% elapsed)",
+  ]);
+
+  // The chosen provider cannot launch; the broader one is over pace but
+  // below drain.
+  write({ usage: { codex: weekly(92), "claude-code": weekly(60) } });
+  shown = await read();
+  const drained = "codex usage 92% is at or above the 90% drain threshold";
+  assert.deepEqual(
+    shown.picks,
+    entry({
+      state: "stand-in",
+      runs: broad,
+      reason: { kind: "chosen provider cannot launch", reason: drained },
+      declined: [],
+    }),
+  );
+  assert.deepEqual(shown.lines, [
+    `narrower codex/gpt-narrow: runs claude-code/claude-broad@xhigh; stand-in: chosen provider cannot launch (${drained})`,
+  ]);
+
+  // The broader provider is over pace, and the chosen one can launch.
+  write({ usage: { codex: weekly(20), "claude-code": weekly(60) } });
+  shown = await read();
+  assert.deepEqual(
+    shown.picks,
+    entry({
+      state: "chosen model",
+      runs: narrow,
+      chosenCannotLaunch: null,
+      declined: [
+        {
+          broader: "claude-code/claude-broad",
+          kind: "no spare usage",
+          spareUsage: { state: "no", reason: "over-pace", pace: pace(60) },
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(shown.lines, [
+    "narrower codex/gpt-narrow: runs codex/gpt-narrow@high; chosen model: claude-code/claude-broad has no spare usage (over-pace, 60% used, 50% elapsed)",
+  ]);
+
+  // The broader provider runs its cap.
+  write({
+    usage: { codex: weekly(20), "claude-code": weekly(30) },
+    running: { "claude-code": 2 },
+  });
+  shown = await read();
+  const capped = "claude-code already runs its cap of 2 agents";
+  assert.deepEqual(
+    shown.picks,
+    entry({
+      state: "chosen model",
+      runs: narrow,
+      chosenCannotLaunch: null,
+      declined: [
+        {
+          broader: "claude-code/claude-broad",
+          kind: "cannot launch",
+          reason: capped,
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(shown.lines, [
+    `narrower codex/gpt-narrow: runs codex/gpt-narrow@high; chosen model: claude-code/claude-broad cannot launch (${capped})`,
+  ]);
+
+  // A stale broader reading is unknown usage, never spare, even while the
+  // chosen provider cannot launch.
+  write({
+    usage: {
+      codex: weekly(92),
+      "claude-code": weekly(10, "2026-11-08T11:39:59.000Z"),
+    },
+  });
+  shown = await read();
+  assert.deepEqual(
+    shown.picks,
+    entry({
+      state: "chosen model",
+      runs: narrow,
+      chosenCannotLaunch: drained,
+      declined: [
+        {
+          broader: "claude-code/claude-broad",
+          kind: "no spare usage",
+          spareUsage: { state: "unknown", reason: "no-fresh-reading" },
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(shown.lines, [
+    `narrower codex/gpt-narrow: runs codex/gpt-narrow@high; chosen model: claude-code/claude-broad spare usage unknown (no-fresh-reading); the chosen provider cannot launch either (${drained})`,
+  ]);
+
+  // A live read replaces that stale reading.
+  shown = await read({
+    readUsage: async (provider) =>
+      provider === "claude-code"
+        ? {
+            used: 25,
+            reset: "2026-11-12T00:00:00.000Z",
+            windows: [
+              { used: 25, reset: "2026-11-12T00:00:00.000Z", minutes: 10080 },
+            ],
+          }
+        : null,
+  });
+  assert.deepEqual(
+    shown.picks,
+    entry({
+      state: "stand-in",
+      runs: broad,
+      reason: { kind: "spare usage", used: 25, elapsed: 50 },
+      declined: [],
+    }),
+  );
+});
+
+test("a narrower model's pick is unknown while status cannot establish a fact the stand-in step reads", async (t) => {
+  const { state, write, read } = pairFixture(t);
+  write({ usage: { codex: weekly(20), "claude-code": weekly(30) } });
+  rmSync(join(state, "status.json"));
+  rmSync(join(state, "owner.json"));
+  const { picks, lines } = await read();
+  const unavailable = [
+    "codex work",
+    "codex owner control",
+    "claude-code work",
+    "claude-code owner control",
+  ];
+  assert.deepEqual(picks, [
+    {
+      model: "codex/gpt-narrow",
+      narrowerThan: ["claude-code/claude-broad"],
+      pick: { state: "unknown", unavailable },
+    },
+  ]);
+  assert.deepEqual(lines, [
+    `narrower codex/gpt-narrow: pick unknown; unavailable: ${unavailable.join(", ")}`,
+  ]);
+});
+
+test("the status pick and the factory's launch decision agree on one snapshot", async (t) => {
+  const { write, read, config } = pairFixture(t);
+  const registry = createRegistry(config.providers, config.models);
+  const now = "2026-11-08T12:00:00.000Z";
+  const owner = { kind: "user" as const, login: "owner", role: "admin" };
+  const ready: Issue = {
+    number: 4,
+    createdAt: "2026-11-01T00:00:00Z",
+    labels: ["state:ready", "model:gpt-narrow"],
+    ready: { at: "2026-11-01T00:00:00Z", actor: owner },
+    editedAt: null,
+    contractHold: null,
+    nativeParent: null,
+    latestLink: null,
+    linkAdditions: null,
+    subIssues: [],
+    blockedBy: [],
+  };
+  const cases: PairFacts[] = [
+    { usage: { codex: weekly(20), "claude-code": weekly(30) } },
+    { usage: { codex: weekly(92), "claude-code": weekly(60) } },
+    { usage: { codex: weekly(20), "claude-code": weekly(60) } },
+    {
+      usage: { codex: weekly(20), "claude-code": weekly(30) },
+      running: { "claude-code": 2 },
+    },
+    {
+      usage: { codex: weekly(20), "claude-code": weekly(30) },
+      owners: {
+        "claude-code": { hold: { since: now, used: 91 }, reserve: null },
+      },
+    },
+    {
+      usage: { "claude-code": weekly(60) },
+      owners: { codex: { hold: { since: now, used: 91 }, reserve: null } },
+    },
+  ];
+  for (const facts of cases) {
+    write(facts);
+    const [{ pick }] = (await read()).picks;
+    const runs: Run[] = Object.entries(facts.running ?? {}).flatMap(
+      ([provider, count]) =>
+        Array.from({ length: count }, (_, index) => ({
+          repository: "acme/gadgets",
+          issue: 90 + index,
+          provider,
+          model: provider === "codex" ? "gpt-narrow" : "claude-broad",
+          effort: "high",
+          continuation: { attempt: 1 },
+          startedAt: "2026-11-08T11:00:00Z",
+          log: `/srv/factory/logs/issue-${90 + index}.log`,
+          exited: false,
+          ended: null,
+        })),
+    );
+    const snapshot: Snapshot = {
+      now,
+      repositories: [
+        {
+          name: "acme/widgets",
+          configuration: {
+            version: 3,
+            labels: {
+              triage: "state:triage",
+              reporter: "state:reporter",
+              grill: "state:grill",
+              owner: "state:owner",
+              ready: "state:ready",
+              ownerReview: "gate:owner-review",
+              majorRelease: "gate:major-release",
+              running: "factory:running",
+              paused: "factory:paused",
+              failed: "factory:failed",
+              skip: "factory:skip",
+              hold: "factory:hold",
+              releaseHold: "factory:release-hold",
+            },
+            contractResult: {
+              marker: "repo-canon:issue-contract-state",
+              author: "github-actions[bot]",
+            },
+            modelLabelPrefix: "model:",
+            runKinds: {
+              implement: { skill: "implement", arguments: "#{issue}" },
+            },
+          },
+          authorization: { authorizedRoles: ["admin"], neverAuthorize: [] },
+          paused: null,
+          issues: [ready],
+          claims: [],
+          modelPolicy: null,
+        },
+      ],
+      runs,
+      usage: facts.usage,
+      holds: {},
+      owners: facts.owners ?? {},
+      settings: {
+        defaultModel: "claude-sonnet-5-5",
+        retryModel: "claude-opus-5-5@xhigh",
+        caps: { "claude-code": 2, codex: 1 },
+        drainThreshold: pairPolicy.drainThreshold,
+        pauseThreshold: pairPolicy.pauseThreshold,
+        timeLimitMinutes: 240,
+      },
+    };
+    const decisions = decideFactory(snapshot, registry);
+    const launch = decisions.find(
+      (decision) => decision.kind === "launch" && decision.issue === 4,
+    );
+    const label = JSON.stringify(facts);
+    if (pick.state === "chosen model" && pick.chosenCannotLaunch !== null) {
+      assert.equal(launch, undefined, label);
+      continue;
+    }
+    assert.ok(launch?.kind === "launch", label);
+    assert.deepEqual(
+      {
+        provider: launch.provider,
+        model: launch.model,
+        effort: launch.effort,
+        standIn: launch.standIn?.reason ?? null,
+      },
+      {
+        ...pick.runs,
+        standIn: pick.state === "stand-in" ? pick.reason : null,
+      },
+      label,
+    );
+  }
+});
+
+test("a host with no pair shows no narrower model and otherwise unchanged text", async (t) => {
+  const { path } = fixture(t);
+  const json = await command([path, "--json"]);
+  assert.deepEqual(JSON.parse(json.output[0]).narrowerModels, []);
+  const text = (await command([path])).output[0];
+  assert.doesNotMatch(text, /^narrower /m);
+  const lines = text.split("\n");
+  assert.ok(lines[1].startsWith("models="));
+  assert.ok(lines[2].startsWith("host: implement"));
 });
 
 test("a stopped host's old operational snapshot remains last-observed, including its owner hold", async (t) => {

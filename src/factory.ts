@@ -1206,7 +1206,6 @@ function admit(
 
 // Only direct, host-declared broader models are candidates, in declaration
 // order. The usual availability and fallback gates still own admission.
-// Seam (deferred): the stand-in choice; consumers: 1 (status planned in #194); extract at 3.
 function chooseStandIn(
   choice: Choice,
   implementedBy: string | null,
@@ -1214,46 +1213,129 @@ function chooseStandIn(
   models: Models,
   available: (model: Model) => string | null,
 ): Choice {
-  const chosen = `${choice.model.provider}/${choice.model.model}`;
+  const step = standInStep(
+    choice.model,
+    implementedBy,
+    snapshot,
+    models,
+    available,
+  );
+  return step.standIn
+    ? { model: step.model, selection: "stand-in", standIn: step.standIn }
+    : choice;
+}
+
+// Why a declared broader model did not stand in.
+export type NoStandIn = { broader: string } & (
+  | { kind: "outside capabilities"; reason: string }
+  | { kind: "implemented the change" }
+  | { kind: "cannot launch"; reason: string }
+  | {
+      kind: "no spare usage";
+      spareUsage: Exclude<SpareUsage, { state: "yes" }>;
+    }
+);
+
+// The model the stand-in step runs: the first broader model that stands in,
+// or else the chosen one, with why its chosen model cannot launch and why
+// each broader model before it did not stand in.
+export type StandInStep = {
+  model: Model;
+  standIn: StandIn | null;
+  chosenCannotLaunch: string | null;
+  declined: NoStandIn[];
+};
+
+// The provider facts a launch gate reads.
+export type ProviderFacts = Pick<
+  Snapshot,
+  "now" | "usage" | "holds" | "owners"
+> & { settings: Pick<Settings, "caps" | "drainThreshold" | "pauseThreshold"> };
+
+// A broader model stands in when its provider can launch and has spare usage,
+// or, when the chosen provider cannot launch, a fresh reading below the
+// configured drain threshold.
+// Seam (deferred): the stand-in choice; consumers: 2 (admission, status); extract at 3.
+function standInStep(
+  chosen: Model,
+  implementedBy: string | null,
+  facts: ProviderFacts,
+  models: Models,
+  available: (model: Model) => string | null,
+): StandInStep {
+  const identity = `${chosen.provider}/${chosen.model}`;
   const broaderModels =
-    models.modelFacts.catalog.find((entry) => entry.identity === chosen)
+    models.modelFacts.catalog.find((entry) => entry.identity === identity)
       ?.narrowerThan ?? [];
-  const unavailable = available(choice.model);
-  for (const identity of broaderModels) {
-    const broader = models.resolveModel(identity);
-    if (
-      "error" in broader ||
-      broader.provider === implementedBy ||
-      available(broader) !== null
-    )
+  const unavailable = available(chosen);
+  const declined: NoStandIn[] = [];
+  for (const broaderIdentity of broaderModels) {
+    const broader = models.resolveModel(broaderIdentity);
+    const at = { broader: broaderIdentity };
+    if ("error" in broader) {
+      declined.push({
+        ...at,
+        kind: "outside capabilities",
+        reason: broader.error,
+      });
       continue;
-    const reading = snapshot.usage[broader.provider] ?? null;
-    const spare = spareUsage(
-      reading,
-      snapshot.now,
-      snapshot.settings.drainThreshold,
-    );
-    const reason: StandIn["reason"] | null =
-      spare.state === "yes"
-        ? {
-            kind: "spare usage",
-            used: spare.pace.used,
-            elapsed: spare.pace.elapsed,
-          }
-        : unavailable &&
-            reading &&
-            (snapshot.settings.drainThreshold === null ||
-              reading.used < snapshot.settings.drainThreshold)
-          ? { kind: "chosen provider cannot launch", reason: unavailable }
-          : null;
-    if (reason)
-      return {
-        model: broader,
-        selection: "stand-in",
-        standIn: { chosen, reason },
-      };
+    }
+    if (broader.provider === implementedBy) {
+      declined.push({ ...at, kind: "implemented the change" });
+      continue;
+    }
+    const blocked = available(broader);
+    if (blocked !== null) {
+      declined.push({ ...at, kind: "cannot launch", reason: blocked });
+      continue;
+    }
+    const reading = facts.usage[broader.provider] ?? null;
+    const spare = spareUsage(reading, facts.now, facts.settings.drainThreshold);
+    const standIn = (reason: StandIn["reason"]): StandInStep => ({
+      model: broader,
+      standIn: { chosen: identity, reason },
+      chosenCannotLaunch: unavailable,
+      declined,
+    });
+    if (spare.state === "yes")
+      return standIn({
+        kind: "spare usage",
+        used: spare.pace.used,
+        elapsed: spare.pace.elapsed,
+      });
+    if (
+      unavailable &&
+      reading &&
+      (facts.settings.drainThreshold === null ||
+        reading.used < facts.settings.drainThreshold)
+    )
+      return standIn({
+        kind: "chosen provider cannot launch",
+        reason: unavailable,
+      });
+    declined.push({ ...at, kind: "no spare usage", spareUsage: spare });
   }
-  return choice;
+  return {
+    model: chosen,
+    standIn: null,
+    chosenCannotLaunch: unavailable,
+    declined,
+  };
+}
+
+// The stand-in step for a fresh launch of `chosen` without diversity, over
+// the providers' facts alone, as `status` shows it to hand launches: each
+// provider's cap, holds and drain threshold gate it. Implement capacity, which
+// holds every provider alike, is left out.
+export function freshStandIn(
+  chosen: Model,
+  facts: ProviderFacts,
+  running: ReadonlyMap<string, number>,
+  models: Models,
+): StandInStep {
+  return standInStep(chosen, null, facts, models, (model) =>
+    gate(model.provider, running, facts, "drain"),
+  );
 }
 
 // Every implement continuation acquires both budgets at the same gate,
@@ -1512,7 +1594,7 @@ type HighUsage = {
 
 function highUsage(
   provider: string,
-  snapshot: Snapshot,
+  snapshot: ProviderFacts,
   thresholds: HighUsage["thresholds"] = snapshot.settings,
 ): HighUsage | null {
   const inForce = usageInForce(
@@ -1526,7 +1608,7 @@ function highUsage(
 
 function described(
   { threshold, usage, hold, thresholds }: HighUsage,
-  settings: Settings,
+  settings: Pick<Settings, "drainThreshold">,
 ) {
   const percent =
     threshold === "pause"
@@ -1574,8 +1656,8 @@ function mergeTarget(
 // hold to be lifted.
 function gate(
   provider: string,
-  running: Map<string, number>,
-  snapshot: Snapshot,
+  running: ReadonlyMap<string, number>,
+  snapshot: ProviderFacts,
   stops: Threshold,
 ): string | null {
   const { settings } = snapshot;
