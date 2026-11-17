@@ -5275,7 +5275,12 @@ test("a run exit holds every exhausted repository, stops its reads across restar
   );
   run.github.quotas["acme/widgets"] = { remaining: 5000 };
   run.clock.now = new Date("2026-10-09T12:05:00Z");
+  const reset = run.github.calls.length;
   const decisions = await restarted.tick();
+  // acme/gadgets keeps its own, later deadline.
+  assert.ok(
+    run.github.calls.slice(reset).every((call) => call[0] !== "acme/gadgets"),
+  );
   const launch = decisions.find(
     (decision) =>
       decision.kind === "launch" && decision.repository === "acme/widgets",
@@ -5290,6 +5295,13 @@ test("a run exit holds every exhausted repository, stops its reads across restar
   );
   assert.equal(widgets().state, "running");
   assert.equal(widgets().pass.failingSince, null);
+  run.github.quotas["acme/gadgets"] = { remaining: 5000 };
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  const gadgets = run.github.calls.length;
+  await restarted.tick();
+  assert.ok(
+    run.github.calls.slice(gadgets).some((call) => call[0] === "acme/gadgets"),
+  );
 });
 
 test("a host rateLimited read probes all repositories before admission and observes errors caught inside projection", async (t) => {

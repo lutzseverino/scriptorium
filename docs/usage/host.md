@@ -1324,8 +1324,8 @@ was told, so later passes and restarts don't repeat it.
 The run relaunches like an [interrupted run](#restarts): as the same attempt,
 with the same model, effort, prompt, retry context and log, on its
 `factory/issue-<n>` branch, so an agent that was babysitting a pull request
-resumes on it. A GitHub rate-limit pause waits for its repository's quota
-deadline; unknown provider usage adds no wait, while a provider usage hold or
+resumes on it. A run paused for a GitHub rate limit waits for its
+repository's quota deadline; unknown provider usage adds no wait, while a provider usage hold or
 high reading still applies. At most three same-attempt relaunches are allowed
 for a GitHub rate limit; the next such ending is an ordinary failure through
 the existing outcome and retry rules. The counter survives restarts and
