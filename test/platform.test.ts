@@ -45,7 +45,7 @@ function github(
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const request =
       url.pathname === "/graphql"
-        ? /^query (\w+)/.exec(body.query)![1]
+        ? /^(?:query|mutation) (\w+)/.exec(body.query)![1]
         : `${init?.method ?? "GET"} ${url.pathname}`;
     // Existing platform fixtures use a verified pre-cutoff repository. Body
     // protocol transport is exercised by the dedicated publication fixture.
@@ -2058,6 +2058,65 @@ test("PR inventory includes every page and preserves labels, draft state, author
   assert.equal(observation.mergeCandidate?.draft, true);
   assert.deepEqual(observation.ownedPullRequests, [42]);
   assert.ok(!requests.includes("PosternClosingPullRequests"));
+});
+
+test("a ready PR returns to draft by its node ID, and a refused or unconfirmed conversion fails", async () => {
+  const pullRequest = {
+    number: 42,
+    fullDatabaseId: "42",
+    id: "PR_42",
+    url: "https://github.com/acme/widgets/pull/42",
+    state: "OPEN",
+    title: "Decision",
+    body: "The specification",
+    createdAt: "2026-10-01T00:00:00Z",
+    author: { __typename: "User", login: "owner" },
+    headRefName: "grill/design",
+    headRefOid: "a".repeat(40),
+    baseRefName: "main",
+    isCrossRepository: false,
+    repository: { nameWithOwner: "acme/widgets" },
+  };
+  for (const converted of [
+    { data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } },
+    {
+      data: { convertPullRequestToDraft: null },
+      errors: [
+        {
+          type: "FORBIDDEN",
+          message: "Resource not accessible by integration",
+        },
+      ],
+    },
+    {
+      data: { convertPullRequestToDraft: { pullRequest: { isDraft: false } } },
+    },
+  ]) {
+    const ids: string[] = [];
+    const { connection, requests } = github((request, body) => {
+      if (request === "PosternPullRequest")
+        return {
+          status: 200,
+          data: { data: { repository: { pullRequest } } },
+        };
+      if (request === "FactoryPullRequestToDraft") {
+        ids.push(body.variables.id);
+        return { status: 200, data: converted };
+      }
+    });
+    const conversion = repositoryPlatform(
+      connection,
+      configuration,
+    ).returnToDraft(42);
+    if (converted.data.convertPullRequestToDraft?.pullRequest.isDraft)
+      await conversion;
+    else await assert.rejects(conversion, { reason: "invalidResponse" });
+    assert.deepEqual(requests, [
+      "PosternPullRequest",
+      "FactoryPullRequestToDraft",
+    ]);
+    assert.deepEqual(ids, ["PR_42"]);
+  }
 });
 
 test("incomplete or unreadable PR inventories never become trusted draft triggers", async () => {
