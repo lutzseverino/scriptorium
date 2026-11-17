@@ -1421,6 +1421,9 @@ export function createHost(
         forget(decision);
         return;
       case "claim":
+        // Before the claim, so a refused write leaves the PR unclaimed.
+        if (decision.returnToDraft)
+          await platform.returnToDraft(decision.returnToDraft);
         await platform.transition(decision.issue, "claim");
         return;
       case "launch":

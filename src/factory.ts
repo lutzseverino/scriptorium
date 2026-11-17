@@ -307,7 +307,12 @@ export type Launch = {
 };
 
 export type Decision = { repository: string; issue: number } & (
-  | { kind: "claim" }
+  | {
+      kind: "claim";
+      // A ready PR claimed for review returns to draft first, so the
+      // review's draft-only hand-back, failure and grill stop apply to it.
+      returnToDraft?: number;
+    }
   | { kind: "close"; tickets: IssueId[] }
   | Launch
   | { kind: "skip"; reason: string; hold?: HoldKey }
@@ -730,6 +735,8 @@ type Admission = {
   launch: Continuation;
   claim: boolean;
   unpause: boolean;
+  // A ready PR the review claims independently, which returns to draft first.
+  returnToDraft?: number;
 };
 
 function continuation(
@@ -979,6 +986,11 @@ function continuation(
         : state.kind !== "fresh" &&
           state.kind !== "triage" &&
           issue.labels.includes(labels.paused),
+    ...(externalReview &&
+      !resumed &&
+      !issue.pullRequest!.draft && {
+        returnToDraft: issue.pullRequest!.target.number,
+      }),
   };
 }
 
@@ -1198,7 +1210,15 @@ function admit(
     continuation: next.launch,
   });
   return [
-    ...(next.claim ? [{ kind: "claim" as const, ...at }] : []),
+    ...(next.claim
+      ? [
+          {
+            kind: "claim" as const,
+            ...at,
+            ...(next.returnToDraft && { returnToDraft: next.returnToDraft }),
+          },
+        ]
+      : []),
     ...(next.unpause ? [{ kind: "unpause" as const, ...at }] : []),
     {
       kind: "launch",

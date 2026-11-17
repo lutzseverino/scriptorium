@@ -1923,6 +1923,18 @@ test("trusted unowned draft and ready PRs start review with and without linked i
       assert.equal(review?.continuation.runKind, "review");
       assert.equal(review?.issue, 42);
       assert.equal(review?.continuation.target?.number, 42);
+      // A ready PR returns to draft, so the review's draft-only endings apply.
+      assert.deepEqual(
+        decide({ issues: [candidate] }).find(
+          (decision) => decision.kind === "claim",
+        ),
+        {
+          kind: "claim",
+          repository: widgets,
+          issue: 42,
+          ...(!draft && { returnToDraft: 42 }),
+        },
+      );
       for (const details of [
         { author: { kind: "user", login: "outsider", role: null } as Actor },
         { author: { kind: "bot", login: "app[bot]" } as Actor },

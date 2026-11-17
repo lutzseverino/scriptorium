@@ -619,6 +619,42 @@ export function repositoryPlatform(
       }
     },
 
+    // Returns a ready PR to draft through the authenticated transport, since
+    // Postern has no draft port. Postern's PR read supplies its node ID.
+    // https://docs.github.com/en/graphql/reference/mutations#convertpullrequesttodraft
+    async returnToDraft(number: number): Promise<void> {
+      const { nodeId } = await pullRequests.pullRequest(number);
+      if (!nodeId)
+        throw new PlatformError(
+          "invalidResponse",
+          "Pull request node ID could not be read",
+        );
+      const response = await access.request({
+        method: "POST",
+        path: "/graphql",
+        body: {
+          query: `mutation FactoryPullRequestToDraft($id: ID!) {
+            convertPullRequestToDraft(input: { pullRequestId: $id }) { pullRequest { isDraft } }
+          }`,
+          variables: { id: nodeId },
+        },
+      });
+      const result = response.data as {
+        errors?: unknown;
+        data?: {
+          convertPullRequestToDraft?: { pullRequest?: { isDraft?: unknown } };
+        };
+      } | null;
+      if (
+        result?.errors ||
+        result?.data?.convertPullRequestToDraft?.pullRequest?.isDraft !== true
+      )
+        throw new PlatformError(
+          "invalidResponse",
+          "Pull request could not be returned to draft",
+        );
+    },
+
     // The repository's open issues. The role of each ready label's latest
     // actor is read once per account per call, which a pass makes once. A
     // time the platform doesn't offer is null, never invented.

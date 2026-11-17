@@ -749,6 +749,30 @@ function fakePlatform(
               },
             };
           }
+          if (body.query.includes("FactoryPullRequestToDraft")) {
+            const { id } = body.variables as unknown as { id: string };
+            await request("toDraft", id);
+            const pr = state[repository]
+              .flatMap((issue) => [
+                ...issue.branchPullRequests,
+                ...issue.pullRequests,
+              ])
+              .find(
+                (pr): pr is PullRequest =>
+                  typeof pr !== "string" && pr.nodeId === id,
+              );
+            assert.ok(pr, `PR ${id} exists`);
+            drafts.add(pr.number);
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  convertPullRequestToDraft: { pullRequest: { isDraft: true } },
+                },
+              },
+            };
+          }
           if (body.query.includes("FactoryGatedPullRequests")) {
             const { label } = body.variables as unknown as { label: string };
             await request("gated", label);
@@ -8767,6 +8791,8 @@ for (const draft of [true, false])
       remotes: { "acme/widgets": bare },
     });
     if (draft) run.github.drafts.add(42);
+    const toDraft = () =>
+      run.github.calls.filter(([, operation]) => operation === "toDraft");
     await run.tick();
     assert.equal(run.launched.length, 1, run.reports.join("\n"));
     assert.equal(invocation(run.launched[0].options.prompt), "/review #42");
@@ -8774,8 +8800,12 @@ for (const draft of [true, false])
       run.launched[0].options.prompt!,
       /no linked issue, use the PR body as the Spec source/,
     );
+    // A ready PR's review starts on a draft, as an implemented PR's does.
+    assert.ok(run.github.drafts.has(42));
+    assert.equal(toDraft().length, draft ? 0 : 1);
     // The PR predates this launch and is on a non-factory branch: its explicit
-    // target still survives interruption, even after it is marked ready.
+    // target still survives interruption, even after it is marked ready,
+    // which its relaunch keeps.
     run.interrupt();
     run.github.drafts.delete(42);
     const restarted = run.restart();
@@ -8783,7 +8813,93 @@ for (const draft of [true, false])
     assert.equal(run.launched.length, 2, run.reports.join("\n"));
     assert.equal(invocation(run.launched[1].options.prompt), "/review #42");
     assert.equal(recordOf(run.state, 42, 1).continuation.target.number, 42);
+    assert.ok(!run.github.drafts.has(42));
+    assert.equal(toDraft().length, draft ? 0 : 1);
   });
+
+test("a ready PR's unheld independent review hands back on the same PR, and a held one awaits merge", async (t) => {
+  for (const held of [false, true]) {
+    const bare = remote(t, kindsFiles);
+    const pr = {
+      ...publishedPR(bare, "grill/domain"),
+      number: 42,
+      nodeId: "PR_42",
+      body: "Record the chosen design",
+      author: { login: "owner", bot: false },
+    };
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 42,
+            isPullRequest: true,
+            labels: [],
+            branchPullRequests: [pr],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    assert.equal(invocation(run.launched[0].options.prompt), "/review #42");
+    assert.ok(run.github.drafts.has(42));
+    // A holding review marks its PR ready; a hand-back leaves it a draft.
+    if (held) run.github.drafts.delete(42);
+    run.launched[0].finish();
+    await run.drain();
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 42);
+    if (held) {
+      assert.equal(run.launched.length, 1, run.reports.join("\n"));
+      assert.match(runComment(issue), /Merge: awaiting merge/);
+      continue;
+    }
+    assert.equal(run.launched.length, 2, run.reports.join("\n"));
+    const handBack = run.launched[1].options.prompt!;
+    assert.equal(invocation(handBack), "/implement #42");
+    assert.match(
+      handBack,
+      /Review hand-back: the latest review of PR #42 handed the work back \(hand-back 1 of at most 2\)/,
+    );
+    assert.equal(recordOf(run.state, 42, 1).continuation.handBacks, 1);
+    assert.deepEqual(notices(issue), []);
+  }
+});
+
+test("a refused draft write leaves the ready PR unclaimed, and a later pass returns it to draft and launches its review", async (t) => {
+  const bare = remote(t, kindsFiles);
+  const pr = {
+    ...publishedPR(bare, "grill/domain"),
+    number: 42,
+    author: { login: "owner", bot: false },
+  };
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 42,
+          isPullRequest: true,
+          labels: [],
+          branchPullRequests: [pr],
+        },
+      ],
+    },
+    remotes: { "acme/widgets": bare },
+  });
+  run.github.failedRequests.set(
+    "acme/widgets toDraft",
+    new PlatformError("forbidden", "Resource not accessible by integration"),
+  );
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.ok(!run.github.drafts.has(42));
+  assert.deepEqual(run.github.find("acme/widgets", 42).labels, []);
+  run.github.failedRequests.delete("acme/widgets toDraft");
+  await run.tick();
+  assert.equal(run.launched.length, 1, run.reports.join("\n"));
+  assert.equal(invocation(run.launched[0].options.prompt), "/review #42");
+  assert.ok(run.github.drafts.has(42));
+});
 
 test("an independent review's answered stop resumes review on its PR after its label goes, across a restart", async (t) => {
   const bare = remote(t, kindsFiles);
