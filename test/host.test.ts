@@ -8898,7 +8898,7 @@ test("a carried triage result cites its carrier quietly and removing its label s
   const body = "Carried by https://github.com/acme/widgets/issues/3.";
   assert.match(
     run.launched[0].options.prompt!,
-    /Use "settled-elsewhere" when another record or ticket carries the request's fate; cite that carrier in "body"/,
+    /A stop asks for "state" "settled-elsewhere" when another record or ticket carries the request's fate, citing that carrier in "body"/,
   );
   run.launched[0].finish(undefined, undefined, {
     outcome: "stop",

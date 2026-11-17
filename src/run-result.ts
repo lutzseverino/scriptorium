@@ -56,10 +56,18 @@ export function resultFamilies(
     : [];
 }
 
-// The states a stop may ask for: every stop but triage's own.
-function stopStates(configuration: FactoryConfiguration): string[] {
+// The states a stop of the kind may ask for: every stop but triage's own, and
+// the carried state only for triage, whose dispositions records settle.
+function stopStates(
+  configuration: FactoryConfiguration,
+  kind: RunKindName,
+): string[] {
   const { labels } = configuration;
-  return stopLabels(labels).filter((label) => label !== labels.triage);
+  return stopLabels(labels).filter(
+    (label) =>
+      label !== labels.triage &&
+      (label !== labels.carried || kind === "triage"),
+  );
 }
 
 // Reads the result the run left at `path`, validated for its kind.
@@ -142,7 +150,7 @@ export function parseRunResult(
     return invalid("fails without a reason");
   const states =
     outcome === "stop"
-      ? stopStates(configuration)
+      ? stopStates(configuration, kind)
       : outcome === "done" && kind === "triage"
         ? [configuration.labels.ready]
         : [];
@@ -311,7 +319,11 @@ export function resultGuidance(
   configuration: FactoryConfiguration,
   kind: RunKindName,
 ): string {
-  const stops = stopStates(configuration).map((label) => JSON.stringify(label));
+  const { carried } = configuration.labels;
+  const stops = stopStates(configuration, kind);
+  const answered = stops
+    .filter((label) => label !== carried)
+    .map((label) => JSON.stringify(label));
   const families = resultFamilies(configuration, kind).map((family) =>
     JSON.stringify(family),
   );
@@ -323,14 +335,14 @@ export function resultGuidance(
           `A done result asks for "state" ${JSON.stringify(configuration.labels.ready)}, the readiness the brief carries.`,
         ]
       : []),
-    ...(stops.length
+    ...(answered.length
       ? [
-          `A stop asks for "state", ${configuration.labels.carried ? "a configured stop label" : "the label of whoever must answer"}: ${stops.join(", ")}.`,
+          `A stop asks for "state", the label of whoever must answer: ${answered.join(", ")}.`,
         ]
       : []),
-    ...(configuration.labels.carried
+    ...(carried && stops.includes(carried)
       ? [
-          `Use ${JSON.stringify(configuration.labels.carried)} when another record or ticket carries the request's fate; cite that carrier in "body". This stop asks nobody for an answer.`,
+          `A stop asks for "state" ${JSON.stringify(carried)} when another record or ticket carries the request's fate, citing that carrier in "body"; it asks nobody for an answer.`,
         ]
       : []),
     families.length

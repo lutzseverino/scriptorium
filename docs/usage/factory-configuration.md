@@ -229,20 +229,21 @@ checks:
 - **A hand-back** starts implement on the same PR when a review ends with its
   PR still a draft, at most twice; a review that would hand back a third time
   fails the issue.
-- **A stop**: a run whose result stops in the reporter, grill, owner or carried state,
-  or that ends with the issue in the triage, reporter, grill, owner or carried state,
-  releases its claim and leaves the issue there. Returning the
-  issue to `labels.ready` resumes the same work and PR on a current base, with
-  the same guidance version 2 gives a needs-input resume. A review that
-  stopped with its PR marked ready resumes as review.
+- **A stop**: a run whose result stops in the reporter, grill, owner or
+  carried state, or that ends with the issue in the triage, reporter, grill,
+  owner or carried state, releases its claim and leaves the issue there.
+  Returning the issue to `labels.ready` resumes the same work and PR on a
+  current base, with the same guidance version 2 gives a needs-input resume. A
+  review that stopped with its PR marked ready resumes as review.
 - **Carried**: `labels.carried` is an optional stop for a request whose fate
   another record or ticket settles: a change already on the default branch,
   a duplicate, the ticket whose pull request closes it, or a past rejection
   it adds nothing to. A triage result asks for that configured label with
-  `outcome: "stop"` and cites the carrier in its `body`. The run comment keeps
-  that citation, mentions nobody and posts no action comment. The issue is
-  excluded as "carried by another record or ticket" and is never claimed.
-  Removing the carried label starts nothing; a new trusted trigger is needed.
+  `outcome: "stop"` and cites the carrier in its `body`; no other run kind
+  may. The run comment keeps that citation, mentions nobody and posts no
+  action comment. The issue is excluded as "carried by another record or
+  ticket" and is never claimed. Removing the carried label starts nothing; a
+  new trusted trigger is needed.
 - **A gate**: with a gate label on the issue or its PR, review stops at
   ready-to-merge and moves the issue to the owner state. Once no gate label
   remains on either, the factory claims the issue again and restarts review to
@@ -600,15 +601,15 @@ syntax. These are the only names for each comment:
 | `close`  | `tickets`                                                                                                                                                                                     |
 
 For `run`, `status` is the pass's state: `in progress`, `paused`,
-`waiting for an answer`, `awaiting merge`, `merged` or `failed`. Each phase,
-`triage`, `implement`, `review` and `merge`, is present while it shows:
-implement and merge always, review once the repository turns it on, and
-triage once it ran in the pass. Within a phase, `check` is `x` once it is
+`waiting for an answer`, `carried`, `awaiting merge`, `merged` or `failed`.
+Each phase, `triage`, `implement`, `review` and `merge`, is present while it
+shows: implement and merge always, review once the repository turns it on,
+and triage once it ran in the pass. Within a phase, `check` is `x` once it is
 done or merged and a space otherwise; `state` is `running`, `paused`, `done`,
-`stopped`, `failed`, `awaiting merge` or `merged`, empty before it starts;
-`reason` is the pause's cause, the failure, why the run ended while its pull
-request awaits merge, or the state label a stop waits in; and `reset` is the
-pause's reset. `provider`, `model`, `effort`, `attempt` and `round` are the
+`stopped`, `carried`, `failed`, `awaiting merge` or `merged`, empty before it
+starts; `reason` is the pause's cause, the failure, why the run ended while
+its pull request awaits merge, or the state label a stop waits in; and `reset`
+is the pause's reset. `provider`, `model`, `effort`, `attempt` and `round` are the
 facts of the phase's latest run, `round` only for review and its hand-backs;
 `link` is its run result's comment; and `unpushable` lists the paths the
 factory cannot push. A merge phase has run facts only for a merge relaunch.
