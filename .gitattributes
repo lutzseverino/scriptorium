@@ -8,4 +8,6 @@ operations/lib/rendered-markdown.mjs linguist-vendored
 .agents/skills/review/** linguist-vendored
 .agents/skills/triage/** linguist-vendored
 .agents/skills/diagnosing-bugs/** linguist-vendored
+operations/lib/factory-labels.mjs linguist-vendored
+operations/lib/canonical-labels.mjs linguist-vendored
 # END Repo Canon linguist-vendored
