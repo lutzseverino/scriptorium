@@ -231,6 +231,11 @@ function fakePlatform(
   const failedRemovals = new Map<string, Error>();
   // Requests that fail, as `<owner>/<name> <operation>`.
   const failedRequests = new Map<string, Error>();
+  const quotas: Record<string, { remaining: number; reset?: number } | Error> =
+    {};
+  const quotaHeaders: Record<string, Record<string, string>> = {};
+  const graphqlQuotas: Record<string, { remaining: number; reset?: number }> =
+    {};
 
   const latest = (items: TimelineEvent[]) =>
     items
@@ -609,6 +614,23 @@ function fakePlatform(
           return viewer;
         },
         async request(options) {
+          if (options.path === "/rate_limit") {
+            await request("quota");
+            const quota = quotas[repository] ?? { remaining: 5000 };
+            if (quota instanceof Error) throw quota;
+            return {
+              status: 200,
+              headers: quotaHeaders[repository] ?? {},
+              data: {
+                resources: {
+                  core: quota,
+                  ...(graphqlQuotas[repository] && {
+                    graphql: graphqlQuotas[repository],
+                  }),
+                },
+              },
+            };
+          }
           if (options.path === `/repos/${repository}`)
             return {
               status: 200,
@@ -929,6 +951,9 @@ function fakePlatform(
     refused,
     failedRemovals,
     failedRequests,
+    quotas,
+    quotaHeaders,
+    graphqlQuotas,
     calls,
     labels,
     viewers,
@@ -5179,6 +5204,419 @@ function assertPaused(issue: { comments: string[] }, line = pausedLine) {
   assert.match(runComment(issue), /^\*\*Factory run: paused\*\*\n/);
   assert.ok(runComment(issue).includes(line), runComment(issue));
 }
+
+test("a run exit holds every exhausted repository, stops its reads across restart, and resumes the same attempt at its reset", async (t) => {
+  const names = ["acme/widgets", "acme/gadgets", "other/tools"];
+  const run = host(t, {
+    repositories: Object.fromEntries(
+      names.map((name) => [name, [{ number: 4 }]]),
+    ),
+    remotes: Object.fromEntries(
+      names.map((name) => [name, remote(t, factoryFiles)]),
+    ),
+    caps: { "claude-code": 3, codex: 1 },
+  });
+  await run.tick();
+  run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+  run.github.quotas["acme/gadgets"] = { remaining: 0, reset: 1791547800 };
+  run.launched
+    .find((launch) => launch.options.name === "acme/widgets#4")!
+    .finish(undefined, undefined, {
+      outcome: "stop",
+      state: "factory:needs-input",
+      body: "GitHub API rate limit exceeded. Resume after reset.",
+    });
+  await until(
+    () =>
+      recordOf(run.state, 4, 1).ended?.paused?.cause === "GitHub rate limit",
+  );
+  await settled();
+  assert.deepEqual(
+    run.github.calls
+      .filter((call) => call[1] === "quota")
+      .map((call) => call[0]),
+    names,
+  );
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
+  assertPaused(
+    issue,
+    "- [ ] Implement: paused (GitHub rate limit, resets 2026-10-09T12:05:00.000Z) · `claude-code/claude-sonnet-5-5@high`, attempt 1\n",
+  );
+  const before = run.github.calls.length;
+  await run.tick();
+  assert.ok(
+    run.github.calls.slice(before).every((call) => call[0] === "other/tools"),
+  );
+  // The held pass is a host pause, so it fails the pass until the reset.
+  const widgets = () =>
+    run
+      .status()
+      .repositories.find(
+        (entry: { repository: string }) => entry.repository === "acme/widgets",
+      );
+  const quotaReason =
+    "GitHub rate limit; quota held until 2026-10-09T12:05:00.000Z";
+  assert.equal(widgets().state, "paused");
+  assert.equal(widgets().cause, "host");
+  assert.equal(widgets().reason, quotaReason);
+  assert.deepEqual(widgets().configuration, {
+    state: "not-read",
+    problem: quotaReason,
+  });
+  assert.equal(widgets().pass.failure, quotaReason);
+  assert.ok(widgets().pass.failingSince);
+  run.interrupt();
+  const restarted = run.restart();
+  const after = run.github.calls.length;
+  await restarted.tick();
+  assert.ok(
+    run.github.calls.slice(after).every((call) => call[0] === "other/tools"),
+  );
+  run.github.quotas["acme/widgets"] = { remaining: 5000 };
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  const reset = run.github.calls.length;
+  const decisions = await restarted.tick();
+  // acme/gadgets keeps its own, later deadline.
+  assert.ok(
+    run.github.calls.slice(reset).every((call) => call[0] !== "acme/gadgets"),
+  );
+  const launch = decisions.find(
+    (decision) =>
+      decision.kind === "launch" && decision.repository === "acme/widgets",
+  );
+  assert.ok(launch?.kind === "launch");
+  assert.equal(launch.continuation.attempt, 1);
+  assert.equal(launch.provider, "claude-code");
+  assert.equal(launch.model, "claude-sonnet-5-5");
+  assert.deepEqual(issue.labels, ["ready-for-agent", "factory:running"]);
+  assert.ok(
+    !issue.comments.some((comment) => comment.includes("Resume after reset")),
+  );
+  assert.equal(widgets().state, "running");
+  assert.equal(widgets().pass.failingSince, null);
+  run.github.quotas["acme/gadgets"] = { remaining: 5000 };
+  run.clock.now = new Date("2026-10-09T12:10:00Z");
+  const gadgets = run.github.calls.length;
+  await restarted.tick();
+  assert.ok(
+    run.github.calls.slice(gadgets).some((call) => call[0] === "acme/gadgets"),
+  );
+});
+
+test("a host rateLimited read probes all repositories before admission and observes errors caught inside projection", async (t) => {
+  const names = ["acme/widgets", "acme/gadgets", "other/tools"];
+  let limited = true;
+  const run = host(t, {
+    repositories: Object.fromEntries(
+      names.map((name) => [name, [{ number: 4 }]]),
+    ),
+    remotes: Object.fromEntries(
+      names.map((name) => [name, remote(t, factoryFiles)]),
+    ),
+    wrapConnection(connection) {
+      if (connection.repository.path !== "acme/widgets") return connection;
+      return {
+        ...connection,
+        issueTracker: {
+          ...connection.issueTracker,
+          async comments(number) {
+            if (limited) {
+              limited = false;
+              throw new PlatformError(
+                "rateLimited",
+                "API rate limit exceeded",
+                { retryAt: "2026-10-09T12:03:00Z" },
+              );
+            }
+            return connection.issueTracker.comments(number);
+          },
+        },
+      };
+    },
+  });
+  run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+  run.github.quotas["acme/gadgets"] = { remaining: 0, reset: 1791547800 };
+  const decisions = await run.tick();
+  assert.deepEqual(
+    run.github.calls
+      .filter((call) => call[1] === "quota")
+      .map((call) => call[0]),
+    names,
+  );
+  assert.deepEqual(
+    decisions
+      .filter((decision) => decision.kind === "claim")
+      .map((decision) => decision.repository),
+    ["other/tools"],
+  );
+  const holds = JSON.parse(readFileSync(join(run.state, "quota.json"), "utf8"));
+  assert.equal(holds["acme/widgets"].until, "2026-10-09T12:03:00.000Z");
+  assert.equal(holds["acme/gadgets"].until, "2026-10-09T12:10:00.000Z");
+  const before = run.github.calls.length;
+  await run.tick();
+  assert.ok(
+    run.github.calls.slice(before).every((call) => call[0] === "other/tools"),
+  );
+});
+
+// GitHub's `/rate_limit` answer carries the core quota's rate-limit headers,
+// whichever quota is exhausted.
+for (const { source, retryAt, core, graphql, deadline } of [
+  {
+    source: "the stated reset",
+    retryAt: "2026-10-09T12:02:00Z",
+    core: { remaining: 0, reset: 1791547500 },
+    deadline: "2026-10-09T12:02:00.000Z",
+  },
+  {
+    source: "the core quota reset",
+    core: { remaining: 0, reset: 1791547500 },
+    deadline: "2026-10-09T12:05:00.000Z",
+  },
+  {
+    source: "the GraphQL quota reset",
+    core: { remaining: 4000, reset: 1791547380 },
+    graphql: { remaining: 0, reset: 1791547800 },
+    deadline: "2026-10-09T12:10:00.000Z",
+  },
+  {
+    source: "the fallback",
+    core: { remaining: 0 },
+    deadline: "2026-10-09T12:15:00.000Z",
+  },
+] as {
+  source: string;
+  retryAt?: string;
+  core: { remaining: number; reset?: number };
+  graphql?: { remaining: number; reset?: number };
+  deadline: string;
+}[])
+  test(`a quota hold uses ${source} and stops polling until that deadline`, async (t) => {
+    let limited = true;
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      wrapConnection(connection) {
+        return {
+          ...connection,
+          issueTracker: {
+            ...connection.issueTracker,
+            async issues(filter) {
+              if (limited) {
+                limited = false;
+                throw new PlatformError(
+                  "rateLimited",
+                  "API rate limit exceeded",
+                  retryAt ? { retryAt } : {},
+                );
+              }
+              return connection.issueTracker.issues(filter);
+            },
+          },
+        };
+      },
+    });
+    run.github.quotas["acme/widgets"] = core;
+    if (graphql) run.github.graphqlQuotas["acme/widgets"] = graphql;
+    if (core.reset)
+      run.github.quotaHeaders["acme/widgets"] = {
+        "x-ratelimit-reset": String(core.reset),
+        "x-ratelimit-resource": "core",
+      };
+    await run.tick();
+    assert.equal(run.launched.length, 0);
+    const holds = JSON.parse(
+      readFileSync(join(run.state, "quota.json"), "utf8"),
+    );
+    assert.equal(holds["acme/widgets"].until, deadline);
+    const before = run.github.calls.length;
+    run.clock.now = new Date(Date.parse(deadline) - 1);
+    await run.tick();
+    assert.equal(run.github.calls.length, before);
+    run.github.quotas["acme/widgets"] = { remaining: 5000 };
+    delete run.github.graphqlQuotas["acme/widgets"];
+    run.clock.now = new Date(deadline);
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+  });
+
+test("a fourth quota ending fails ordinarily after three same-attempt relaunches", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  for (let ending = 1; ending <= 4; ending++) {
+    const deadline = new Date(run.clock.now.getTime() + 60_000);
+    run.github.quotas["acme/widgets"] = {
+      remaining: 0,
+      reset: deadline.getTime() / 1000,
+    };
+    run.launched[ending - 1].finish(undefined, undefined, {
+      outcome: "stop",
+      state: "factory:needs-input",
+      body: "API rate limit exceeded.",
+    });
+    await run.drain();
+    const record = recordOf(run.state, 4, 1);
+    if (ending <= 3) {
+      assert.equal(record.ended.paused.cause, "GitHub rate limit");
+      assert.equal(record.continuation.quotaRelaunches, ending);
+    } else {
+      assert.equal(record.result.outcome, "failed");
+      assert.match(record.result.reason, /three GitHub rate-limit relaunches/);
+      assert.equal(record.ended, null);
+    }
+    run.github.quotas["acme/widgets"] = { remaining: 5000 };
+    run.clock.now = deadline;
+    const decisions = await run.tick();
+    if (ending <= 3) {
+      const launch = decisions.find((decision) => decision.kind === "launch");
+      assert.ok(launch?.kind === "launch");
+      assert.equal(launch.continuation.attempt, 1);
+      assert.equal(launch.model, "claude-sonnet-5-5");
+    } else {
+      const launch = decisions.find((decision) => decision.kind === "launch");
+      assert.ok(launch?.kind === "launch");
+      assert.equal(launch.continuation.attempt, 2);
+      assert.equal(launch.model, "gpt-5.5");
+      assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+        "ready-for-agent",
+        "factory:running",
+      ]);
+    }
+  }
+});
+
+for (const exhausted of [false, true])
+  test(`a genuine permission refusal remains an owner stop with quota ${exhausted ? "exhausted" : "remaining"}`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    if (exhausted)
+      run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+    run.launched[0].finish(undefined, undefined, {
+      outcome: "stop",
+      state: "factory:needs-input",
+      body: "GitHub refused the push: Resource not accessible by integration. How should the owner proceed?",
+    });
+    await run.drain();
+    assert.ok(!recordOf(run.state, 4, 1).ended?.paused);
+    if (exhausted) {
+      await run.tick();
+      assert.equal(run.launched.length, 1);
+      run.github.quotas["acme/widgets"] = { remaining: 5000 };
+      run.clock.now = new Date("2026-10-09T12:05:00Z");
+    }
+    await run.tick();
+    assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
+      "ready-for-agent",
+      "factory:needs-input",
+    ]);
+    assert.equal(run.launched.length, 1);
+  });
+
+for (const outcome of ["done", "failed", "missing", "quota-only stop"] as const)
+  test(`quota exhaustion handles a ${outcome} result without inventing an owner stop`, async (t) => {
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+    const result =
+      outcome === "missing"
+        ? null
+        : outcome === "quota-only stop"
+          ? {
+              outcome: "stop",
+              state: "factory:needs-input",
+              body: "API rate limit exceeded (HTTP 403). No permission refusal was observed.",
+            }
+          : {
+              outcome,
+              body: "The run ended.",
+              ...(outcome === "failed" && { reason: "the command failed" }),
+            };
+    run.launched[0].finish(undefined, undefined, result);
+    await run.drain();
+    const record = recordOf(run.state, 4, 1);
+    assert.equal(
+      record.ended?.paused?.cause,
+      outcome === "done" ? undefined : "GitHub rate limit",
+    );
+    assert.ok(
+      !run.github
+        .find("acme/widgets", 4)
+        .labels.includes("factory:needs-input"),
+    );
+    const before = run.github.calls.length;
+    await run.tick();
+    assert.equal(run.github.calls.length, before);
+  });
+
+test("a refused quota pause notice preserves the pause and resumes after a restart without consuming another relaunch", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+  run.github.refused.add("acme/widgets#4");
+  run.launched[0].finish(undefined, undefined, null);
+  await run.drain();
+  assert.equal(
+    recordOf(run.state, 4, 1).ended.paused.cause,
+    "GitHub rate limit",
+  );
+  assert.equal(recordOf(run.state, 4, 1).continuation.quotaRelaunches, 1);
+  run.interrupt();
+  const restarted = run.restart();
+  const before = run.github.calls.length;
+  await restarted.tick();
+  assert.equal(run.github.calls.length, before);
+  run.github.refused.clear();
+  run.github.quotas["acme/widgets"] = { remaining: 5000 };
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await restarted.tick();
+  assert.match(
+    runComment(run.github.find("acme/widgets", 4)),
+    /paused \(GitHub rate limit/,
+  );
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(recordOf(run.state, 4, 1).continuation.quotaRelaunches, 1);
+});
+
+test("a quota hold that cannot be recorded still pauses the run and later probes record again", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const partial = join(run.state, "quota.json.partial");
+  fs.mkdirSync(partial);
+  run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+  run.launched[0].finish(undefined, undefined, null);
+  await run.drain();
+  assert.equal(
+    recordOf(run.state, 4, 1).ended.paused.cause,
+    "GitHub rate limit",
+  );
+  assert.ok(!fs.existsSync(join(run.state, "quota.json")));
+  const before = run.github.calls.length;
+  await run.tick();
+  assert.equal(run.github.calls.length, before);
+  fs.rmdirSync(partial);
+  run.github.quotas["acme/widgets"] = { remaining: 5000 };
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  assert.ok(fs.existsSync(join(run.state, "quota.json")));
+  assert.equal(run.launched.length, 2);
+});
 
 for (const cause of ["usage limit", "pause threshold"] as const)
   test(`the pause template receives ${cause} facts and is delivered once across restart`, async (t) => {

@@ -103,12 +103,13 @@ export type Issue = {
 };
 
 // Why the factory paused a run, which it resumes by itself, and the reset the
-// cause stated, if any: the agent exited on its provider's usage limit, or the
+// cause stated, if any: the repository's GitHub quota ran out, the agent
+// exited on its provider's usage limit, or the
 // factory stopped its sandbox once its provider's usage reached the pause
-// threshold. `at` is when the run paused, and `until` when it stops waiting
-// for its provider's usage to read, both fixed once as it pauses.
+// threshold. `at` is when the run paused, and `until` is its quota deadline
+// or the end of its wait for provider usage, both fixed once as it pauses.
 export type Pause = {
-  cause: "usage limit" | "pause threshold";
+  cause: "usage limit" | "pause threshold" | "GitHub rate limit";
   reset: string | null;
   at: string;
   until: string;
@@ -134,6 +135,8 @@ export type Continuation = {
   implementedBy?: string;
   // An interrupted or paused run launching again as the same attempt.
   relaunch?: true;
+  // Same-attempt recoveries spent only on GitHub quota exhaustion.
+  quotaRelaunches?: number;
 };
 
 // A run the host started, in the repository named `<owner>/<name>`. Its
@@ -1497,6 +1500,13 @@ function limited(
   snapshot: Snapshot,
 ): string | null {
   const { settings } = snapshot;
+  if (pause.cause === "GitHub rate limit") {
+    const high = highUsage(provider, snapshot);
+    if (high) return `${provider} ${described(high, settings)}`;
+    return Date.parse(snapshot.now) < Date.parse(pause.until)
+      ? `GitHub rate limit; waits until ${pause.until}`
+      : null;
+  }
   const cause =
     pause.cause === "pause threshold"
       ? `${provider} reached its pause threshold`

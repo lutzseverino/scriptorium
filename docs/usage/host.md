@@ -652,9 +652,10 @@ others continue, when:
 - the host configuration has no entry for its platform;
 - its platform marks no bots and its entry has no `neverAuthorize` list.
 
-A platform failure, such as GitHub being unavailable or rate limiting the
-token, fails that repository's reads for the pass, or the write it was making,
-and the next pass tries again. The factory adds a state label before it
+A platform failure, such as GitHub being unavailable, fails that repository's
+reads for the pass, or the write it was making, and the next pass tries again.
+GitHub rate limits instead start a [quota hold](#github-quota-holds), with no
+more reads before its deadline. The factory adds a state label before it
 removes the one it replaces, so a write that fails part way never leaves a
 claimed issue without one. It creates its state labels when they are missing
 and leaves an existing label's color and description as they are.
@@ -968,6 +969,7 @@ The process owns everything under `stateDirectory`:
 | `repositories/<owner>/<name>/clone/.sandcastle/` | Sandcastle's run worktrees. The clone excludes this directory locally, so the repository need not ignore it.                                                                                                                                                                                                                                                                                                                                      |
 | `repositories/<owner>/<name>/logs/`              | Each run's redacted log, `issue-<n>-attempt-<a>.log`.                                                                                                                                                                                                                                                                                                                                                                                             |
 | `usage.json`                                     | Each provider's last good usage reading with when it was read, its reset and every window the provider reported, the earliest time the provider may be read again, and its usage hold with when it began and ends. It holds no credential or provider answer.                                                                                                                                                                                     |
+| `quota.json`                                     | Each repository quota hold with its observation time and reset deadline. Held repositories make no further reads before that deadline, including after a restart.                                                                                                                                                                                                                                                                                 |
 | `owner.json`                                     | Each provider's [owner hold](#owner-holds-and-resume) with when it was set and the usage that set it, its reserve raise with its threshold, start and reset, whether it is draining, and the resume requests already applied whose files remain.                                                                                                                                                                                                  |
 | `requests/`                                      | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                     |
 | `repositories/<owner>/<name>/runs/`              | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline, its run result as read and whether its comment and labels landed, and whether the host settled it. What the issue was told lives in its [run comment](#run-comments). |
@@ -1280,9 +1282,14 @@ context; the factory does not resume a live session or a background process.
 
 ## Paused runs
 
-A paused run is one whose agent exited on its provider's usage limit, or one
-the factory stopped at its provider's
-[pause threshold](#usage-thresholds). When the agent exits, the run's provider
+A paused run is one whose agent exited on its provider's usage limit, one
+the factory stopped at its provider's [pause threshold](#usage-thresholds),
+or a non-`done` run ending during its repository's
+[GitHub quota hold](#github-quota-holds). A genuine permission refusal still
+stops for the owner even beside exhausted quota. The run-result format stays
+unchanged; the host detects the exhausted quota itself.
+
+For provider pauses, when the agent exits, the run's provider
 adapter reads the end of the run's raw log before its private directory is
 removed, and recognizes the provider's own limit error there: Claude Code's
 session, weekly or usage limit message, or Codex's usage-limit error. The
@@ -1309,7 +1316,7 @@ it has none, or the factory stopped it at the time limit. It is not a failure:
 it spends no attempt or retry and takes no provider cap slot. The factory
 replaces the issue's running label with the configured paused label and shows
 the pause on its phase's line of the [run comment](#run-comments): the cause,
-`usage limit` or `pause threshold`, the reset when known, and the run's model
+`usage limit`, `pause threshold` or `GitHub rate limit`, the reset when known, and the run's model
 and attempt. It asks nobody to act, since the factory resumes the run by
 itself, and contains no log output. The paused label records that the issue
 was told, so later passes and restarts don't repeat it.
@@ -1317,7 +1324,12 @@ was told, so later passes and restarts don't repeat it.
 The run relaunches like an [interrupted run](#restarts): as the same attempt,
 with the same model, effort, prompt, retry context and log, on its
 `factory/issue-<n>` branch, so an agent that was babysitting a pull request
-resumes on it. Unlike an interrupted run, its pause holds it:
+resumes on it. A run paused for a GitHub rate limit waits for its
+repository's quota deadline; unknown provider usage adds no wait, while a provider usage hold or
+high reading still applies. At most three same-attempt relaunches are allowed
+for a GitHub rate limit; the next such ending is an ordinary failure through
+the existing outcome and retry rules. The counter survives restarts and
+other interruptions. Unlike an interrupted run, a provider pause holds it:
 
 - Usage at or above either threshold, read or kept by a usage hold, holds it,
   before and after its deadline.
@@ -1340,12 +1352,44 @@ It also waits for its provider's cap and for its repository to resume, however
 long those take. Before it launches, the factory swaps the paused label back for the
 running label; if that write fails, the run does not launch that pass.
 Resuming shows the run running again on the same run comment. A relaunch that
-hits the limit again pauses again, edited onto that comment, and nothing caps
-the number of pauses.
+hits a provider limit again pauses again, edited onto that comment, with no
+cap on provider pauses.
 
 While a run is paused, its claim is released, and both labels removed, once
 its issue closes or carries the configured needs-input label. An open issue
 carrying the paused label is never picked up as a fresh attempt.
+
+### GitHub quota holds
+
+At every run exit and when a host platform read fails with Postern
+`rateLimited`, the host probes `/rate_limit` for each served GitHub repository
+with that repository's own token. It holds claims and launches in every
+repository whose core or GraphQL quota is exhausted before admitting more
+work. Repositories sharing quota therefore hold together without an
+installation setting; repositories with quota remaining keep working.
+
+Each repository keeps its own deadline: the retry time a refused request
+stated in its `Retry-After` or rate-limit reset header, otherwise the latest
+reset `/rate_limit` reports for an exhausted quota, otherwise 15 minutes after
+observation. The headers on `/rate_limit`'s own answer describe the core quota
+only, so they set no deadline. No repository
+read, including another quota probe, runs there before its deadline. At the
+deadline the host probes again before polling or launching; continued
+exhaustion starts another hold. Holds persist in `quota.json` across restarts.
+
+A held repository is a [repository pause](#repository-pauses) with the `host`
+cause and the reason `GitHub rate limit; quota held until <deadline>`. Its
+passes therefore show as failing in [health](#health), with `failingSince` and
+`failure` set, until the quota resets and a pass completes there again.
+
+A run ending during a hold releases its sandbox slot. The host records its
+pause before publishing any quota-related owner stop, and writes its paused
+label and run notice using cached comment facts without another read. If
+GitHub refuses those writes, they wait until access resumes. The cause and
+reset appear on the existing run comment, with no owner action requested.
+This is the repository quota counterpart of the provider
+[usage hold](#usage-thresholds), as [ADR 0013](../adr/0013-detect-github-quota-exhaustion-in-the-host.md)
+amends ADR 0003; usage holds remain provider-only.
 
 ### Usage reads
 
@@ -1712,16 +1756,17 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
 - its platform reads fail;
+- its [GitHub quota is held](#github-quota-holds);
 - an open issue or PR carries its [factory hold](factory-configuration.md#factory-hold)
   label, or that hold cannot be read. A merge relaunch whose target PR alone
   carries the label still launches.
 
 The status file and the [`status` command's coverage](#coverage) record the
 pause with its cause: `repository-input` for the repository's own inputs,
-`host` for the token command, the clone, the platform, the state labels and
-storage admission, and `factory-hold` for the factory hold. When several
-conditions apply, the pass's final pause reason is the one reported, and a
-factory hold never replaces a pass pause. Pause reasons name repository inputs
+`host` for the token command, the clone, the platform, the state labels,
+storage admission and a GitHub quota hold, and `factory-hold` for the factory
+hold. When several conditions apply, the pass's final pause reason is the one
+reported, and a factory hold never replaces a pass pause. Pause reasons name repository inputs
 by their repository path, such as `.scriptorium/config.json`, never by the
 host's clone path.
 

@@ -117,6 +117,7 @@ import {
 } from "./status.ts";
 import { credentialHealth, readCredentialObservations } from "./credentials.ts";
 import { createUsage } from "./usage.ts";
+import { createQuota, permissionRefusal } from "./quota.ts";
 import {
   stopAction,
   type Action,
@@ -168,6 +169,8 @@ type HostRun = Run & {
   provenance?: Provenance;
   // Its run result's comment and labels are on the issue.
   resultPosted?: true;
+  // The quota pause's label and cached run notice were written successfully.
+  quotaNotified?: true;
   publication?: Publication;
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
@@ -308,6 +311,93 @@ export function createHost(
       events.commit(providerStatuses(), { file: "owner.json", text }, resume);
     },
   });
+  const recent = new Map<string, Pass>();
+  const quota = createQuota({
+    repositories: configuration.repositories,
+    now: ports.now,
+    report,
+    path: join(configuration.stateDirectory, "quota.json"),
+    connect(name) {
+      const served = connect(name);
+      return "connection" in served ? served.connection : null;
+    },
+  });
+
+  function pauseForQuota(run: HostRun) {
+    const hold = quota.hold(run.repository);
+    if (
+      !hold ||
+      pausedEnding(run)?.paused.cause === "GitHub rate limit" ||
+      run.resultPosted
+    )
+      return;
+    if (
+      run.result &&
+      !("invalid" in run.result) &&
+      (run.result.outcome === "done" || permissionRefusal(run.result))
+    )
+      return;
+    const count = run.continuation.quotaRelaunches ?? 0;
+    if (count >= 3) {
+      const reason =
+        "the attempt exhausted its three GitHub rate-limit relaunches";
+      run.result = { outcome: "failed", body: reason, reason };
+      run.ended = null;
+      record(run);
+      return;
+    }
+    run.continuation.quotaRelaunches = count + 1;
+    run.ended = {
+      paused: {
+        cause: "GitHub rate limit",
+        reset: hold.until,
+        at: run.exitedAt?.toISOString() ?? hold.since,
+        until: hold.until,
+      },
+    };
+    run.interrupted = false;
+    record(run);
+  }
+
+  async function announceQuotaPause(run: HostRun) {
+    if (run.quotaNotified) return;
+    const pause = pausedEnding(run)?.paused;
+    const pass = recent.get(run.repository);
+    const issue = pass?.read?.issues.find(
+      (issue) => issue.number === run.issue,
+    );
+    if (
+      !pause ||
+      pause.cause !== "GitHub rate limit" ||
+      !pass?.platform ||
+      !issue
+    )
+      return;
+    const labels = pass.configuration!.labels;
+    try {
+      await pass.platform.comments.write(
+        run.issue,
+        {
+          phase: phaseOf(run),
+          facts: { state: "paused", reason: pause.cause, reset: pause.reset },
+        },
+        undefined,
+        { cached: true },
+      );
+      await pass.platform.transition(run.issue, "pause");
+      const change = transition(labels, "pause");
+      issue.labels = [
+        ...issue.labels.filter((label) => !change.remove.includes(label)),
+        ...(change.add ? [change.add] : []),
+      ];
+      run.quotaNotified = true;
+      record(run);
+    } catch (error) {
+      report(
+        `${run.repository}#${run.issue} quota pause notice waits: ${error}`,
+      );
+    }
+  }
 
   function providerStatuses() {
     const controls = owner.controls();
@@ -401,6 +491,15 @@ export function createHost(
       (pass.paused = { cause, reason: repositoryReason(name, reason) }).reason;
     const notRead = (problem: string) =>
       (pass.configurationFile = { state: "not-read", problem });
+    // A held repository makes no reads before its quota deadline.
+    await quota.settled();
+    const held = quota.hold(name);
+    if (held) {
+      notRead(
+        pause(`GitHub rate limit; quota held until ${held.until}`, "host"),
+      );
+      return pass;
+    }
     // A repository whose own token fails to print is paused for the pass.
     try {
       await tokens.get(name);
@@ -486,7 +585,10 @@ export function createHost(
       pause(served.refused, "host");
       return pass;
     }
-    const platform = repositoryPlatform(served.connection, pass.configuration);
+    const platform = repositoryPlatform(
+      quota.observe(name, served.connection),
+      pass.configuration,
+    );
     pass.platform = platform;
     try {
       await platform.createStateLabels();
@@ -724,6 +826,7 @@ export function createHost(
     } catch (error) {
       pause(`its platform reads failed: ${error}`, "host");
     }
+    if (pass.read) recent.set(name, pass);
     return pass;
   }
 
@@ -1313,6 +1416,8 @@ export function createHost(
           await follower.close().catch(() => {});
           return;
         }
+        // Establish all repositories' holds before any later admission.
+        await quota.probe();
         try {
           const recovery = await readRecovery(
             git,
@@ -1377,6 +1482,8 @@ export function createHost(
             );
           }
         }
+        pauseForQuota(run);
+        await announceQuotaPause(run);
         try {
           // A token outlives no run.
           await rm(sandbox, { recursive: true, force: true });
@@ -1659,9 +1766,28 @@ export function createHost(
       start();
       started = true;
     }
+    await quota.refresh();
+    for (const run of runs.filter((run) => run.exited)) {
+      // Exit observation includes reading the result and finishing the log.
+      // Never classify an in-flight exit before a possible `done` is known.
+      await run.finished;
+      pauseForQuota(run);
+      await announceQuotaPause(run);
+    }
     const passes: Pass[] = [];
     for (const name of configuration.repositories)
       passes.push(await read(name));
+    await quota.settled();
+    for (const pass of passes) {
+      const held = quota.hold(pass.name);
+      if (held) {
+        pass.paused = {
+          cause: "host",
+          reason: `GitHub rate limit; quota held until ${held.until}`,
+        };
+        pass.read = null;
+      }
+    }
     const readable = new Set(
       passes.filter((pass) => pass.read).map((pass) => pass.name),
     );
@@ -1733,6 +1859,8 @@ export function createHost(
     const stopped = new Map<string, string>();
     for (const decision of decisions) {
       if (interrupting) break;
+      await quota.settled();
+      if (decision.kind !== "stop" && quota.hold(decision.repository)) continue;
       if (stopped.has(decision.repository)) continue;
       try {
         await apply(
