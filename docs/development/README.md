@@ -162,9 +162,9 @@ drives version 3's run kinds, handoffs, trusted triggers and model resolution
 through the same entry point over placeholder providers and models.
 `test/triggers.test.ts` checks machine finding citations against host launch
 provenance; platform tests verify current author roles, reporter comment
-identity and creation times, complete PR inventories and installation filing
+identity and creation times, complete PR inventories, ready PRs' return to draft and installation filing
 identity. Host tests cover trigger consumption and finding verification across
-restarts, plus independent draft PR review and explicit-target recovery. `test/run-ending.test.ts` drives the run-ending
+restarts, plus independent draft and ready PR review, ready PRs' return to draft, hand-back and explicit-target recovery. `test/run-ending.test.ts` drives the run-ending
 module's observation and outcome table for ended runs and orphaned claims, and
 `test/run-result.test.ts` the run-result interface, its containment and its
 frame. `test/run-comment.test.ts` drives the one writer of the run, action and

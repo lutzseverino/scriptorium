@@ -1910,71 +1910,83 @@ test("a host-verified factory finding triggers triage; an unverified bot citatio
   );
 });
 
-test("trusted unowned draft PRs start review with and without linked issues, through the shared gate", () => {
-  for (const nativeParent of [null, 3]) {
-    const candidate = issue(42, [], {
-      createdAt: pr.createdAt,
-      author: owner,
-      nativeParent,
-      pullRequest: { target: pr, draft: true },
-    });
-    const review = launchOf(decide({ issues: [candidate] }));
-    assert.equal(review?.continuation.runKind, "review");
-    assert.equal(review?.issue, 42);
-    assert.equal(review?.continuation.target?.number, 42);
-    for (const details of [
-      { author: { kind: "user", login: "outsider", role: null } as Actor },
-      { author: { kind: "bot", login: "app[bot]" } as Actor },
-      { pullRequest: { target: pr, draft: false } },
-      { reviewedHeads: [pr.headCommit] },
-    ])
-      assert.equal(
-        launchOf(decide({ issues: [{ ...candidate, ...details }] })),
-        undefined,
-      );
-    for (const details of [
-      { ownedPullRequests: [42] },
-      { factoryHold: [90] },
-      {
-        authorization: {
-          authorizedRoles: ["admin"],
-          neverAuthorize: ["OWNER"],
+test("trusted unowned draft and ready PRs start review with and without linked issues, through the shared gate", () => {
+  for (const draft of [true, false])
+    for (const nativeParent of [null, 3]) {
+      const candidate = issue(42, [], {
+        createdAt: pr.createdAt,
+        author: owner,
+        nativeParent,
+        pullRequest: { target: pr, draft },
+      });
+      const review = launchOf(decide({ issues: [candidate] }));
+      assert.equal(review?.continuation.runKind, "review");
+      assert.equal(review?.issue, 42);
+      assert.equal(review?.continuation.target?.number, 42);
+      // A ready PR returns to draft, so the review's draft-only endings apply.
+      assert.deepEqual(
+        decide({ issues: [candidate] }).find(
+          (decision) => decision.kind === "claim",
+        ),
+        {
+          kind: "claim",
+          repository: widgets,
+          issue: 42,
+          ...(!draft && { returnToDraft: 42 }),
         },
-      },
-    ])
+      );
+      for (const details of [
+        { author: { kind: "user", login: "outsider", role: null } as Actor },
+        { author: { kind: "bot", login: "app[bot]" } as Actor },
+        { reviewedHeads: [pr.headCommit] },
+      ])
+        assert.equal(
+          launchOf(decide({ issues: [{ ...candidate, ...details }] })),
+          undefined,
+        );
+      for (const details of [
+        { ownedPullRequests: [42] },
+        { factoryHold: [90] },
+        {
+          authorization: {
+            authorizedRoles: ["admin"],
+            neverAuthorize: ["OWNER"],
+          },
+        },
+      ])
+        assert.equal(
+          launchOf(decide({ issues: [candidate], details })),
+          undefined,
+        );
       assert.equal(
-        launchOf(decide({ issues: [candidate], details })),
+        launchOf(
+          decide({ issues: [{ ...candidate, labels: ["model:forbidden"] }] }),
+        ),
         undefined,
       );
-    assert.equal(
-      launchOf(
-        decide({ issues: [{ ...candidate, labels: ["model:forbidden"] }] }),
-      ),
-      undefined,
-    );
-    assert.equal(
-      launchOf(decide({ issues: [candidate], kinds: { review: false } })),
-      undefined,
-    );
-    assert.equal(
-      launchOf(
-        decide({
-          issues: [
-            {
-              ...candidate,
-              pullRequest: {
-                target: pr,
-                draft: true,
-                headBranch: "factory/issue-4",
+      assert.equal(
+        launchOf(decide({ issues: [candidate], kinds: { review: false } })),
+        undefined,
+      );
+      assert.equal(
+        launchOf(
+          decide({
+            issues: [
+              {
+                ...candidate,
+                pullRequest: {
+                  target: pr,
+                  draft,
+                  headBranch: "factory/issue-4",
+                },
               },
-            },
-          ],
-          runs: [run()],
-        }),
-      ),
-      undefined,
-    );
-  }
+            ],
+            runs: [run()],
+          }),
+        ),
+        undefined,
+      );
+    }
 });
 
 test("removing review configuration makes its stale PR relaunch implement", () => {

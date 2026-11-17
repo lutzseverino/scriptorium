@@ -542,8 +542,8 @@ export function createHost(
           )),
         );
       // A running worker can publish on another branch. Establish ownership
-      // before admitting independent drafts, rather than waiting for its exit.
-      if (issues.some((issue) => issue.pullRequest?.draft))
+      // before admitting independent PRs, rather than waiting for its exit.
+      if (issues.some((issue) => issue.pullRequest))
         for (const run of runs.filter(
           (run) => run.repository === name && !run.exited,
         )) {
@@ -1421,6 +1421,9 @@ export function createHost(
         forget(decision);
         return;
       case "claim":
+        // Before the claim, so a refused write leaves the PR unclaimed.
+        if (decision.returnToDraft)
+          await platform.returnToDraft(decision.returnToDraft);
         await platform.transition(decision.issue, "claim");
         return;
       case "launch":
