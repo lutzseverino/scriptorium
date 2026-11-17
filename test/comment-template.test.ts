@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderComment } from "../src/comment-template.ts";
+import type { Labels } from "../src/label-roles.ts";
+import { stopAction } from "../src/run-comment.ts";
 
 test("comment templates substitute facts and conditionally render scalar sections", () => {
   const template =
@@ -188,6 +190,64 @@ test("the default action comment names its occasion's label in one line linking 
   assert.equal(
     renderComment("action", undefined, { gate: "gate:owner-review", link }),
     "Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/c/9).",
+  );
+});
+
+test("every default stop comment names the states that answer it", () => {
+  const link = "https://platform.test/c/9";
+  const labels = {
+    ready: "state:ready",
+    running: "factory:running",
+    failed: "factory:failed",
+    paused: "factory:paused",
+    triage: "state:triage",
+    reporter: "state:reporter",
+    grill: "state:grill",
+    owner: "state:owner",
+    carried: "state:carried",
+  };
+  const stop = (
+    stopped: string,
+    options: Parameters<typeof stopAction>[3],
+    configured: Labels = labels,
+  ) => {
+    const { key, ...values } = stopAction(
+      "stop:a",
+      stopped,
+      configured,
+      options,
+    );
+    assert.equal(key, "stop:a");
+    return renderComment("action", undefined, { ...values, link });
+  };
+  // An owner stop of implement or review work resumes on readiness.
+  for (const resume of ["implement", "review"] as const)
+    assert.equal(
+      stop("state:owner", { triage: true, resume }),
+      `The factory waits in \`state:owner\` for an answer. To answer, apply \`state:ready\` at the unchanged approved contract to resume the stopped ${resume} run, \`state:triage\` to triage it again, \`state:carried\` to hold the request, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).`,
+    );
+  // A triage run's owner stop leaves no work to resume.
+  assert.equal(
+    stop("state:owner", { triage: true }),
+    "The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, `state:carried` to hold the request, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+  );
+  // Without triage or a carried state, neither is named.
+  const { carried: _, ...uncarried } = labels;
+  assert.equal(
+    stop("state:owner", { triage: false, resume: "implement" }, uncarried),
+    "The factory waits in `state:owner` for an answer. To answer, apply `state:ready` at the unchanged approved contract to resume the stopped implement run, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    stop("state:reporter", { triage: true, resume: "implement" }),
+    "The factory waits in `state:reporter` for an answer. The reporter answers by replying here. A person may instead apply `state:triage` to triage it again, or close the issue. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    stop("state:grill", { triage: true }),
+    "The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:triage` to triage it again, `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    stop("state:grill", { triage: false }),
+    "The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
   );
 });
 

@@ -117,7 +117,12 @@ import {
 } from "./status.ts";
 import { credentialHealth, readCredentialObservations } from "./credentials.ts";
 import { createUsage } from "./usage.ts";
-import type { Action, Phase, RunUpdate } from "./run-comment.ts";
+import {
+  stopAction,
+  type Action,
+  type Phase,
+  type RunUpdate,
+} from "./run-comment.ts";
 import { createEvents, providerStatus } from "./events.ts";
 
 export type HostPorts = {
@@ -1586,7 +1591,12 @@ export function createHost(
               : gate
                 ? { key: `gate:${id}`, gate }
                 : asked
-                  ? { key: `stop:${id}`, stopped: asked }
+                  ? stopAction(`stop:${id}`, asked, labels, {
+                      triage: enabledRunKinds(pass.configuration!).includes(
+                        "triage",
+                      ),
+                      resume: stoppedWork(previous),
+                    })
                   : undefined;
           // The run comment keeps the continuation until the work resumes. A
           // stop with no run, continuation or PR has nothing to continue.
@@ -1918,6 +1928,15 @@ function recoveredPause(recorded: {
       until: pauseDeadline(paused.reset, at).toISOString(),
     },
   };
+}
+
+// The implement or review work a stopped run leaves to resume, without a
+// run the work its claim kept; a triage run leaves none.
+function stoppedWork(
+  run: Pick<Run, "continuation"> | undefined,
+): "implement" | "review" | undefined {
+  const kind = run?.continuation.runKind ?? "implement";
+  return kind === "triage" ? undefined : kind;
 }
 
 // The run comment's phase a run works in: a merge relaunch merges.

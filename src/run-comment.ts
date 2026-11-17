@@ -13,6 +13,7 @@ import { renderComment } from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
+import { roleNames, type Labels, type RoleName } from "./label-roles.ts";
 import type { InputResume } from "./platform.ts";
 import type { RunResult } from "./run-result.ts";
 import { reference } from "./readiness.ts";
@@ -68,8 +69,9 @@ export type RunUpdate = {
 };
 
 // An occasion a person must act on: its key, unique within its pass, the
-// label that names it, and for a failure why and which paths a person with
-// permission must push.
+// label that names it, for a stop the labels of its asked and answering
+// roles under their role names and the work readiness resumes, and for a
+// failure why and which paths a person with permission must push.
 export type Action = {
   key: string;
   failed?: string;
@@ -77,7 +79,38 @@ export type Action = {
   gate?: string;
   reason?: string;
   unpushable?: string;
-};
+  resume?: "implement" | "review";
+} & Partial<Record<RoleName, string>>;
+
+// A stop's action, which names the role it asks and each label that answers
+// it. A person answers by applying the issue's next state or closing it:
+// readiness resumes the stopped implement or review work, and the triage
+// state answers only where a triage run picks it up.
+export function stopAction(
+  key: string,
+  stopped: string,
+  labels: Labels,
+  { triage, resume }: { triage: boolean; resume?: "implement" | "review" },
+): Action {
+  return {
+    key,
+    stopped,
+    ...Object.fromEntries(
+      roleNames((role) => role.asks).flatMap((name) =>
+        labels[name] === stopped ? [[name, stopped]] : [],
+      ),
+    ),
+    ...Object.fromEntries(
+      roleNames((role) => role.answers).flatMap((name) => {
+        const label = labels[name];
+        return label !== undefined && (name !== "triage" || triage)
+          ? [[name, label]]
+          : [];
+      }),
+    ),
+    ...(resume && { resume }),
+  };
+}
 
 type State = {
   phases: Partial<Record<Phase, PhaseFacts>>;

@@ -28,6 +28,8 @@ type Role = {
   stop?: true;
   // Only a person answers this stop, so its run comment's action asks them.
   asks?: true;
+  // A person applies it to answer a stop, so a stop's action names it.
+  answers?: true;
   // A gate stops review at ready-to-merge until the owner removes it.
   gate?: true;
   // Pickup order: lower ranks go first; an absent label counts as normal.
@@ -60,6 +62,7 @@ export const labelRoles = {
     versions: { 3: "optional" },
     applied: true,
     stop: true,
+    answers: true,
     excludes: [stopped],
   },
   reporter: {
@@ -84,6 +87,7 @@ export const labelRoles = {
   carried: {
     versions: { 3: "optional" },
     stop: true,
+    answers: true,
     excludes: [
       {
         precedence: 2,
@@ -96,6 +100,7 @@ export const labelRoles = {
     versions: { 2: "required", 3: "required" },
     applied: true,
     readiness: true,
+    answers: true,
   },
   ownerReview: { versions: { 3: "optional" }, gate: true },
   majorRelease: { versions: { 3: "optional" }, gate: true },
@@ -204,6 +209,11 @@ export function versionRoles(version: 2 | 3): [RoleName, Need][] {
     const need = role.versions[version];
     return need ? [[name, need]] : [];
   });
+}
+
+// The roles `select` picks, in declaration order.
+export function roleNames(select: (role: Role) => unknown): RoleName[] {
+  return roles.flatMap(([name, role]) => (select(role) ? [name] : []));
 }
 
 // The configured names of the roles `select` picks, in declaration order.

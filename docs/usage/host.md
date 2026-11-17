@@ -908,7 +908,9 @@ is not edited.
 An action comment is posted fresh, once per occasion, only when a person must
 act: when a run's stop leaves the issue in the reporter, grill or owner state,
 when review stops at a gate, and when the run fails. It is one line naming the
-label to act on, with a link to the run comment, and mentions nobody. Its
+label to act on, with a link to the run comment, and mentions nobody. A stop's
+action also names the states that
+[answer](factory-configuration.md#answers) it. Its
 marker line names the run comment and the occasion, which makes a retried or
 re-observed occasion find it. A version 2 stop under the needs-input label
 gets no action comment: its agent asked on the issue itself. A pause, a
