@@ -31,7 +31,7 @@ const consumers = [
   ["host.ts", "askLabels", "async function apply"],
   ["factory.ts", "exclusionReason", "function continuationExclusions"],
   ["factory.ts", "exclusionReason", "function exclusion("],
-  ["factory.ts", "priority", "function priorityFirst"],
+  ["factory.ts", "priority", "function pickupOrder"],
   ["contract-result.ts", "configured", "function contractResultHold"],
   ["run-result.ts", "configured", "function parseRunResult"],
   ["run-result.ts", "stopLabels", "function stopStates"],

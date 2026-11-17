@@ -798,6 +798,211 @@ test("priority is configured per repository and preserves age, repository and nu
   );
 });
 
+// Issue 6 is newer than every competitor, so only its group can put it first.
+const triaging = issue(1, [labels.triage]);
+const reviewing = (number: number, priority?: string) => ({
+  issue: issue(number, [...claimed, ...(priority ? [priority] : [])]),
+  run: ended({ issue: number }, true),
+});
+const ordered = (input: Parameters<typeof decide>[0], cap: number) =>
+  launchedIssues(
+    decide({
+      details: { configuration: priorityConfiguration },
+      settings: { caps: { "provider-a": cap, "provider-b": cap } },
+      ...input,
+    }),
+  );
+
+test("finishing work takes a provider's last slot ahead of older starting work", () => {
+  const review = reviewing(6);
+  assert.deepEqual(
+    ordered(
+      {
+        issues: [triaging, issue(2, [labels.ready, "urgent"]), review.issue],
+        runs: [review.run, run({ issue: 9 })],
+      },
+      2,
+    ),
+    [widgets + "#6"],
+  );
+});
+
+test("a low-priority review goes ahead of normal starting work", () => {
+  const review = reviewing(6, "later");
+  assert.deepEqual(
+    ordered({ issues: [triaging, review.issue], runs: [review.run] }, 1),
+    [widgets + "#6"],
+  );
+});
+
+test("priority still orders work within the finishing group", () => {
+  const normal = reviewing(5);
+  const urgent = reviewing(6, "urgent");
+  const input = {
+    issues: [triaging, normal.issue, urgent.issue],
+    runs: [normal.run, urgent.run],
+  };
+  assert.deepEqual(ordered(input, 1), [widgets + "#6"]);
+  assert.deepEqual(ordered(input, 3), [
+    widgets + "#6",
+    widgets + "#5",
+    widgets + "#1",
+  ]);
+});
+
+test("a hand-back still waits on its repository's implement limit, leaving the slot to starting work", () => {
+  const decisions = decide({
+    issues: [triaging, issue(6, [...claimed, "urgent"])],
+    runs: [
+      ended({ issue: 6, continuation: { runKind: "review" } }, true),
+      run({ issue: 9, provider: "provider-b" }),
+    ],
+    details: { configuration: priorityConfiguration },
+    settings: {
+      caps: { "provider-a": 1, "provider-b": 1 },
+      implement: { perRepository: 1 },
+    },
+  });
+  assert.deepEqual(launchedIssues(decisions), [widgets + "#1"]);
+  assert.equal(
+    skipOf(decisions)?.reason,
+    "hand-back waits: the repository already runs its implement cap of 1",
+  );
+});
+
+// Issue 6's continuation launches ahead of older triage only when finishing.
+function placed(
+  name: string,
+  input: { issues: Issue[]; runs?: Run[]; claims?: Claim[] },
+  finishing: boolean,
+) {
+  const issues = input.issues.map(({ number }) => `${widgets}#${number}`);
+  assert.deepEqual(
+    ordered(
+      { ...input, issues: [triaging, ...input.issues] },
+      input.issues.length + 1,
+    ),
+    finishing
+      ? [...issues, widgets + "#1"]
+      : [widgets + "#1", ...issues].sort(),
+    name,
+  );
+}
+
+test("a resume takes the group of the run it relaunches, and a retry finishes only a hand-back's PR", () => {
+  const interrupted = { interrupted: true } as const;
+  const paused = {
+    paused: { cause: "usage limit", reset: null, at: now, until: now },
+  } as const;
+  const failed = { timedOut: false, pullRequest: "none" } as const;
+  const cases: [string, Partial<Continuation>, Run["ended"], boolean][] = [
+    [
+      "interrupted review",
+      { runKind: "review", target: pr },
+      interrupted,
+      true,
+    ],
+    ["paused review", { runKind: "review", target: pr }, paused, true],
+    ["interrupted merge relaunch", { mergeRelaunch: pr }, interrupted, true],
+    ["paused hand-back", { target: pr, handBacks: 1 }, paused, true],
+    ["interrupted triage", { runKind: "triage" }, interrupted, false],
+    ["paused fresh implement", {}, paused, false],
+    ["hand-back retry", { target: pr, handBacks: 1 }, failed, true],
+    ["retry without a PR", {}, failed, false],
+  ];
+  for (const [name, continuation, ending, finishing] of cases)
+    placed(
+      name,
+      {
+        issues: [
+          issue(
+            6,
+            "paused" in ending! ? [labels.ready, labels.paused] : claimed,
+          ),
+        ],
+        runs: [run({ issue: 6, continuation, ended: ending })],
+      },
+      finishing,
+    );
+});
+
+test("answered stops on open PRs finish work, while external review and unobserved PRs start it", () => {
+  const open = {
+    number: 42,
+    headBranch: "factory/issue-6",
+    state: "open" as const,
+    createdAt: pr.createdAt,
+  };
+  placed(
+    "review resumed after an answered review stop",
+    {
+      issues: [issue(6)],
+      claims: [
+        {
+          issue: 6,
+          pullRequest: "open",
+          inputResume: {
+            pullRequests: [open],
+            review: { target: pr, handBacks: 0, gated: false },
+          },
+        },
+      ],
+    },
+    true,
+  );
+  placed(
+    "fresh attempt on an answered implement stop's open PR",
+    {
+      issues: [issue(6)],
+      claims: [
+        {
+          issue: 6,
+          pullRequest: "open",
+          inputResume: { pullRequests: [open] },
+        },
+      ],
+    },
+    true,
+  );
+  placed(
+    "fresh attempt on an answered implement stop whose PR closed",
+    {
+      issues: [issue(6)],
+      claims: [
+        {
+          issue: 6,
+          pullRequest: "closed",
+          inputResume: { pullRequests: [{ ...open, state: "closed" }] },
+        },
+      ],
+    },
+    false,
+  );
+  for (const draft of [true, false])
+    placed(
+      `external review of a ${draft ? "draft" : "ready"} PR the factory did not open`,
+      {
+        issues: [
+          issue(7, [], {
+            author: owner,
+            pullRequest: { target: { ...pr, number: 7 }, draft },
+          }),
+        ],
+      },
+      false,
+    );
+  // With factory:failed removed, the run the host still holds shows its PR.
+  placed(
+    "failed label removed, the open PR observed",
+    {
+      issues: [issue(6, claimed)],
+      runs: [ended({ issue: 6 })],
+    },
+    true,
+  );
+  placed("failed label removed, no PR observed", { issues: [issue(6)] }, false);
+});
+
 test("a person's triage label starts a claimed triage run on the host's triage default", () => {
   assert.deepEqual(
     decide({

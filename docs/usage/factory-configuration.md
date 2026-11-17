@@ -307,25 +307,28 @@ Every label the factory reads or writes is a role, declared once in
 `src/label-roles.ts` with the versions that name it, whether only the factory
 writes it, what it excludes and how the factory's transitions change it.
 
-| Role                                            | Versions | Writer                                       | Meaning                                                               |
-| ----------------------------------------------- | -------- | -------------------------------------------- | --------------------------------------------------------------------- |
-| `triage`, `reporter`, `grill`, `owner`          | 3        | People and runs                              | Stops: the issue waits on triage, its reporter, a grill or the owner. |
-| `carried`                                       | 3        | People and runs                              | A quiet stop: another record or ticket carries the request's fate.    |
-| `ready`                                         | 2, 3     | People, or the factory's triage run          | Accepted readiness; the issue-contract validator decides its changes. |
-| `ownerReview`, `majorRelease`                   | 3        | The owner                                    | Gates that stop review at ready-to-merge.                             |
-| `running` (`0052cc`)                            | 2, 3     | The factory                                  | A run holds the issue.                                                |
-| `failed` (`b60205`)                             | 2, 3     | The factory                                  | The run failed for good; remove it to run again.                      |
-| `paused` (`c5def5`)                             | 2, 3     | The factory                                  | The factory paused the run and resumes it by itself.                  |
-| `needsInput` (`fbca04`)                         | 2        | Agents; the factory provisions and clears it | Version 2's stop.                                                     |
-| `skip`                                          | 2, 3     | The repository, or a run's result            | Delivery outside the factory, as below.                               |
-| `hold`, `releaseHold`                           | 2, 3     | The repository                               | The repository's holds, as below.                                     |
-| `priorityHigh`, `priorityNormal`, `priorityLow` | 3        | People, or a run's result                    | Pickup order: high, normal (also no label), then low.                 |
+| Role                                            | Versions | Writer                                       | Meaning                                                                                    |
+| ----------------------------------------------- | -------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `triage`, `reporter`, `grill`, `owner`          | 3        | People and runs                              | Stops: the issue waits on triage, its reporter, a grill or the owner.                      |
+| `carried`                                       | 3        | People and runs                              | A quiet stop: another record or ticket carries the request's fate.                         |
+| `ready`                                         | 2, 3     | People, or the factory's triage run          | Accepted readiness; the issue-contract validator decides its changes.                      |
+| `ownerReview`, `majorRelease`                   | 3        | The owner                                    | Gates that stop review at ready-to-merge.                                                  |
+| `running` (`0052cc`)                            | 2, 3     | The factory                                  | A run holds the issue.                                                                     |
+| `failed` (`b60205`)                             | 2, 3     | The factory                                  | The run failed for good; remove it to run again.                                           |
+| `paused` (`c5def5`)                             | 2, 3     | The factory                                  | The factory paused the run and resumes it by itself.                                       |
+| `needsInput` (`fbca04`)                         | 2        | Agents; the factory provisions and clears it | Version 2's stop.                                                                          |
+| `skip`                                          | 2, 3     | The repository, or a run's result            | Delivery outside the factory, as below.                                                    |
+| `hold`, `releaseHold`                           | 2, 3     | The repository                               | The repository's holds, as below.                                                          |
+| `priorityHigh`, `priorityNormal`, `priorityLow` | 3        | People, or a run's result                    | Pickup order within finishing, then starting work: high, normal (also no label), then low. |
 
 The factory creates or updates only the labels it writes, with the colours
 above, on every pass. Priority uses the configured label names; an omitted
-priority role names no label. Within a priority, pickup keeps its order by issue
-creation time, repository name and issue number. Priority never overrides a
-gate, hold or readiness requirement.
+priority role names no label. Work that finishes an open PR the factory owns
+goes ahead of work that starts, whatever their priorities, as the
+[host's queue](host.md) describes; priority orders work within each group.
+Within a priority, pickup keeps its order by issue creation time, repository
+name and issue number. Priority never overrides a gate, hold or readiness
+requirement.
 
 ### Triage readiness
 

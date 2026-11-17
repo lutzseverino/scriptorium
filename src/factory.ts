@@ -405,7 +405,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
       ),
     ),
   );
-  for (const next of priorityFirst(continuations)) {
+  for (const next of pickupOrder(continuations)) {
     const { repository, issue } = next;
     const at = { repository: repository.name, issue: issue.number };
     if (closing.has(key(repository.name, issue.number))) {
@@ -1742,13 +1742,15 @@ function labelModel(
   return null;
 }
 
-// One queue across every repository: priority first, then oldest issue,
-// repository and number. Admission still enforces every gate.
-function priorityFirst<T extends { repository: Repository; issue: Issue }>(
-  continuations: T[],
-): T[] {
+// One queue across every repository: work that finishes an open PR the
+// factory owns first, then priority, oldest issue, repository and number.
+// Admission still enforces every gate.
+function pickupOrder<
+  T extends { repository: Repository; issue: Issue; launch: Continuation },
+>(continuations: T[]): T[] {
   return [...continuations].sort(
     (left, right) =>
+      Number(finishes(right)) - Number(finishes(left)) ||
       priority(left.issue.labels, left.repository.configuration.labels) -
         priority(right.issue.labels, right.repository.configuration.labels) ||
       Date.parse(left.issue.createdAt) - Date.parse(right.issue.createdAt) ||
@@ -1758,6 +1760,22 @@ function priorityFirst<T extends { repository: Repository; issue: Issue }>(
           ? 1
           : 0) ||
       left.issue.number - right.issue.number,
+  );
+}
+
+// Whether a launch finishes work on an open PR the factory owns, as its own
+// facts show, a resume's being those of the run it relaunches: a merge
+// relaunch; a review, hand-back or hand-back's retry of its PR; or a first
+// attempt whose answered stop names an open PR. A review triggered by a PR the
+// factory did not open starts work, as every other launch does.
+function finishes({ issue, launch }: { issue: Issue; launch: Continuation }) {
+  if (launch.mergeRelaunch) return true;
+  if (launch.target) return !(issue.pullRequest && launch.trigger);
+  return (
+    !launch.retry &&
+    Boolean(
+      launch.inputResume?.pullRequests.some(({ state }) => state === "open"),
+    )
   );
 }
 
