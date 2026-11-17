@@ -234,6 +234,8 @@ function fakePlatform(
   const quotas: Record<string, { remaining: number; reset?: number } | Error> =
     {};
   const quotaHeaders: Record<string, Record<string, string>> = {};
+  const graphqlQuotas: Record<string, { remaining: number; reset?: number }> =
+    {};
 
   const latest = (items: TimelineEvent[]) =>
     items
@@ -619,7 +621,14 @@ function fakePlatform(
             return {
               status: 200,
               headers: quotaHeaders[repository] ?? {},
-              data: { resources: { core: quota } },
+              data: {
+                resources: {
+                  core: quota,
+                  ...(graphqlQuotas[repository] && {
+                    graphql: graphqlQuotas[repository],
+                  }),
+                },
+              },
             };
           }
           if (options.path === `/repos/${repository}`)
@@ -944,6 +953,7 @@ function fakePlatform(
     failedRequests,
     quotas,
     quotaHeaders,
+    graphqlQuotas,
     calls,
     labels,
     viewers,
@@ -5338,22 +5348,38 @@ test("a host rateLimited read probes all repositories before admission and obser
   );
 });
 
-for (const [source, headers, reset, deadline] of [
-  [
-    "Retry-After",
-    { "retry-after": "120", "x-ratelimit-reset": "1791547380" },
-    1791547500,
-    "2026-10-09T12:02:00.000Z",
-  ],
-  [
-    "reset header",
-    { "x-ratelimit-reset": "1791547380" },
-    1791547500,
-    "2026-10-09T12:03:00.000Z",
-  ],
-  ["quota reset", {}, 1791547500, "2026-10-09T12:05:00.000Z"],
-  ["fallback", {}, undefined, "2026-10-09T12:15:00.000Z"],
-] as const)
+// GitHub's `/rate_limit` answer carries the core quota's rate-limit headers,
+// whichever quota is exhausted.
+for (const { source, retryAt, core, graphql, deadline } of [
+  {
+    source: "the stated reset",
+    retryAt: "2026-10-09T12:02:00Z",
+    core: { remaining: 0, reset: 1791547500 },
+    deadline: "2026-10-09T12:02:00.000Z",
+  },
+  {
+    source: "the core quota reset",
+    core: { remaining: 0, reset: 1791547500 },
+    deadline: "2026-10-09T12:05:00.000Z",
+  },
+  {
+    source: "the GraphQL quota reset",
+    core: { remaining: 4000, reset: 1791547380 },
+    graphql: { remaining: 0, reset: 1791547800 },
+    deadline: "2026-10-09T12:10:00.000Z",
+  },
+  {
+    source: "the fallback",
+    core: { remaining: 0 },
+    deadline: "2026-10-09T12:15:00.000Z",
+  },
+] as {
+  source: string;
+  retryAt?: string;
+  core: { remaining: number; reset?: number };
+  graphql?: { remaining: number; reset?: number };
+  deadline: string;
+}[])
   test(`a quota hold uses ${source} and stops polling until that deadline`, async (t) => {
     let limited = true;
     const run = host(t, {
@@ -5370,6 +5396,7 @@ for (const [source, headers, reset, deadline] of [
                 throw new PlatformError(
                   "rateLimited",
                   "API rate limit exceeded",
+                  retryAt ? { retryAt } : {},
                 );
               }
               return connection.issueTracker.issues(filter);
@@ -5378,8 +5405,13 @@ for (const [source, headers, reset, deadline] of [
         };
       },
     });
-    run.github.quotas["acme/widgets"] = { remaining: 0, reset };
-    run.github.quotaHeaders["acme/widgets"] = headers;
+    run.github.quotas["acme/widgets"] = core;
+    if (graphql) run.github.graphqlQuotas["acme/widgets"] = graphql;
+    if (core.reset)
+      run.github.quotaHeaders["acme/widgets"] = {
+        "x-ratelimit-reset": String(core.reset),
+        "x-ratelimit-resource": "core",
+      };
     await run.tick();
     assert.equal(run.launched.length, 0);
     const holds = JSON.parse(
@@ -5391,6 +5423,7 @@ for (const [source, headers, reset, deadline] of [
     await run.tick();
     assert.equal(run.github.calls.length, before);
     run.github.quotas["acme/widgets"] = { remaining: 5000 };
+    delete run.github.graphqlQuotas["acme/widgets"];
     run.clock.now = new Date(deadline);
     await run.tick();
     assert.equal(run.launched.length, 1);
@@ -5544,6 +5577,33 @@ test("a refused quota pause notice preserves the pause and resumes after a resta
   await restarted.tick();
   assert.equal(run.launched.length, 2);
   assert.equal(recordOf(run.state, 4, 1).continuation.quotaRelaunches, 1);
+});
+
+test("a quota hold that cannot be recorded still pauses the run and later probes record again", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const partial = join(run.state, "quota.json.partial");
+  fs.mkdirSync(partial);
+  run.github.quotas["acme/widgets"] = { remaining: 0, reset: 1791547500 };
+  run.launched[0].finish(undefined, undefined, null);
+  await run.drain();
+  assert.equal(
+    recordOf(run.state, 4, 1).ended.paused.cause,
+    "GitHub rate limit",
+  );
+  assert.ok(!fs.existsSync(join(run.state, "quota.json")));
+  const before = run.github.calls.length;
+  await run.tick();
+  assert.equal(run.github.calls.length, before);
+  fs.rmdirSync(partial);
+  run.github.quotas["acme/widgets"] = { remaining: 5000 };
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.tick();
+  assert.ok(fs.existsSync(join(run.state, "quota.json")));
+  assert.equal(run.launched.length, 2);
 });
 
 for (const cause of ["usage limit", "pause threshold"] as const)

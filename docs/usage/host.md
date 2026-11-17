@@ -1368,9 +1368,11 @@ repository whose core or GraphQL quota is exhausted before admitting more
 work. Repositories sharing quota therefore hold together without an
 installation setting; repositories with quota remaining keep working.
 
-Each repository keeps its own deadline: the refused request's stated retry
-time, otherwise `Retry-After` or the rate-limit reset header, otherwise the
-reset in `/rate_limit`, otherwise 15 minutes after observation. No repository
+Each repository keeps its own deadline: the retry time a refused request
+stated in its `Retry-After` or rate-limit reset header, otherwise the latest
+reset `/rate_limit` reports for an exhausted quota, otherwise 15 minutes after
+observation. The headers on `/rate_limit`'s own answer describe the core quota
+only, so they set no deadline. No repository
 read, including another quota probe, runs there before its deadline. At the
 deadline the host probes again before polling or launching; continued
 exhaustion starts another hold. Holds persist in `quota.json` across restarts.

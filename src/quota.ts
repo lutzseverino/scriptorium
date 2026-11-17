@@ -12,7 +12,6 @@ import {
   PlatformError,
   type ConnectionWithLinkAdditions,
 } from "@lutzseverino/postern";
-import { retryAt } from "./usage.ts";
 
 type Hold = { since: string; until: string };
 type Ports = {
@@ -73,23 +72,15 @@ export function createQuota(ports: Ports) {
             data?.resources?.graphql,
           ].filter((resource) => resource?.remaining === 0);
           exhausted ||= resources.length > 0;
-          if (exhausted) {
-            const headers = Object.fromEntries(
-              Object.entries(response.headers).map(([key, value]) => [
-                key.toLowerCase(),
-                value,
-              ]),
-            );
-            until ??=
-              retryAt(headers["retry-after"], at)?.toISOString() ??
-              epoch(headers["x-ratelimit-reset"]);
+          // This read's own rate-limit headers describe the core quota, not
+          // necessarily the exhausted one, so only its body sets a deadline.
+          if (exhausted)
             until ??=
               resources
                 .map((resource) => epoch(resource?.reset))
                 .filter((reset): reset is string => reset !== null)
                 .sort()
                 .at(-1) ?? null;
-          }
         } catch (error) {
           if (
             error instanceof PlatformError &&
@@ -109,7 +100,13 @@ export function createQuota(ports: Ports) {
           );
         }
       }
-      save();
+      // Holds stay in force for this process when they cannot be recorded; a
+      // rejected probe would otherwise block every later read and settlement.
+      try {
+        save();
+      } catch (error) {
+        ports.report(`quota holds could not be recorded: ${error}`);
+      }
     });
     pending = next;
     return next;
