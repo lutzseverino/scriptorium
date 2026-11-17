@@ -4,11 +4,17 @@ One factory process serves every repository its host configuration lists. It
 reads each repository's issues and pull requests from its
 [hosting platform](#hosting-platform), keeps a clone of it, launches agents in
 sandboxes built from the repository's toolchain image, and records what it is
-doing in a status file. Every repository shares one queue: configured high
-priority first, then normal, then low; an issue without a priority label counts
-as normal. Within a priority, older issues go first, then repository name and
-issue number break ties. Provider caps and usage thresholds apply across all
-of them, and priority overrides no gate, hold or readiness requirement.
+doing in a status file. Every repository shares one queue. Work that finishes
+an open PR the factory owns goes first: a review of it, a merge relaunch, a
+hand-back or a hand-back's retry, and a fresh attempt whose answered stop names
+an open PR. Work that starts goes after: triage, a first implement attempt, a
+retry without a PR, and a review of a PR the factory did not open. A
+resumed run keeps the group of the run it relaunches. Within each group,
+configured high priority goes first, then normal, then low; an issue without a
+priority label counts as normal. Within a priority, older issues go first, then
+repository name and issue number break ties. Provider caps, implement limits
+and usage thresholds apply across all of them, and neither the group nor
+priority overrides a gate, hold or readiness requirement.
 
 ## Install and start
 
