@@ -213,7 +213,7 @@ type RunFacts = {
 
 // The comment the host posts for a result, its marker line, and the labels
 // it writes with it: the requested ones before the state, and a triage run's
-// own triage label removed.
+// own triage label removed, or every other stop for a carried result.
 export type ResultPost = {
   comment: string;
   marker: string;
@@ -256,7 +256,15 @@ export function resultPost(
     ].join("\n"),
     marker,
     add: [...(result.labels ?? []), ...(result.state ? [result.state] : [])],
-    remove: triage && labels.triage ? [labels.triage] : [],
+    // A carried result settles every stop it answers, such as the reporter
+    // state whose reply started it, so none asks for an answer.
+    remove: !triage
+      ? []
+      : labels.carried && result.state === labels.carried
+        ? stopLabels(labels).filter((label) => label !== labels.carried)
+        : labels.triage
+          ? [labels.triage]
+          : [],
     ...(triage &&
       result.outcome === "done" && {
         triage: {

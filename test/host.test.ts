@@ -8940,6 +8940,55 @@ test("a carried triage result cites its carrier quietly and removing its label s
   assert.equal(invocation(run.launched[1].options.prompt), "/triage #5");
 });
 
+test("a carried triage result started by a reporter reply settles the reporter state quietly", async (t) => {
+  const carried = "settled-elsewhere";
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 4,
+          labels: ["state:reporter"],
+          author: "outsider",
+          discussion: [],
+        },
+      ],
+    },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify({
+          ...kindsConventions,
+          labels: { ...kindsConventions.labels, carried },
+        }),
+      }),
+    },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.ok(Array.isArray(issue.discussion));
+  issue.discussion.push({
+    id: 1,
+    nodeId: null,
+    url: "https://platform.test/comments/1",
+    author: { login: "outsider", bot: false },
+    body: "facts",
+    createdAt: "2026-10-09T11:59:00Z",
+    updatedAt: "2026-10-09T11:59:00Z",
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: carried,
+    body: "Carried by #3.",
+  });
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(issue.labels, [carried]);
+  assert.match(runComment(issue), /^\*\*Factory run: carried\*\*/);
+  assert.deepEqual(actions(issue), []);
+});
+
 test("only a new reporter author reply starts triage after a restart", async (t) => {
   const comment = (id: number, login: string, at: string): Comment => ({
     id,

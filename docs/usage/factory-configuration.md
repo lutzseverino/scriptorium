@@ -240,8 +240,9 @@ checks:
   a duplicate, the ticket whose pull request closes it, or a past rejection
   it adds nothing to. A triage result asks for that configured label with
   `outcome: "stop"` and cites the carrier in its `body`; no other run kind
-  may. The run comment keeps that citation, mentions nobody and posts no
-  action comment. The issue is excluded as "carried by another record or
+  may. The result removes the issue's other stop labels, such as the reporter
+  state whose reply started triage. The run comment keeps that citation,
+  mentions nobody and posts no action comment. The issue is excluded as "carried by another record or
   ticket" and is never claimed. Removing the carried label starts nothing; a
   new trusted trigger is needed.
 - **A gate**: with a gate label on the issue or its PR, review stops at
