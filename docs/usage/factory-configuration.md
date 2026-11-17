@@ -651,10 +651,11 @@ states that [answer](#answers) it: exactly one of `owner`, `reporter` and
 `grill` repeats the stop state; `ready` is the ready label; `resume` is
 `implement` or `review`, the stopped work that readiness resumes, absent after
 a triage run; `triage` is the triage label when the repository runs triage;
-and `carried` is the carried label when configured. `reason` is the failure, and `unpushable`
-the code-formatted unpushable paths of a failure, joined with commas, present
-only when at least one exists. `link` is the run comment's URL. `tickets`
-contains closed-ticket references such as `#4` or `owner/repo#4`.
+and `carried` is the carried label when configured. `reason` is the failure,
+and `unpushable` the code-formatted unpushable paths of a failure, joined with
+commas, present only when at least one exists. `link` is the run comment's
+URL. `tickets` contains closed-ticket references such as `#4` or
+`owner/repo#4`.
 
 Every supplied template is validated when configuration is read, before any
 comment is needed. An unknown name in any of the three syntax forms, including

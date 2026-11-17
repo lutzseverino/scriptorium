@@ -13,7 +13,7 @@ import { renderComment } from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
-import { roleNames, type Labels } from "./label-roles.ts";
+import { roleNames, type Labels, type RoleName } from "./label-roles.ts";
 import type { InputResume } from "./platform.ts";
 import type { RunResult } from "./run-result.ts";
 import { reference } from "./readiness.ts";
@@ -79,9 +79,8 @@ export type Action = {
   gate?: string;
   reason?: string;
   unpushable?: string;
-  resume?: string;
-  [role: string]: string | undefined;
-};
+  resume?: "implement" | "review";
+} & Partial<Record<RoleName, string>>;
 
 // A stop's action, which names the role it asks and each label that answers
 // it. A person answers by applying the issue's next state or closing it:
