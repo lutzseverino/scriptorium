@@ -1,7 +1,7 @@
 {
   "format": "repo-standards/scope-history/v7",
   "evidence": "historical",
-  "inspection": "sha256:d5e37e533ecc43778d21eef9081c62f104b8fa951a16428cbc76cfec376a3db8",
+  "inspection": "sha256:b6f66d817f5f431c86bad8f83931c289efe9eae56b26bb733cd341d624f4dbbf",
   "resolved": {
     "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
@@ -28,6 +28,14 @@
         "kind": "file",
         "target": ".github/ISSUE_TEMPLATE/bug-report.yml",
         "exact": ".github/ISSUE_TEMPLATE/bug-report.yml"
+      },
+      {
+        "id": "canonical-label-metadata",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "operations/lib/canonical-labels.mjs",
+        "exact": "operations/lib/canonical-labels.mjs"
       },
       {
         "id": "comments",
@@ -92,6 +100,14 @@
             "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
             "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
             "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md",
+            "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
+            "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
+            "docs/adr/0011-own-the-formats-the-factory-reads.md",
+            "docs/adr/0012-run-release-as-a-run-kind.md",
+            "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
+            "docs/adr/0014-give-each-run-a-private-git-directory.md",
+            "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
+            "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md",
             "docs/adr/README.md",
             "docs/development/README.md",
             "docs/development/release.md",
@@ -121,6 +137,14 @@
         "exact": ".scriptorium/config.json"
       },
       {
+        "id": "factory-label-metadata",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "operations/lib/factory-labels.mjs",
+        "exact": "operations/lib/factory-labels.mjs"
+      },
+      {
         "id": "factory-sandbox-image",
         "checks": [],
         "fixes": [],
@@ -146,26 +170,7 @@
       },
       {
         "id": "factory-workflow",
-        "checks": [
-          {
-            "id": "factory-model-policy",
-            "run": {
-              "executable": "node",
-              "script": "operations/check-factory-model-policy.mjs",
-              "resources": [
-                "operations/lib/factory-model-policy.mjs"
-              ],
-              "arguments": []
-            },
-            "prerequisite": {
-              "version-arguments": [
-                "--version"
-              ],
-              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
-            },
-            "timeout-seconds": 30
-          }
-        ],
+        "checks": [],
         "fixes": [],
         "kind": "repository",
         "guidance": "guidance/factory-workflow.md",
@@ -257,6 +262,8 @@
               "executable": "node",
               "script": "operations/setup-github-labels.mjs",
               "resources": [
+                "operations/lib/canonical-labels.mjs",
+                "operations/lib/factory-labels.mjs",
                 "operations/lib/github-operation.mjs",
                 "vendor/postern/postern.mjs",
                 "vendor/postern/LICENSE",
@@ -609,8 +616,12 @@
                 "operations/lib/entry-document.mjs",
                 "operations/lib/rendered-markdown.mjs",
                 "operations/lib/local-markdown-links.mjs",
+                "operations/lib/github-operation.mjs",
                 "vendor/marked",
-                "vendor/parse5"
+                "vendor/parse5",
+                "vendor/postern/postern.mjs",
+                "vendor/postern/LICENSE",
+                "vendor/postern/README.md"
               ],
               "arguments": []
             },
@@ -909,6 +920,14 @@
         "exact": ".github/ISSUE_TEMPLATE/bug-report.yml"
       },
       {
+        "id": "canonical-label-metadata",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "operations/lib/canonical-labels.mjs",
+        "exact": "operations/lib/canonical-labels.mjs"
+      },
+      {
         "id": "comments",
         "checks": [],
         "fixes": [],
@@ -998,6 +1017,14 @@
         "exact": ".scriptorium/config.json"
       },
       {
+        "id": "factory-label-metadata",
+        "checks": [],
+        "fixes": [],
+        "kind": "file",
+        "target": "operations/lib/factory-labels.mjs",
+        "exact": "operations/lib/factory-labels.mjs"
+      },
+      {
         "id": "factory-sandbox-image",
         "checks": [],
         "fixes": [],
@@ -1023,26 +1050,7 @@
       },
       {
         "id": "factory-workflow",
-        "checks": [
-          {
-            "id": "factory-model-policy",
-            "run": {
-              "executable": "node",
-              "script": "operations/check-factory-model-policy.mjs",
-              "resources": [
-                "operations/lib/factory-model-policy.mjs"
-              ],
-              "arguments": []
-            },
-            "prerequisite": {
-              "version-arguments": [
-                "--version"
-              ],
-              "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
-            },
-            "timeout-seconds": 30
-          }
-        ],
+        "checks": [],
         "fixes": [],
         "kind": "repository",
         "guidance": "guidance/factory-workflow.md",
@@ -1131,6 +1139,8 @@
               "executable": "node",
               "script": "operations/setup-github-labels.mjs",
               "resources": [
+                "operations/lib/canonical-labels.mjs",
+                "operations/lib/factory-labels.mjs",
                 "operations/lib/github-operation.mjs",
                 "vendor/postern/postern.mjs",
                 "vendor/postern/LICENSE",
@@ -1477,8 +1487,12 @@
                 "operations/lib/entry-document.mjs",
                 "operations/lib/rendered-markdown.mjs",
                 "operations/lib/local-markdown-links.mjs",
+                "operations/lib/github-operation.mjs",
                 "vendor/marked",
-                "vendor/parse5"
+                "vendor/parse5",
+                "vendor/postern/postern.mjs",
+                "vendor/postern/LICENSE",
+                "vendor/postern/README.md"
               ],
               "arguments": []
             },
@@ -1851,7 +1865,7 @@
     ]
   },
   "discovery": {
-    "identity": "sha256:323853d91a8875c82f857b9ede75571ae23ce5acec022d408d1d611631ab98bd",
+    "identity": "sha256:198a744cf4d739f704ef55f07304eea1699cdc86472464f0ef54658cf36fa7ce",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
@@ -1865,22 +1879,6 @@
           "id": "documentation",
           "coverage": "Drafted from the repository tree by `discovery/draft-documentation-scope.mjs`: every file Git keeps under the documentation root `docs`, a new index for each of its directories without one, the development guide, and the domain glossaries and context maps the rules identify. Paths other declarations own are left out, and so is each README.md outside the documentation roots. Link-repair files and move destinations enter when the work needs them.",
           "candidates": [
-            {
-              "path": ".agents/skills/orchestrate/CREDITS.md",
-              "decision": "exclude",
-              "reason": "Installed skill material owned by the retiring skill-orchestrate declaration, not maintained project documentation to relocate.",
-              "evidence": [
-                ".agents/skills/orchestrate/CREDITS.md"
-              ]
-            },
-            {
-              "path": ".agents/skills/orchestrate/SKILL.md",
-              "decision": "exclude",
-              "reason": "Installed skill material owned by the retiring skill-orchestrate declaration, not maintained project documentation to relocate.",
-              "evidence": [
-                ".agents/skills/orchestrate/SKILL.md"
-              ]
-            },
             {
               "path": "GLOSSARY.md",
               "decision": "include",
@@ -1959,6 +1957,70 @@
               "reason": "A file under the documentation root `docs`.",
               "evidence": [
                 "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0011-own-the-formats-the-factory-reads.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0011-own-the-formats-the-factory-reads.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0012-run-release-as-a-run-kind.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0012-run-release-as-a-run-kind.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0014-give-each-run-a-private-git-directory.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0014-give-each-run-a-private-git-directory.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0015-file-a-runs-findings-from-its-run-result.md"
+              ]
+            },
+            {
+              "path": "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md"
               ]
             },
             {
@@ -2133,7 +2195,7 @@
       "targets": {
         "GLOSSARY.md": {
           "type": "file",
-          "sha256": "f1799cf6542df72471a945098360fca203a9d7d501623bfbd2a5f5e8cc5db1a6",
+          "sha256": "a1b794e56a0f9666ad6937f1c74a5b5157055d8715a065537672f6d7daac9562",
           "executable": false
         },
         "docs/README.md": {
@@ -2153,7 +2215,7 @@
         },
         "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md": {
           "type": "file",
-          "sha256": "a2130c062b53e85dbde11825a9fc4edcd1e933fafac5412b89f147d34c85ea4b",
+          "sha256": "ed507d72dbedca01e31efad594e2d9a0e66146270845a58785c75cef54883978",
           "executable": false
         },
         "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md": {
@@ -2173,7 +2235,7 @@
         },
         "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md": {
           "type": "file",
-          "sha256": "e7dcde70183fa12e5101dbd9066a4055cc26c366331d7c7fde37985ab45f236d",
+          "sha256": "258b12932f70ae1a60d8eec2c87860052c36977e74722800cd2e75afe87206f7",
           "executable": false
         },
         "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md": {
@@ -2181,14 +2243,54 @@
           "sha256": "b40ea4678c8fe68f831dbdcbb2f05d9f6983858487944c7051d835fa52d211fd",
           "executable": false
         },
+        "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md": {
+          "type": "file",
+          "sha256": "838e261f5dde038dc624df25e7bbb913609f789363374fd165ddca8e37c15966",
+          "executable": false
+        },
+        "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md": {
+          "type": "file",
+          "sha256": "7fc00a1d6ad49b6b826ac562f9cb38c874d2b3c6737bdeada929102c23c4a80f",
+          "executable": false
+        },
+        "docs/adr/0011-own-the-formats-the-factory-reads.md": {
+          "type": "file",
+          "sha256": "97b7d996140237728a65cb49b6a2b7699cb9d3df9605cea603447248ac44b673",
+          "executable": false
+        },
+        "docs/adr/0012-run-release-as-a-run-kind.md": {
+          "type": "file",
+          "sha256": "63a8f4bc67898c13ee0495e1fa4796421613cb4942f66bf0a6babe2f715d0f68",
+          "executable": false
+        },
+        "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md": {
+          "type": "file",
+          "sha256": "77547cc27a8e4191f62fe6493b927128f9dae82cca6cdf35d7e2f229aa0591e6",
+          "executable": false
+        },
+        "docs/adr/0014-give-each-run-a-private-git-directory.md": {
+          "type": "file",
+          "sha256": "e60b5437f91839eb4af8717b7ba5236403bf1702c5c825c865937aebc1106c77",
+          "executable": false
+        },
+        "docs/adr/0015-file-a-runs-findings-from-its-run-result.md": {
+          "type": "file",
+          "sha256": "3a75355d6147b9e99a509816790954576e0dc72740a0ef2934640c13a83ddd0f",
+          "executable": false
+        },
+        "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md": {
+          "type": "file",
+          "sha256": "df8e1d33427237f961b1244e3511e1b31769c6e4a2272ad53d359c573ebf4960",
+          "executable": false
+        },
         "docs/adr/README.md": {
           "type": "file",
-          "sha256": "5f4ddc2b3ee4779251c2ea041c9af79d71370cde4bd5c56b9c8822b94ea7b77d",
+          "sha256": "d9a473a219dd713aae0a1d44d3dc60b9253246e2527a8194d22e68ec5a9cc478",
           "executable": false
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "7b6c804cb08cdcd672e6db5913c781bf543af0755872f76893eb476130f3ebcd",
+          "sha256": "bca3dc03f7c84cabd8149c420900cf9d219c239bd653ef3f932ebb377cb540a5",
           "executable": false
         },
         "docs/development/release.md": {
@@ -2198,32 +2300,32 @@
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "2aa36603642bb9cb3c5342ccd27b1e525a788678b108f09f567d3d461e93bf34",
+          "sha256": "64e1b458e2ec04800f14739ad801fbb2de45ba4422f880013f81b661495c52f4",
           "executable": false
         },
         "docs/usage/body-contracts.md": {
           "type": "file",
-          "sha256": "7b31f31b6227f9858dc5f8a33cf812190c4a6c2fcb818e7b6602a52e6be8d6a3",
+          "sha256": "6eafb5b814345c166292c83e1721f8da51525de0401b02389acf15c681510ebe",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "ed83be8695781816cb9b354952fecfc842342dc1356db5773ed69980f8bd09a7",
+          "sha256": "51e0984aa28898a84204eb6ac291a1e99de09e9d5d5252a75ef740b0c0a13925",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "f467f9f128a349dfa69220af0951776cae82db37b6372e500d3e0d59e85bf023",
+          "sha256": "5eed2a83e20923521245f890db345add32af487a307527eeadf53e2de1be5a84",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "858c8725d3dcd6e48963ac9a9192dd612a7d91499de50527504f03c9142d981f",
+          "sha256": "c951850998e8ac4855a8bdc8dde7b158081add440e663041a39bb657c3672a97",
           "executable": false
         },
         "package.json": {
           "type": "file",
-          "sha256": "dcef7a166b53f0f28667e3ed7f5887698ac8b897bb62618874ffb5ca8924b2d1",
+          "sha256": "50070e51ede67ff0f4ec328c48de9997029d8ba2008a128273a849a475b007e4",
           "executable": false
         }
       }
@@ -2311,6 +2413,70 @@
             "reason": "A file under the documentation root `docs`.",
             "evidence": [
               "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0011-own-the-formats-the-factory-reads.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0011-own-the-formats-the-factory-reads.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0012-run-release-as-a-run-kind.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0012-run-release-as-a-run-kind.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0014-give-each-run-a-private-git-directory.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0014-give-each-run-a-private-git-directory.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0015-file-a-runs-findings-from-its-run-result.md"
+            ]
+          },
+          {
+            "path": "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md"
             ]
           },
           {
@@ -2410,9 +2576,7 @@
             ]
           }
         ],
-        "unresolved": [
-          "Which of these Markdown files under `.agents` are documentation this scope must cover, such as a document to move into a documentation category: `.agents/skills/orchestrate/CREDITS.md` and `.agents/skills/orchestrate/SKILL.md`? Include each one, with its destination when it moves."
-        ]
+        "unresolved": []
       },
       {
         "id": "typescript-astro-stack",
@@ -2528,12 +2692,12 @@
         },
         ".agents/skills/babysit/CREDITS.md": {
           "type": "file",
-          "sha256": "3e818ff6a36fad53ee4e9c72a190f4c4f8a01d27320561841414a188ad3b286a",
+          "sha256": "407cbf3f51699040bf0006e3c9722a8a2b9a867bedf52f60c2d734db5103d09e",
           "executable": false
         },
         ".agents/skills/babysit/SKILL.md": {
           "type": "file",
-          "sha256": "d5ad872bc16e66f328575704d65abc1cd60ef9b08e8214e6e8023421305292bf",
+          "sha256": "0fd76955ad2b752809799eddd274486af13640ff16e062f1448bf5c281c081e5",
           "executable": false
         },
         ".agents/skills/babysit/body-links.mjs": {
@@ -2543,27 +2707,32 @@
         },
         ".agents/skills/babysit/merge.mjs": {
           "type": "file",
-          "sha256": "52ec42a2592256b82ca2ee3474e93604eaf2d82169dbc8c087bf877bc23551e1",
+          "sha256": "2cb20c6582ccff25d7821112aa30781820190ecd5662e4cd9e56e7a4f6fc8492",
           "executable": false
         },
         ".agents/skills/babysit/platform.mjs": {
           "type": "file",
-          "sha256": "fc6fdbf5129dea3335ea340882806d7e9ee908f8b4dc72d10873c7637efc1fe3",
+          "sha256": "7275843cf10d1ca4b8dd150066141dffbb6cb9f931b8b967fd99cf9c9ee53d1c",
           "executable": false
         },
         ".agents/skills/babysit/pull-request-reviewer.mjs": {
           "type": "file",
-          "sha256": "d2b3ecf236b1758f299577cfd81ccdec3ec0980e46209fbec0cd06e9060c2f4a",
+          "sha256": "2d22280d01d2835b8e0a47bfc3fa50c507b74aee6b0aa047d4f106f98871a5dd",
           "executable": false
         },
         ".agents/skills/babysit/request.mjs": {
           "type": "file",
-          "sha256": "a293d000f9c190481e345a25bfe01ec7b894f263c0bb03917dde1f35db0b50c7",
+          "sha256": "859748cea839f995d20f31886818f7ca5176f916fd992bb9b3d5a9afa94e9535",
+          "executable": false
+        },
+        ".agents/skills/babysit/required-checks.mjs": {
+          "type": "file",
+          "sha256": "bde82ec3b4520fe625bb61401436dce526fe8e04914baf5ffbe4aa6ddd914bf1",
           "executable": false
         },
         ".agents/skills/babysit/review-outcome.mjs": {
           "type": "file",
-          "sha256": "58632b2e8c8de4487204bdd14a5ff2208b6b824b53f49d3aa512ce606e940108",
+          "sha256": "a3213bb3983f56a1df1b498157105cfd591b4e6a4afbcf9d47b6bf2429feceba",
           "executable": false
         },
         ".agents/skills/babysit/review-policy.mjs": {
@@ -2573,27 +2742,27 @@
         },
         ".agents/skills/babysit/reviewer.mjs": {
           "type": "file",
-          "sha256": "580098ac88a2be873d271dd7107cfcb8b0ab1ab059ccb39236f73e4f4eec3508",
+          "sha256": "fb4d068de25ec4f473fe9dd6e361c395e500fd824563d30f84497bec2eade3b3",
           "executable": false
         },
         ".agents/skills/babysit/trusted-review-config.mjs": {
           "type": "file",
-          "sha256": "25d4cb7bf51366e305d2a741c0ebb4cf6f3dac510f2519e4d0f3977898821dc6",
+          "sha256": "0ac7daa9f12cc8d646849e7f550730d83ecbda2beac6106ee4545f756a04705e",
           "executable": false
         },
         ".agents/skills/babysit/wait.mjs": {
           "type": "file",
-          "sha256": "f865d885a46d5943823eeca7407fab40bf9d5eea90ab0b5697a18c6d26610f30",
+          "sha256": "c4aa0514411a924001d9c4d28f242256db8d3d61e3ff543bf79fd542a7697681",
           "executable": false
         },
         ".agents/skills/code-review/CREDITS.md": {
           "type": "file",
-          "sha256": "a8a1e5930513f2e4500ed539291ac173800a9e0cf55d9284d6fc4cf7cdf40476",
+          "sha256": "34b37f6a6bf25894a3f87ec1bbaf332f2947dcc3d88488fdd3c275a531c1d244",
           "executable": false
         },
         ".agents/skills/code-review/SKILL.md": {
           "type": "file",
-          "sha256": "609b4a6d8e730dcea7ab239b9268160033dd192857587e065b6af716885f7c6f",
+          "sha256": "77eae9f8d2bd383c1decfd8aab8b902e2b258915a60b4f86755610e8c91e8a2c",
           "executable": false
         },
         ".agents/skills/code-review/agents/openai.yaml": {
@@ -2601,9 +2770,14 @@
           "sha256": "8229ca854e11dc8e6aef2131ee03f31fb1561cf905fab9ccc325180cf3331352",
           "executable": false
         },
+        ".agents/skills/code-review/ownership-facts.mjs": {
+          "type": "file",
+          "sha256": "906fdcf6301db6188c79c550d9f2e43c704a9bdda0bcb9eb67d5e1f5ea353b1f",
+          "executable": false
+        },
         ".agents/skills/codebase-design/CREDITS.md": {
           "type": "file",
-          "sha256": "0a8a93ed13b6e8b65dd7c59a010c49558a1a670e4eb84b618976d2466e6437bc",
+          "sha256": "8b96c332a632287d74a45715680b1683da910e2e219bd15a7af4fd375161190e",
           "executable": false
         },
         ".agents/skills/codebase-design/DEEPENING.md": {
@@ -2618,7 +2792,7 @@
         },
         ".agents/skills/codebase-design/SKILL.md": {
           "type": "file",
-          "sha256": "ba1a4f9c57ba7f52e0e88b2149d1293495858bcf0993352cc7e0df193bfb67ea",
+          "sha256": "1495f4368b689d14d52282f93eb65dec2760e1aebbb202be739e459b6cc2e9cd",
           "executable": false
         },
         ".agents/skills/codebase-design/agents/openai.yaml": {
@@ -2628,7 +2802,7 @@
         },
         ".agents/skills/diagnosing-bugs/CREDITS.md": {
           "type": "file",
-          "sha256": "9073d0c470ac0b79c9385ec2f7364bd477c0b1a4c3b9125b59602a77a817fa48",
+          "sha256": "23f6645261d3397183fa2aa8078e950447dc209c550ccff764519e100183290f",
           "executable": false
         },
         ".agents/skills/diagnosing-bugs/SKILL.md": {
@@ -2653,7 +2827,7 @@
         },
         ".agents/skills/domain-modeling/CREDITS.md": {
           "type": "file",
-          "sha256": "bbcc5a0d207d4c715189f3110887a379ca5e10787f9fdcf60bfb944aff1480ec",
+          "sha256": "724e6da4dd9f84bbf1a3f3ca74904784a2778e303b305fb8ba6206462f905c59",
           "executable": false
         },
         ".agents/skills/domain-modeling/GLOSSARY-FORMAT.md": {
@@ -2671,14 +2845,24 @@
           "sha256": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b",
           "executable": false
         },
+        ".agents/skills/factory/CREDITS.md": {
+          "type": "file",
+          "sha256": "84f85448b6dbe4baeb6ff2761a1069c598dfba5fddab41ece9acd4bab74fab5d",
+          "executable": false
+        },
+        ".agents/skills/factory/SKILL.md": {
+          "type": "file",
+          "sha256": "9a0df66e24b4d3ae2da6378c055097d88b4a7cd6f96dc6713e31f42704634c0c",
+          "executable": false
+        },
         ".agents/skills/grill-with-docs/CREDITS.md": {
           "type": "file",
-          "sha256": "6bf2b0e20439662835b7ec5e8dff26c99f4e87876bdc7c355265aafb7c427b0d",
+          "sha256": "5beab341239f89a8e49b9e82f0b39856c4d3cd2d3d5cd9ea136bd25d4e6574b0",
           "executable": false
         },
         ".agents/skills/grill-with-docs/SKILL.md": {
           "type": "file",
-          "sha256": "8cf85fcfe4d23acb4d1c50f98f760adbd526c0985551a9e53f34c07315775d0c",
+          "sha256": "4e2d5978170c5cf499ce063a7ea4fea657779268f7677681fb575862613ce866",
           "executable": false
         },
         ".agents/skills/grill-with-docs/agents/openai.yaml": {
@@ -2688,12 +2872,12 @@
         },
         ".agents/skills/grilling/CREDITS.md": {
           "type": "file",
-          "sha256": "50702f66166d7fb00e555c44374c7d4be4a6d4a60f1b09e11b409b2c0b0bbf0e",
+          "sha256": "fe3846dbb144a20a941c89b2d81282ff15b41b82c7bb4848fa12f99e26024e84",
           "executable": false
         },
         ".agents/skills/grilling/SKILL.md": {
           "type": "file",
-          "sha256": "550963b196dafccfb7b438e0772a04859e7c8f09e45fd62d43fdcde6a6104441",
+          "sha256": "760732f8269c80cda86d4ec977bcb99564e7728924b07a19ce94d7e43cd940e7",
           "executable": false
         },
         ".agents/skills/grilling/agents/openai.yaml": {
@@ -2703,12 +2887,12 @@
         },
         ".agents/skills/implement/CREDITS.md": {
           "type": "file",
-          "sha256": "55c3fdf5d679908d21398c292069abc547fe4430897c57a441f5e3afb015d18a",
+          "sha256": "b6b3df15545ee616281f80b2fde9c8eb96354491059ba13e23bf13c8373958fb",
           "executable": false
         },
         ".agents/skills/implement/SKILL.md": {
           "type": "file",
-          "sha256": "c8ee4b891bd4a6ae5d1cb3f73d20f3bf980ce66a783706042339ebcc436ce436",
+          "sha256": "4d10c26aa5c87054db9eb6abca3471a7babf4e3561ea2c16f67ed22d0d106be5",
           "executable": false
         },
         ".agents/skills/implement/agents/openai.yaml": {
@@ -2718,7 +2902,7 @@
         },
         ".agents/skills/improve-codebase-architecture/CREDITS.md": {
           "type": "file",
-          "sha256": "2cb8c96b72929b6cac2780d291f047a8ecb350a678add177159316619e2e2122",
+          "sha256": "f6a40012a71c8efaf53119c4a0a4adb7b40a0dad9e898e0103d86e76b17e56b1",
           "executable": false
         },
         ".agents/skills/improve-codebase-architecture/HTML-REPORT.md": {
@@ -2728,7 +2912,7 @@
         },
         ".agents/skills/improve-codebase-architecture/SKILL.md": {
           "type": "file",
-          "sha256": "96942b6f0b302b2101cb78ea1a7743aa4972a149caba3364a11fad7770b6dc47",
+          "sha256": "05178cd78133cd251d1051bc699ea7f8c38aed31f8cf24d584d7f2320d3823c5",
           "executable": false
         },
         ".agents/skills/improve-codebase-architecture/agents/openai.yaml": {
@@ -2736,34 +2920,14 @@
           "sha256": "c8cb20f68ebf0edb4e497bc11ae5fcaa196004e661cd189015b04f4109ced7f1",
           "executable": false
         },
-        ".agents/skills/orchestrate/CREDITS.md": {
-          "type": "file",
-          "sha256": "aef2eeb3e1c130c9d5cd6e2805b5480d18a96e6bafd1c1c1cdf0c2dcb545a476",
-          "executable": false
-        },
-        ".agents/skills/orchestrate/SKILL.md": {
-          "type": "file",
-          "sha256": "83dabd0a7a3a534558d939edd04dab5a395262c1f627fc88377f0712d4b2cb89",
-          "executable": false
-        },
-        ".agents/skills/orchestrate/agents/openai.yaml": {
-          "type": "file",
-          "sha256": "8fa9f8f0710336e9e9a32915436647c3f5c3bfa9a2acdbdcaf613daba800bf6c",
-          "executable": false
-        },
-        ".agents/skills/orchestrate/wait.mjs": {
-          "type": "file",
-          "sha256": "3dff1616c2b4ba3dd481584a71852732f9fadf52d31a58ed4223b611e7cf17e9",
-          "executable": false
-        },
         ".agents/skills/pr/CREDITS.md": {
           "type": "file",
-          "sha256": "2631c4c0899decfed35bc7c4c930e069e91769490ddcd128e523602469db4962",
+          "sha256": "d1f1e6a3639bab2a9a8b009ed61d0ad20322746e24490376114fd79161ad92aa",
           "executable": false
         },
         ".agents/skills/pr/SKILL.md": {
           "type": "file",
-          "sha256": "708ab786bb60e7b7c266375b00cebd3600b00e44b49c12d8e63b1d1868ce427e",
+          "sha256": "c0b0ea622c08c919435be7fe5462549b761e8f06704d2cbac207ced6a989a7f5",
           "executable": false
         },
         ".agents/skills/pr/agents/openai.yaml": {
@@ -2773,7 +2937,7 @@
         },
         ".agents/skills/prototype/CREDITS.md": {
           "type": "file",
-          "sha256": "54273a012bf62110fe7cf392f6ac3e512a7d4a0ac1f7dbccac7dbcc3805e571f",
+          "sha256": "d7127e14cbad9655d701b88cb2343317b07ab65360a9193092b874b6f9c8c699",
           "executable": false
         },
         ".agents/skills/prototype/LOGIC.md": {
@@ -2808,12 +2972,12 @@
         },
         ".agents/skills/research/CREDITS.md": {
           "type": "file",
-          "sha256": "306f99289f0dcc2da9437d7b3b4d51b06446e2b4ca8395dffd2bdcd80afc51c9",
+          "sha256": "beb53571788b6df7c22fe251b9a23099c6e8102a896bf3e92ee12dfee194486b",
           "executable": false
         },
         ".agents/skills/research/SKILL.md": {
           "type": "file",
-          "sha256": "5d4f569e95e0041f8160837f7fba3e0609df1d8594307109299dff8ecd7b05b1",
+          "sha256": "5e63fce1b54edbb1179be9e2d493131ef8b7194cc8560774b2d6daab2c4291fe",
           "executable": false
         },
         ".agents/skills/research/agents/openai.yaml": {
@@ -2821,9 +2985,24 @@
           "sha256": "9b4c470d63221c1f68f22df70b83e2f12401b317babe0d1b7b5f24a974474d0d",
           "executable": false
         },
+        ".agents/skills/review/CREDITS.md": {
+          "type": "file",
+          "sha256": "84f85448b6dbe4baeb6ff2761a1069c598dfba5fddab41ece9acd4bab74fab5d",
+          "executable": false
+        },
+        ".agents/skills/review/SKILL.md": {
+          "type": "file",
+          "sha256": "8760d2756881988980baa39cbc069195bd78689d2d03025879f67c28390f795b",
+          "executable": false
+        },
+        ".agents/skills/review/round.mjs": {
+          "type": "file",
+          "sha256": "878bba6ce24758c5b7769cee395d1c784c290f230847bd158ace54bbfc584a1a",
+          "executable": false
+        },
         ".agents/skills/tdd/CREDITS.md": {
           "type": "file",
-          "sha256": "a14fe58f53cd2351f8ad7fe609bb656a726606d001d64c13c8df4a7ea004e8b5",
+          "sha256": "e8fae429588f9cc4099a9a1fcbb3d2be2443b5d1ddbd999a76f4092db14c2c38",
           "executable": false
         },
         ".agents/skills/tdd/SKILL.md": {
@@ -2848,12 +3027,12 @@
         },
         ".agents/skills/to-spec/CREDITS.md": {
           "type": "file",
-          "sha256": "d03f2632fa36e602bcf0e9c38cb7f7fb18b19c821cf1186c1270103b477f264e",
+          "sha256": "ae7522625cbe55c09ff06187833c882a8b13c448f590957cc0ff707deb3c9fac",
           "executable": false
         },
         ".agents/skills/to-spec/SKILL.md": {
           "type": "file",
-          "sha256": "f747048852302b2d5a5327d76da2ef5c193c9e937fbef0a2e22f8447e44e29d5",
+          "sha256": "b1dcebf4e4928e042c2aef15e562c41973769ca90d0be16948586cced1a840dd",
           "executable": false
         },
         ".agents/skills/to-spec/agents/openai.yaml": {
@@ -2863,12 +3042,12 @@
         },
         ".agents/skills/to-tickets/CREDITS.md": {
           "type": "file",
-          "sha256": "9db8d0779baae0285125baff989a039e6dcb9db11d21d3e667a6671e55441add",
+          "sha256": "ddb3ec22b0de7c4e071a890fa72e7abc17145c49c48c4bf2724a212c9663e79b",
           "executable": false
         },
         ".agents/skills/to-tickets/SKILL.md": {
           "type": "file",
-          "sha256": "db4c14dc5d5e78db9e275634ef2284a225dd421106a97b8362d3ac4a84625c90",
+          "sha256": "e07e532190ec55a7749238e0f2b66b48f8e9dd7f315b4f11e3961ad45e052d66",
           "executable": false
         },
         ".agents/skills/to-tickets/agents/openai.yaml": {
@@ -2878,12 +3057,12 @@
         },
         ".agents/skills/triage/AGENT-BRIEF.md": {
           "type": "file",
-          "sha256": "846e20148f152a7bba0b32e780bb01532fd88857a3556ce7f0e920b3d64c5349",
+          "sha256": "3e3f4fcc784acc1d8de456eda8d39f603ebf7997d6d27284d13c14a0d6398aa1",
           "executable": false
         },
         ".agents/skills/triage/CREDITS.md": {
           "type": "file",
-          "sha256": "837ca57f46f720fda1b1ae50ae7b1c0c7a5eceadc3df312974486d0953cc586a",
+          "sha256": "374203880c94f935c6eea9e50adbf38c6c896c6c1bc5fa823a0599f358108c8e",
           "executable": false
         },
         ".agents/skills/triage/OUT-OF-SCOPE.md": {
@@ -2893,7 +3072,7 @@
         },
         ".agents/skills/triage/SKILL.md": {
           "type": "file",
-          "sha256": "bab14b50498f86a0629c6955fb5416f2c166cfe24239d33279dfdfb30187656b",
+          "sha256": "1593e9df610265d357bc97f7eb0893e7a272c58fbba8867513e16cbd31a9eb23",
           "executable": false
         },
         ".agents/skills/triage/agents/openai.yaml": {
@@ -2903,17 +3082,17 @@
         },
         ".agents/skills/triage/ready.mjs": {
           "type": "file",
-          "sha256": "d35dbec41fd48778ef5e95a64e94b9482948b992456272827dd6f41a3ce02f54",
+          "sha256": "615ac52ce5c59d1c39a4b323f5f6f97643fe703773250f1a5f0f20075293c8ea",
           "executable": false
         },
         ".agents/skills/wayfinder/CREDITS.md": {
           "type": "file",
-          "sha256": "e1eea56ad12a8fa780b3d746f2108f421bf1a322c1a5c52c82466a12ecd5c933",
+          "sha256": "c6f847b8083f4a16ab087fda8d18ff19e29e56e9078274599f2ba4cfbb6ec90b",
           "executable": false
         },
         ".agents/skills/wayfinder/SKILL.md": {
           "type": "file",
-          "sha256": "89d8e3f68a5ef0e65f15ff94321dc7feeb22c9f03f5f32b874a6068bee9cb182",
+          "sha256": "801037381f3aed3fe09e69eb3f27d1d0d85660ee57e72c5022b14c413fed00b0",
           "executable": false
         },
         ".agents/skills/wayfinder/agents/openai.yaml": {
@@ -2923,7 +3102,7 @@
         },
         ".agents/skills/writing-for-agents/CREDITS.md": {
           "type": "file",
-          "sha256": "f55ac668257fa933322d694da377d6a49b8b934c883eabec7732bbe53677a9e5",
+          "sha256": "1653c6d6471ab2a5f674c8f4813c81d7bd2325c069db8d21b3442c01b67f43b3",
           "executable": false
         },
         ".agents/skills/writing-for-agents/SKILL-MECHANICS.md": {
@@ -2961,6 +3140,10 @@
           "type": "symlink",
           "target": "../../.agents/skills/domain-modeling"
         },
+        ".claude/skills/factory": {
+          "type": "symlink",
+          "target": "../../.agents/skills/factory"
+        },
         ".claude/skills/grill-with-docs": {
           "type": "symlink",
           "target": "../../.agents/skills/grill-with-docs"
@@ -2977,10 +3160,6 @@
           "type": "symlink",
           "target": "../../.agents/skills/improve-codebase-architecture"
         },
-        ".claude/skills/orchestrate": {
-          "type": "symlink",
-          "target": "../../.agents/skills/orchestrate"
-        },
         ".claude/skills/pr": {
           "type": "symlink",
           "target": "../../.agents/skills/pr"
@@ -2996,6 +3175,10 @@
         ".claude/skills/research": {
           "type": "symlink",
           "target": "../../.agents/skills/research"
+        },
+        ".claude/skills/review": {
+          "type": "symlink",
+          "target": "../../.agents/skills/review"
         },
         ".claude/skills/tdd": {
           "type": "symlink",
@@ -3021,39 +3204,29 @@
           "type": "symlink",
           "target": "../../.agents/skills/writing-for-agents"
         },
-        ".factory/Dockerfile": {
-          "type": "file",
-          "sha256": "e605c211d99ec6175fdebad1e1e92b72a1c6f87c4c558b3a09197c3c40bd1725",
-          "executable": false
-        },
-        ".factory/config.json": {
-          "type": "file",
-          "sha256": "66e4037c28481f7a62af7d3873e99a19ad624230c5fb38fbb9b8dba71a87d36a",
-          "executable": false
-        },
         ".gitattributes": {
           "type": "file",
-          "sha256": "35d0db95edd11811a4e4d762b4ce129a3311c12bf711b0b2fc903d11ac8af50e",
+          "sha256": "601a97d49feba6c7314ce9ad2690236c5ba0c66856a0fc7ec27de36494b1f270",
           "executable": false
         },
         ".github/ISSUE_TEMPLATE/bug-report.yml": {
           "type": "file",
-          "sha256": "5fca3bab67073fdb827cd5eb88d9c413ac1e1df2891a85c7938420dcb1e3dfed",
+          "sha256": "640ba23f2f36bf471b4a2fca372ebc59a284336d80a3a7c7cb235cb49e4a3517",
           "executable": false
         },
         ".github/ISSUE_TEMPLATE/feature-request.yml": {
           "type": "file",
-          "sha256": "d3df4f5c27dd7b7a22d0baec1a52a1dc3301c002549f8634392a3abd26566505",
+          "sha256": "c965084796f10393fe0fb7ee3b3507b16b383949b59d328194aac62778cdecee",
           "executable": false
         },
         ".github/ISSUE_TEMPLATE/implementation-ticket.yml": {
           "type": "file",
-          "sha256": "d452da0ad9e39173f681b699d3848a00ab3466b55be508cc3f36d7731083bff6",
+          "sha256": "357a7458d2747c52388f483312968203e3bee05c180d1092dc8059225a896628",
           "executable": false
         },
         ".github/ISSUE_TEMPLATE/specification.yml": {
           "type": "file",
-          "sha256": "77b6359750ff03695a1dc19ee121e664787f4a6954cd9847277ab40fb6b22dfd",
+          "sha256": "0ca007476479bfe674d477826c706b71cc1baac4608c19b0e16e3d2b10d7a206",
           "executable": false
         },
         ".github/PULL_REQUEST_TEMPLATE.md": {
@@ -3083,7 +3256,7 @@
         },
         ".github/scripts/validate.mjs": {
           "type": "file",
-          "sha256": "bab5f39ee6e1fdb423d90b19dec73b1226ed68ab90a804442a7503e9e9bd6bdc",
+          "sha256": "ba298cfed877e125c274808a16aa33d3ab8939a7a96c6a8a50acb366a34d4a56",
           "executable": false
         },
         ".github/workflows/ci.yml": {
@@ -3093,7 +3266,7 @@
         },
         ".github/workflows/issue-contracts.yml": {
           "type": "file",
-          "sha256": "1734fd905c48e75b80c7a4db7518799c4ae5dbd0eecfef73b6025b0b777ad4f6",
+          "sha256": "12259993d462dc9e0f7915a4142b68ab16dcbef0b70e8de2b47d2a650d42ae8a",
           "executable": false
         },
         ".github/workflows/pr-metadata.yml": {
@@ -3103,7 +3276,7 @@
         },
         ".github/workflows/sandbox-image.yml": {
           "type": "file",
-          "sha256": "598ab9931a8cfc63a3e1d2487fb151eca9b134a5e9a4e3bfa20d4b87b96399b3",
+          "sha256": "0078387a573507d5c8b97adb5d53c5fd13e33fd2c640ab8870c06bf02c5dff69",
           "executable": false
         },
         ".github/workflows/standards-update.yml": {
@@ -3118,27 +3291,37 @@
         },
         ".oxlintrc.json": {
           "type": "file",
-          "sha256": "c78a28132c89735ee6727f29f79ba5211022133b016bbef038943036e159a2d4",
+          "sha256": "6c845fd45e4fca041da026dd386cc3a9205c8be108db72e60853f9ea59ba080a",
           "executable": false
         },
         ".prettierignore": {
           "type": "file",
-          "sha256": "731e2e51fd3cf05f00c6d04953403baa705a999cc6a98f7092e3768477f68769",
+          "sha256": "2634cd8f7db3fade7b3c541a9580ae04b6f3408a43eefa4319f7b67108c27c3b",
+          "executable": false
+        },
+        ".scriptorium/Dockerfile": {
+          "type": "file",
+          "sha256": "e605c211d99ec6175fdebad1e1e92b72a1c6f87c4c558b3a09197c3c40bd1725",
+          "executable": false
+        },
+        ".scriptorium/config.json": {
+          "type": "file",
+          "sha256": "b84128dca8667b8490f0f9436b996cd686f7255060614f0af8260c174cd99cb9",
           "executable": false
         },
         "AGENTS.md": {
           "type": "file",
-          "sha256": "ddc8a1fecde13610ba656ee98c9d2cb128b15b7fc20e9068beb0eef9eaf4ba1b",
+          "sha256": "5ca7e2b78cedb385fe2e06b9c1bb46fc5204f66399b38c46f1dc4ed2f9ded32d",
           "executable": false
         },
         "CONTRIBUTING.md": {
           "type": "file",
-          "sha256": "7339c01ea325a5537d74bedf311b671930a24c6b1134618565167e20ea2b18de",
+          "sha256": "1eb41ff2c50cb6bdbc9561a713ff55e0ef325bb91a639d88c200ecc20b19c930",
           "executable": false
         },
         "GLOSSARY.md": {
           "type": "file",
-          "sha256": "f1799cf6542df72471a945098360fca203a9d7d501623bfbd2a5f5e8cc5db1a6",
+          "sha256": "a1b794e56a0f9666ad6937f1c74a5b5157055d8715a065537672f6d7daac9562",
           "executable": false
         },
         "LICENSE": {
@@ -3148,7 +3331,7 @@
         },
         "README.md": {
           "type": "file",
-          "sha256": "f5ec083dfe2ebd1d03e6a3c011baf96ee2e994ccff1c7ae1267be5c3f8d61547",
+          "sha256": "79ed73bbf6fe4f88736f82c25dac1fa6dd40f993b12e579efae542f287f334de",
           "executable": false
         },
         "docs/README.md": {
@@ -3168,7 +3351,7 @@
         },
         "docs/adr/0003-hold-each-provider-and-never-override-the-pause-threshold.md": {
           "type": "file",
-          "sha256": "a2130c062b53e85dbde11825a9fc4edcd1e933fafac5412b89f147d34c85ea4b",
+          "sha256": "ed507d72dbedca01e31efad594e2d9a0e66146270845a58785c75cef54883978",
           "executable": false
         },
         "docs/adr/0004-retain-sandbox-images-the-factory-can-prove-it-owns.md": {
@@ -3188,7 +3371,7 @@
         },
         "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md": {
           "type": "file",
-          "sha256": "e7dcde70183fa12e5101dbd9066a4055cc26c366331d7c7fde37985ab45f236d",
+          "sha256": "258b12932f70ae1a60d8eec2c87860052c36977e74722800cd2e75afe87206f7",
           "executable": false
         },
         "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md": {
@@ -3196,9 +3379,49 @@
           "sha256": "b40ea4678c8fe68f831dbdcbb2f05d9f6983858487944c7051d835fa52d211fd",
           "executable": false
         },
+        "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md": {
+          "type": "file",
+          "sha256": "838e261f5dde038dc624df25e7bbb913609f789363374fd165ddca8e37c15966",
+          "executable": false
+        },
+        "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md": {
+          "type": "file",
+          "sha256": "7fc00a1d6ad49b6b826ac562f9cb38c874d2b3c6737bdeada929102c23c4a80f",
+          "executable": false
+        },
+        "docs/adr/0011-own-the-formats-the-factory-reads.md": {
+          "type": "file",
+          "sha256": "97b7d996140237728a65cb49b6a2b7699cb9d3df9605cea603447248ac44b673",
+          "executable": false
+        },
+        "docs/adr/0012-run-release-as-a-run-kind.md": {
+          "type": "file",
+          "sha256": "63a8f4bc67898c13ee0495e1fa4796421613cb4942f66bf0a6babe2f715d0f68",
+          "executable": false
+        },
+        "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md": {
+          "type": "file",
+          "sha256": "77547cc27a8e4191f62fe6493b927128f9dae82cca6cdf35d7e2f229aa0591e6",
+          "executable": false
+        },
+        "docs/adr/0014-give-each-run-a-private-git-directory.md": {
+          "type": "file",
+          "sha256": "e60b5437f91839eb4af8717b7ba5236403bf1702c5c825c865937aebc1106c77",
+          "executable": false
+        },
+        "docs/adr/0015-file-a-runs-findings-from-its-run-result.md": {
+          "type": "file",
+          "sha256": "3a75355d6147b9e99a509816790954576e0dc72740a0ef2934640c13a83ddd0f",
+          "executable": false
+        },
+        "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md": {
+          "type": "file",
+          "sha256": "df8e1d33427237f961b1244e3511e1b31769c6e4a2272ad53d359c573ebf4960",
+          "executable": false
+        },
         "docs/adr/README.md": {
           "type": "file",
-          "sha256": "5f4ddc2b3ee4779251c2ea041c9af79d71370cde4bd5c56b9c8822b94ea7b77d",
+          "sha256": "d9a473a219dd713aae0a1d44d3dc60b9253246e2527a8194d22e68ec5a9cc478",
           "executable": false
         },
         "docs/agents/README.md": {
@@ -3213,17 +3436,17 @@
         },
         "docs/agents/issue-tracker.md": {
           "type": "file",
-          "sha256": "bcd5dd6c974b269c98f2b2a9ce81a979e33676f3442c8110bfa4f018fefde895",
+          "sha256": "5b850cbe40cf2f4493c87b559a8c1f7aadaac000dcccae55409307d0ff9df57c",
           "executable": false
         },
         "docs/agents/triage-labels.md": {
           "type": "file",
-          "sha256": "7103db589b82930dc1f0b7b6d291c5e1aa9bfc40c34354ae18279127573b23d7",
+          "sha256": "6668843407bb5169d8655ed75f30e1e531d0f895ab19b20bd3dc633f668be3b3",
           "executable": false
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "7b6c804cb08cdcd672e6db5913c781bf543af0755872f76893eb476130f3ebcd",
+          "sha256": "bca3dc03f7c84cabd8149c420900cf9d219c239bd653ef3f932ebb377cb540a5",
           "executable": false
         },
         "docs/development/release.md": {
@@ -3233,27 +3456,27 @@
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "2aa36603642bb9cb3c5342ccd27b1e525a788678b108f09f567d3d461e93bf34",
+          "sha256": "64e1b458e2ec04800f14739ad801fbb2de45ba4422f880013f81b661495c52f4",
           "executable": false
         },
         "docs/usage/body-contracts.md": {
           "type": "file",
-          "sha256": "7b31f31b6227f9858dc5f8a33cf812190c4a6c2fcb818e7b6602a52e6be8d6a3",
+          "sha256": "6eafb5b814345c166292c83e1721f8da51525de0401b02389acf15c681510ebe",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "ed83be8695781816cb9b354952fecfc842342dc1356db5773ed69980f8bd09a7",
+          "sha256": "51e0984aa28898a84204eb6ac291a1e99de09e9d5d5252a75ef740b0c0a13925",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "f467f9f128a349dfa69220af0951776cae82db37b6372e500d3e0d59e85bf023",
+          "sha256": "5eed2a83e20923521245f890db345add32af487a307527eeadf53e2de1be5a84",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
-          "sha256": "858c8725d3dcd6e48963ac9a9192dd612a7d91499de50527504f03c9142d981f",
+          "sha256": "c951850998e8ac4855a8bdc8dde7b158081add440e663041a39bb657c3672a97",
           "executable": false
         },
         "operations/lib/rendered-markdown.mjs": {
@@ -3263,7 +3486,7 @@
         },
         "package.json": {
           "type": "file",
-          "sha256": "dcef7a166b53f0f28667e3ed7f5887698ac8b897bb62618874ffb5ca8924b2d1",
+          "sha256": "50070e51ede67ff0f4ec328c48de9997029d8ba2008a128273a849a475b007e4",
           "executable": false
         },
         "pnpm-lock.yaml": {
@@ -3278,27 +3501,32 @@
         },
         "schemas/factory-configuration.schema.json": {
           "type": "file",
-          "sha256": "a6fde6ca20bc416d81c5a114272a928839b6b408bb9220d600dd97cbdbd3e0bf",
+          "sha256": "a6402d4cc0063c8ee6c339de61b60d735ec2638036541df92380b59258408d43",
           "executable": false
         },
         "scripts/check-release-artifact.ts": {
           "type": "file",
-          "sha256": "fd4143deceb789525079a06f188c9b16dc54f96c9e6ccb74b40dc5076a92433a",
+          "sha256": "7c4f0c40fbc43bc9dc85fc3f46d419de9c0bd42319e98a9c44387e26aa5ded4d",
           "executable": false
         },
-        "scripts/validate-issue-contract.mjs": {
+        "scripts/issue-contract-cutoff.mjs": {
           "type": "file",
-          "sha256": "704e738a2baa5ddc826b1ef6bcbc852f49d3f6899c2ea5fd8df2f6f78b20b027",
+          "sha256": "66544ba7309a2139ef5d2d55fefa40304b987a3873b779e83b6fe21b9712b13a",
           "executable": false
         },
-        "scripts/validate.mjs": {
+        "scripts/issue-contract-sources.mjs": {
           "type": "file",
-          "sha256": "daeedb8713e64e0334ede3825297ec6338a85ee8051c0dc0385f5533373ecc32",
+          "sha256": "499e8d36ec621993ecebc5e22fea68c64343213dd646dd9d06e72e7c4c3fea7c",
+          "executable": false
+        },
+        "scripts/issue-contract-store.mjs": {
+          "type": "file",
+          "sha256": "2e191ad301c454303b215098a226595b7a341b59a8ab7dc6efc385a9add90944",
           "executable": false
         },
         "src/agent-layer.Dockerfile": {
           "type": "file",
-          "sha256": "abbea4598aa0f873d743a66e0a934f48f41a08f8b4b61880672c5d426698bf81",
+          "sha256": "996b17d8f2e9485f090b19b35955570765e1d142d2d27980dd9e545c94110a07",
           "executable": false
         },
         "src/clone.ts": {
@@ -3308,7 +3536,7 @@
         },
         "src/comment-template.ts": {
           "type": "file",
-          "sha256": "1860e472cbd521773f23a0ce3a093c1fc4596adfedd3c6a86e4ad74bdba195b8",
+          "sha256": "f1b432b140d1179cf23ac298bb3e8e68393106abb35d94b80f3c6979cca85e93",
           "executable": false
         },
         "src/contract-protocol.ts": {
@@ -3318,32 +3546,37 @@
         },
         "src/contract-publication.ts": {
           "type": "file",
-          "sha256": "d2d7ac4edfa138c60daf118dd185895cd5444844228f41cfa730383cb4ec041d",
+          "sha256": "8556e0abb42527bf600a3c1f8d8361d59c13a69a1e871fe1249f36b94b098979",
           "executable": false
         },
         "src/contract-result.ts": {
           "type": "file",
-          "sha256": "b031b111b01d1dd2ebab01c32620056d9a4d34aab829c91232f6375c387408ce",
+          "sha256": "0c077759f9c0064d9a7b80551198486e4d6a1f98abf35ebb6d588dfd450d8a3b",
+          "executable": false
+        },
+        "src/credentials.ts": {
+          "type": "file",
+          "sha256": "bafbd71b7f1c072bd41e8ba4ee02b270afb3a7ea637f7e895cb56ccd54438742",
           "executable": false
         },
         "src/events.ts": {
           "type": "file",
-          "sha256": "063f07b44ef1bdfd08a5693b45a95a482b990c6d3e998b74a58b4f9e073d248e",
+          "sha256": "f42a426c6e148647de77a13feb048ada6475d054f401ad57d605cf76ccb2f133",
           "executable": false
         },
         "src/factory-configuration.ts": {
           "type": "file",
-          "sha256": "32bdcc986816e07392e89c4b82d2efdff011ae13cb26a8c8094deb551d3cfc28",
+          "sha256": "4fb2a5517d70685e8a0dfa1224da828f3f42e4348302a6704792bd646ac2342b",
           "executable": false
         },
         "src/factory.ts": {
           "type": "file",
-          "sha256": "0ecca6143f55a85cdc9a986f7ab6e4f504b7104cc2e332a1289192481ff48a83",
+          "sha256": "7204feb3ad5760b1573c5e9e1c2095bcc8b2bd5df8c48981a4bafbb1bfacd365",
           "executable": false
         },
         "src/github-token.ts": {
           "type": "file",
-          "sha256": "bc1df76c739ceb486ecb8ac0284bf14906c8563816ffef8fc8630a1540335ad9",
+          "sha256": "14e3bfad474fab09c7f454f7b85446bc7d9089b543c015dc97e92e0db4b39b13",
           "executable": false
         },
         "src/hold-comments.ts": {
@@ -3353,12 +3586,12 @@
         },
         "src/host-configuration.ts": {
           "type": "file",
-          "sha256": "a8fdabf14657fc65a8079f6632b01a453e369a253e8ad45b4135cb29fa43ad51",
+          "sha256": "a7476ad290a01796f0df8bbde7b14c73de2b612217791f6c760167486a55a4b4",
           "executable": false
         },
         "src/host.ts": {
           "type": "file",
-          "sha256": "4d56eaf7ba699f090c88326c526f67675ffd9c3585d084eef879c3dde82d3302",
+          "sha256": "d6f9ae84710e47b6c6f5ed6877bcb113bfac0e66897468aeda5382bea4f1e755",
           "executable": false
         },
         "src/image-retention.ts": {
@@ -3373,7 +3606,7 @@
         },
         "src/label-roles.ts": {
           "type": "file",
-          "sha256": "cc3119035f33b3f454dce24cc0656e3dcd7e97f67d84763c16afd705106f28e0",
+          "sha256": "7f634cda2cd520dcfe5d58d794bf1d1e714c44c77c90fe60100cd9ec4ed17e19",
           "executable": false
         },
         "src/main.ts": {
@@ -3383,7 +3616,7 @@
         },
         "src/model-policy.ts": {
           "type": "file",
-          "sha256": "21c7243da7c47c5b6904464938c4b359fc220f891869cee99e91fe94044523ff",
+          "sha256": "8507cc720a47ec716e92e6cadc10f317c072f6a75c68720c6b1e295b3d7cc5eb",
           "executable": false
         },
         "src/owner.ts": {
@@ -3398,7 +3631,7 @@
         },
         "src/platform.ts": {
           "type": "file",
-          "sha256": "1f7d36a56886c85d9326560c75662da916cedc1eba43f5866aa90c96a5de5086",
+          "sha256": "8431633555469cca5292906b5405d04bfa5dccb411312361959f8dc9fc2b3332",
           "executable": false
         },
         "src/prompt.ts": {
@@ -3408,17 +3641,17 @@
         },
         "src/providers.ts": {
           "type": "file",
-          "sha256": "bbdabea6104412ae2eb800805a8de1b87e74aeea82143d0c4e0abd58a5a16c69",
+          "sha256": "3f29ff36aa33ed451dcf5c2ceb1f67f9694730cf404e2d65b73c231757bddbeb",
           "executable": false
         },
         "src/providers/claude-code.ts": {
           "type": "file",
-          "sha256": "9e95601be528f1567029e220822d18f4c58b5327c832020ee8fc575183481cbc",
+          "sha256": "589c1c1cbe2a60c55984642532ed402724d626ab0b6e80633930af3c3de43946",
           "executable": false
         },
         "src/providers/codex.ts": {
           "type": "file",
-          "sha256": "9788249a169f2e90646bb044f9ec0a8fdd6012014cc2f95cfe1d9c551d9c588e",
+          "sha256": "a62da216f1d7253496330e9a738db7ea10779439e00f4a7d40cc05b2c35797c3",
           "executable": false
         },
         "src/providers/launch.ts": {
@@ -3433,12 +3666,17 @@
         },
         "src/providers/usage.ts": {
           "type": "file",
-          "sha256": "4565edd44ab97fdcfc5da02c18cd54f690f6459b45ecee8a0a2dd88c311799fc",
+          "sha256": "ff0445fcfd13775d654856bf953c924d8208f39dabba819170aa98f56390ec5e",
+          "executable": false
+        },
+        "src/quota.ts": {
+          "type": "file",
+          "sha256": "2b988da50ac8832eacd7b5359c4cd8b55e0861d9a3cd5af02e8bd52fcce786c3",
           "executable": false
         },
         "src/readiness.ts": {
           "type": "file",
-          "sha256": "0e0db0b785cd2fe7662cb20496deace7e959d7ed2f102d7624eab89b0620ab0e",
+          "sha256": "bf5b9067ffb2cbdfa7c57beedde278cd4a7898c294eb074a73fa81c527187ebf",
           "executable": false
         },
         "src/redaction.ts": {
@@ -3458,7 +3696,7 @@
         },
         "src/run-comment.ts": {
           "type": "file",
-          "sha256": "71ccf8764afe6126daa867eb9e9e14b8c3d1b016028deae7fccceff80d162de1",
+          "sha256": "850121934270058dca05d8b55e0b017df9753a8fff6ba20708fc54a7ce131e2c",
           "executable": false
         },
         "src/run-ending.ts": {
@@ -3473,22 +3711,22 @@
         },
         "src/run-result.ts": {
           "type": "file",
-          "sha256": "afb13f24745ff0278c5e8f57c8e6f259034d012e1060d0247ab26b72bc0b8e8a",
+          "sha256": "eae63ffdb7351a818c12bfe4a8e695117f514b38974b57c6904482fcc13d8b1d",
           "executable": false
         },
         "src/sandbox-image.ts": {
           "type": "file",
-          "sha256": "7ce7038ce6039582bc81abf15fa40b13f017655d098b6846b8f417e7e523a28d",
+          "sha256": "0d1c5c5478b793743ffb72b06aede9abe049935a32b6c747501429c51af193ce",
           "executable": false
         },
         "src/status-command.ts": {
           "type": "file",
-          "sha256": "8938b13a5a341634700286f153f05f8fb07212a1c415c9e219680dcd6a22fb4d",
+          "sha256": "1c90149ab829ac8005a66dc6592d3e36eb2c631c630acffdab398ff953bbe8a2",
           "executable": false
         },
         "src/status.ts": {
           "type": "file",
-          "sha256": "642dc42cab0adabd4e990f4d698b16a321d9768f6684964e3eec52da3f22d18f",
+          "sha256": "ee7ea94c79f6758f13fe0c16ff7f4e76551a6bb38382b2bef48d4fddd4bf8087",
           "executable": false
         },
         "src/storage-filesystem.ts": {
@@ -3498,12 +3736,17 @@
         },
         "src/triggers.ts": {
           "type": "file",
-          "sha256": "57ff33ced6bf3f86bf779ac67eded28067184610db8806e1b35b9b77a59c72c9",
+          "sha256": "725c7d4a78c9be55c5002a48b16a8372848291fb7830d5914820f8fdc70b5132",
           "executable": false
         },
         "src/usage.ts": {
           "type": "file",
-          "sha256": "43296921c73eea89841dedffffb29cf34dd0e910acbcf6352864e2cce34daa8b",
+          "sha256": "43f2e4cb3fafb379bf8e50cba1b02810e98bb460684a9d6251dcddda235fbd5b",
+          "executable": false
+        },
+        "src/wait.ts": {
+          "type": "file",
+          "sha256": "563117b5789337e871a4ff387759e79073f3973bda73e2de2d50e3a366f5fd1b",
           "executable": false
         },
         "test/agent-layer-fixture.ts": {
@@ -3518,17 +3761,17 @@
         },
         "test/agent-layer.test.ts": {
           "type": "file",
-          "sha256": "bba95e2074d94fb29ce6c980ea045e606941ec4973bfe9c9e201935fae7b0483",
+          "sha256": "48aac15c7a727fb444fc5d4ec9707ac3208deb16dbeaa9a916c027cd5528aac1",
           "executable": false
         },
         "test/boundary.test.ts": {
           "type": "file",
-          "sha256": "753a344efff7947354de06f67fc5b2c6e74d2275f25feb88b2670cf3bae04880",
+          "sha256": "0c52b911a4b0a6b0007ee74f7489da5649e1209911f6e021d4044bd4aa61775c",
           "executable": false
         },
         "test/claude-code.test.ts": {
           "type": "file",
-          "sha256": "1127173e1a62140ec4e1a12989d9db1206aa20314de4c82741ee772bf54d4400",
+          "sha256": "6aef13b5a9bf5b1dce2dd26b88602592e62d90380e39b79fda146b73108fb7e6",
           "executable": false
         },
         "test/claude-foreground.test.ts": {
@@ -3538,47 +3781,52 @@
         },
         "test/codex.test.ts": {
           "type": "file",
-          "sha256": "9030ce85f9a66595be2de0cc0442a1e2033ab16d040e31b44f4d4cb170b86005",
+          "sha256": "dea98f71444842ab8591494960fca5fbdbea8e9c9e3690b02875f1efe196e9e3",
           "executable": false
         },
         "test/comment-template.test.ts": {
           "type": "file",
-          "sha256": "440360b0352102ad1b5094ec950e5b139138558acb970b2d9133843015401c81",
+          "sha256": "a6b8ecf75cf6933c5e14fca7776cf629f7d400af74758356068c941650d2be9c",
           "executable": false
         },
         "test/configuration-schema.test.ts": {
           "type": "file",
-          "sha256": "a3a343c8abffc8343671746169bce239eedb234daf3a0cb469e88a1144985f89",
+          "sha256": "f23c205c1482066304d216e229c866f6442b01d7a8b2d4ed3db4d876218f1998",
           "executable": false
         },
         "test/contract-fixture.ts": {
           "type": "file",
-          "sha256": "37f7d7ccfba32b9fd9c1c0066db5cbd95e4a89aff0aac72df017a71d9d8746b7",
+          "sha256": "489c270735b42f084f60620964e145a576875a513fbfe20641914d05f4d22d4c",
           "executable": false
         },
         "test/contract-protocol.test.ts": {
           "type": "file",
-          "sha256": "b4c48fb6d564c7959a871714fc6adecb4763322c8c6e3082b8ae28f7a349b9df",
+          "sha256": "b0f51ecd7d3a66a8865030f0cf6b73da101025ce74f51d5e3bbed0365cf02025",
           "executable": false
         },
         "test/contract-publication.test.ts": {
           "type": "file",
-          "sha256": "e2e007b68eaf405cf5d35dd1b7cbb1c2f971e726ef358039a07cefd48a3e846f",
+          "sha256": "5ad77da88a10a029e751ed2b097453f1660b2331740c6269e956c359b016423c",
           "executable": false
         },
         "test/contract-result-fixture.ts": {
           "type": "file",
-          "sha256": "c5b261584c6e2c88901e63f98d7b7369d51c93d3283483d0153b500d9c1e9bac",
+          "sha256": "3e105a36bbbe08849bf5ade78fed2f38b41c3eb77b2bd26ddd6a41e6b24f3a5c",
+          "executable": false
+        },
+        "test/credentials.test.ts": {
+          "type": "file",
+          "sha256": "42f2893f804a165271091c59cc8e01582063c9bbdc4747ff1837a71974362797",
           "executable": false
         },
         "test/factory-configuration.test.ts": {
           "type": "file",
-          "sha256": "cceb212f8ff36344a71159b1cf4edca5d36654c372fe725489056f9eb47eb711",
+          "sha256": "adb3f6a429228b8061f8ad3a20c756436773acb59b78d6ef59d3009295c89ae0",
           "executable": false
         },
         "test/factory.test.ts": {
           "type": "file",
-          "sha256": "6d4d2680868a01ad04abfa884c6bc2fe3dfce5e81565e981ba2c2d7a52db663b",
+          "sha256": "b5b883e838081d93caa88dcf84ceb0f46943f2ab08f7e9b0d2de00c47cff8623",
           "executable": false
         },
         "test/fakes.ts": {
@@ -3648,7 +3896,7 @@
         },
         "test/fixtures/factory-configuration/version-3.json": {
           "type": "file",
-          "sha256": "97f5834836c12df348a1f6b7924d28e3d7021d521918ec4b1f8fdbb4707fd9c2",
+          "sha256": "8021c94d5e36c2892fc792bacb0cb5a7cf892c2744f26cc8280cf4168026507c",
           "executable": false
         },
         "test/fixtures/host-configuration/github-shorthand.json": {
@@ -3718,17 +3966,17 @@
         },
         "test/host-cleanup.test.ts": {
           "type": "file",
-          "sha256": "035cecf0b6130bbf97c327cb328f976b680a30449898ea48f710545b60a0204d",
+          "sha256": "91a24c1317af8d3c204289b49cb6d454f602d485e7b7d3f425becedbb2440c25",
           "executable": false
         },
         "test/host-configuration.test.ts": {
           "type": "file",
-          "sha256": "0ba6017284ce2b3a4d00538e18bbbed04d3cc5f9c0e67517c937af771c233aaa",
+          "sha256": "7a388668838e76902a5560c1cb9db22573d08f0b15e6101bffd5a2d21e9d06d9",
           "executable": false
         },
         "test/host.test.ts": {
           "type": "file",
-          "sha256": "0614baa3b71b1b492b53f51cb2f89f840c313244d1341f2700abe49dc1eb4cfa",
+          "sha256": "47ab1225412855ab5642b772b6fa779b193b1d5431abef7c02753a358d030f7b",
           "executable": false
         },
         "test/image-retention.test.ts": {
@@ -3743,12 +3991,12 @@
         },
         "test/label-roles.test.ts": {
           "type": "file",
-          "sha256": "194db5fe9ff2baf6dad3f717092d175ab71140101fe8f6d2fd4839f69a87b636",
+          "sha256": "9d83846291e49c527e2094346ce36fc1b5412a8c23ee09c4f902254522e6415d",
           "executable": false
         },
         "test/model-policy.test.ts": {
           "type": "file",
-          "sha256": "43ec89d450a1e138d852a7f1075d68f37bcb967519dd81c80c5bd8a641be1a9f",
+          "sha256": "8771d8443a176e38254a13c83f6a3c592519ce7cf663769635a6c707d4fa51bc",
           "executable": false
         },
         "test/owner.test.ts": {
@@ -3763,7 +4011,7 @@
         },
         "test/platform.test.ts": {
           "type": "file",
-          "sha256": "76aad70000e96dc9dfb3804fdb19d8b13697b69195c3079a58fa3edd069e9b94",
+          "sha256": "5aece88690cef119dcde695d232975668bda2819e9cc309f4e73258f67e492b8",
           "executable": false
         },
         "test/prompt.test.ts": {
@@ -3793,17 +4041,17 @@
         },
         "test/run-comment.test.ts": {
           "type": "file",
-          "sha256": "634a0b98338f88002c8489efcd69254f03c46a2e63723146addd401d2ead7471",
+          "sha256": "347866437037ad56128ac673fd60a8ac82458b7fdfcf574bc125328dd8f4e00e",
           "executable": false
         },
         "test/run-ending.test.ts": {
           "type": "file",
-          "sha256": "67ba50b47cb71a0f87a9b2e18bb34d95809a3cb45b0f42a76a5f92fff811ed54",
+          "sha256": "3a8006ac116c125898f4f8e182fe185f7b32613cf3ef2fe0a7c74e41b89b7f3f",
           "executable": false
         },
         "test/run-kinds.test.ts": {
           "type": "file",
-          "sha256": "536695b04376a826f5a4b993a20cdd85f620caca0da5d185e40f8d65d4c5a928",
+          "sha256": "e5bc035d27946997a29a816cec2f7a014521efcff769fac3e38a9e62c0bb2e7e",
           "executable": false
         },
         "test/run-log.test.ts": {
@@ -3813,12 +4061,12 @@
         },
         "test/run-result.test.ts": {
           "type": "file",
-          "sha256": "34177e628b9b4643aa490ff8fe460339577b13b0df33f14f6f25407b682e0829",
+          "sha256": "11fa5e7e3123212ec01cf789bb09447af4e8bd8b4507e03eebec62b624f3b589",
           "executable": false
         },
         "test/sandbox-image-build.test.ts": {
           "type": "file",
-          "sha256": "dfd08c95ac332c24d7213e444ce739cd4c4f36273e3a2217ca001ac6b75deab9",
+          "sha256": "4515256a961587005e7f8e8d71c77a15d4cbf3c3d6695b2fed49ab33415d78ee",
           "executable": false
         },
         "test/sandbox-image.test.ts": {
@@ -3833,12 +4081,12 @@
         },
         "test/status-command.test.ts": {
           "type": "file",
-          "sha256": "318b34c06d11b7ea331b21274510d4ff9291a044344784fee8519e3d745551c0",
+          "sha256": "587eb41f42c7064fa162c85313331515b0d656ba2ced33ba4fdfb78858a8f33e",
           "executable": false
         },
         "test/status.test.ts": {
           "type": "file",
-          "sha256": "46e0068af800323f3d19c92cb14358b21028b779a972f7fe9db7301a62bf2f70",
+          "sha256": "6eb23d596f84074fa08210ca71970d43af96f6bb8730595d3d86add603934838",
           "executable": false
         },
         "test/triggers.test.ts": {
@@ -3848,7 +4096,7 @@
         },
         "test/usage.test.ts": {
           "type": "file",
-          "sha256": "aa5b9588ef82559ebfa3b74c7ddfb9a6593ba77767dd5868541cbda30c641334",
+          "sha256": "bbc2fcd477dcbf7ef3e0dd08f637fb67bdbef82239b67601bd3899ea55ff383a",
           "executable": false
         },
         "tsconfig.json": {
@@ -3905,18 +4153,28 @@
           "type": "file",
           "sha256": "5203c7e825a065c33aaa02ea4b6dbe776704ccd55b220aee75eb82427a8b83d5",
           "executable": false
+        },
+        "vendor/repo-canon/validate-issue-contract.mjs": {
+          "type": "file",
+          "sha256": "fe13b317f71c647975a1d5dc663a2a78bd26f6ec25ab5be21d56c55d314596c5",
+          "executable": false
+        },
+        "vendor/repo-canon/validate.mjs": {
+          "type": "file",
+          "sha256": "4e200a90252579cad398b74cbe56e3588f98dcdc36e71de59c38941cfeba986e",
+          "executable": false
         }
       },
       "inventories": {
         ".": [
           ".agents",
           ".claude",
-          ".factory",
           ".gitattributes",
           ".github",
           ".gitignore",
           ".oxlintrc.json",
           ".prettierignore",
+          ".scriptorium",
           "AGENTS.md",
           "CONTRIBUTING.md",
           "GLOSSARY.md",
@@ -3945,15 +4203,16 @@
           ".agents/skills/codebase-design",
           ".agents/skills/diagnosing-bugs",
           ".agents/skills/domain-modeling",
+          ".agents/skills/factory",
           ".agents/skills/grill-with-docs",
           ".agents/skills/grilling",
           ".agents/skills/implement",
           ".agents/skills/improve-codebase-architecture",
-          ".agents/skills/orchestrate",
           ".agents/skills/pr",
           ".agents/skills/prototype",
           ".agents/skills/repository-standards",
           ".agents/skills/research",
+          ".agents/skills/review",
           ".agents/skills/tdd",
           ".agents/skills/to-spec",
           ".agents/skills/to-tickets",
@@ -3969,6 +4228,7 @@
           ".agents/skills/babysit/platform.mjs",
           ".agents/skills/babysit/pull-request-reviewer.mjs",
           ".agents/skills/babysit/request.mjs",
+          ".agents/skills/babysit/required-checks.mjs",
           ".agents/skills/babysit/review-outcome.mjs",
           ".agents/skills/babysit/review-policy.mjs",
           ".agents/skills/babysit/reviewer.mjs",
@@ -3978,7 +4238,8 @@
         ".agents/skills/code-review": [
           ".agents/skills/code-review/CREDITS.md",
           ".agents/skills/code-review/SKILL.md",
-          ".agents/skills/code-review/agents"
+          ".agents/skills/code-review/agents",
+          ".agents/skills/code-review/ownership-facts.mjs"
         ],
         ".agents/skills/code-review/agents": [
           ".agents/skills/code-review/agents/openai.yaml"
@@ -4015,6 +4276,10 @@
         ".agents/skills/domain-modeling/agents": [
           ".agents/skills/domain-modeling/agents/openai.yaml"
         ],
+        ".agents/skills/factory": [
+          ".agents/skills/factory/CREDITS.md",
+          ".agents/skills/factory/SKILL.md"
+        ],
         ".agents/skills/grill-with-docs": [
           ".agents/skills/grill-with-docs/CREDITS.md",
           ".agents/skills/grill-with-docs/SKILL.md",
@@ -4048,15 +4313,6 @@
         ".agents/skills/improve-codebase-architecture/agents": [
           ".agents/skills/improve-codebase-architecture/agents/openai.yaml"
         ],
-        ".agents/skills/orchestrate": [
-          ".agents/skills/orchestrate/CREDITS.md",
-          ".agents/skills/orchestrate/SKILL.md",
-          ".agents/skills/orchestrate/agents",
-          ".agents/skills/orchestrate/wait.mjs"
-        ],
-        ".agents/skills/orchestrate/agents": [
-          ".agents/skills/orchestrate/agents/openai.yaml"
-        ],
         ".agents/skills/pr": [
           ".agents/skills/pr/CREDITS.md",
           ".agents/skills/pr/SKILL.md",
@@ -4089,6 +4345,11 @@
         ],
         ".agents/skills/research/agents": [
           ".agents/skills/research/agents/openai.yaml"
+        ],
+        ".agents/skills/review": [
+          ".agents/skills/review/CREDITS.md",
+          ".agents/skills/review/SKILL.md",
+          ".agents/skills/review/round.mjs"
         ],
         ".agents/skills/tdd": [
           ".agents/skills/tdd/CREDITS.md",
@@ -4153,25 +4414,22 @@
           ".claude/skills/codebase-design",
           ".claude/skills/diagnosing-bugs",
           ".claude/skills/domain-modeling",
+          ".claude/skills/factory",
           ".claude/skills/grill-with-docs",
           ".claude/skills/grilling",
           ".claude/skills/implement",
           ".claude/skills/improve-codebase-architecture",
-          ".claude/skills/orchestrate",
           ".claude/skills/pr",
           ".claude/skills/prototype",
           ".claude/skills/repository-standards",
           ".claude/skills/research",
+          ".claude/skills/review",
           ".claude/skills/tdd",
           ".claude/skills/to-spec",
           ".claude/skills/to-tickets",
           ".claude/skills/triage",
           ".claude/skills/wayfinder",
           ".claude/skills/writing-for-agents"
-        ],
-        ".factory": [
-          ".factory/Dockerfile",
-          ".factory/config.json"
         ],
         ".github": [
           ".github/ISSUE_TEMPLATE",
@@ -4199,6 +4457,10 @@
           ".github/workflows/sandbox-image.yml",
           ".github/workflows/standards-update.yml"
         ],
+        ".scriptorium": [
+          ".scriptorium/Dockerfile",
+          ".scriptorium/config.json"
+        ],
         "docs": [
           "docs/README.md",
           "docs/adr",
@@ -4215,6 +4477,14 @@
           "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
           "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
           "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md",
+          "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
+          "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
+          "docs/adr/0011-own-the-formats-the-factory-reads.md",
+          "docs/adr/0012-run-release-as-a-run-kind.md",
+          "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
+          "docs/adr/0014-give-each-run-a-private-git-directory.md",
+          "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
+          "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md",
           "docs/adr/README.md"
         ],
         "docs/agents": [
@@ -4245,8 +4515,9 @@
         ],
         "scripts": [
           "scripts/check-release-artifact.ts",
-          "scripts/validate-issue-contract.mjs",
-          "scripts/validate.mjs"
+          "scripts/issue-contract-cutoff.mjs",
+          "scripts/issue-contract-sources.mjs",
+          "scripts/issue-contract-store.mjs"
         ],
         "src": [
           "src/agent-layer.Dockerfile",
@@ -4255,6 +4526,7 @@
           "src/contract-protocol.ts",
           "src/contract-publication.ts",
           "src/contract-result.ts",
+          "src/credentials.ts",
           "src/events.ts",
           "src/factory-configuration.ts",
           "src/factory.ts",
@@ -4273,6 +4545,7 @@
           "src/prompt.ts",
           "src/providers",
           "src/providers.ts",
+          "src/quota.ts",
           "src/readiness.ts",
           "src/redaction.ts",
           "src/repository-holds.ts",
@@ -4286,7 +4559,8 @@
           "src/status.ts",
           "src/storage-filesystem.ts",
           "src/triggers.ts",
-          "src/usage.ts"
+          "src/usage.ts",
+          "src/wait.ts"
         ],
         "src/providers": [
           "src/providers/claude-code.ts",
@@ -4309,6 +4583,7 @@
           "test/contract-protocol.test.ts",
           "test/contract-publication.test.ts",
           "test/contract-result-fixture.ts",
+          "test/credentials.test.ts",
           "test/factory-configuration.test.ts",
           "test/factory.test.ts",
           "test/fakes.ts",
@@ -4378,7 +4653,8 @@
         "vendor": [
           "vendor/marked",
           "vendor/parse5",
-          "vendor/postern"
+          "vendor/postern",
+          "vendor/repo-canon"
         ],
         "vendor/marked": [
           "vendor/marked/LICENSE",
@@ -4395,6 +4671,10 @@
           "vendor/postern/LICENSE",
           "vendor/postern/README.md",
           "vendor/postern/postern.mjs"
+        ],
+        "vendor/repo-canon": [
+          "vendor/repo-canon/validate-issue-contract.mjs",
+          "vendor/repo-canon/validate.mjs"
         ]
       },
       "boundaries": {
@@ -4434,6 +4714,9 @@
         ".agents/skills/domain-modeling/agents": {
           "type": "directory"
         },
+        ".agents/skills/factory": {
+          "type": "directory"
+        },
         ".agents/skills/grill-with-docs": {
           "type": "directory"
         },
@@ -4458,12 +4741,6 @@
         ".agents/skills/improve-codebase-architecture/agents": {
           "type": "directory"
         },
-        ".agents/skills/orchestrate": {
-          "type": "directory"
-        },
-        ".agents/skills/orchestrate/agents": {
-          "type": "directory"
-        },
         ".agents/skills/pr": {
           "type": "directory"
         },
@@ -4486,6 +4763,9 @@
           "type": "directory"
         },
         ".agents/skills/research/agents": {
+          "type": "directory"
+        },
+        ".agents/skills/review": {
           "type": "directory"
         },
         ".agents/skills/tdd": {
@@ -4530,9 +4810,6 @@
         ".claude/skills": {
           "type": "directory"
         },
-        ".factory": {
-          "type": "directory"
-        },
         ".github": {
           "type": "directory"
         },
@@ -4543,6 +4820,9 @@
           "type": "directory"
         },
         ".github/workflows": {
+          "type": "directory"
+        },
+        ".scriptorium": {
           "type": "directory"
         },
         "docs": {
@@ -4600,6 +4880,9 @@
           "type": "directory"
         },
         "vendor/postern": {
+          "type": "directory"
+        },
+        "vendor/repo-canon": {
           "type": "directory"
         }
       },
@@ -4662,6 +4945,9 @@
         ".agents/skills/domain-modeling/agents/.gitignore": {
           "type": "missing"
         },
+        ".agents/skills/factory/.gitignore": {
+          "type": "missing"
+        },
         ".agents/skills/grill-with-docs/.gitignore": {
           "type": "missing"
         },
@@ -4686,12 +4972,6 @@
         ".agents/skills/improve-codebase-architecture/agents/.gitignore": {
           "type": "missing"
         },
-        ".agents/skills/orchestrate/.gitignore": {
-          "type": "missing"
-        },
-        ".agents/skills/orchestrate/agents/.gitignore": {
-          "type": "missing"
-        },
         ".agents/skills/pr/.gitignore": {
           "type": "missing"
         },
@@ -4714,6 +4994,9 @@
           "type": "missing"
         },
         ".agents/skills/research/agents/.gitignore": {
+          "type": "missing"
+        },
+        ".agents/skills/review/.gitignore": {
           "type": "missing"
         },
         ".agents/skills/tdd/.gitignore": {
@@ -4758,9 +5041,6 @@
         ".claude/skills/.gitignore": {
           "type": "missing"
         },
-        ".factory/.gitignore": {
-          "type": "missing"
-        },
         ".github/.gitignore": {
           "type": "missing"
         },
@@ -4771,6 +5051,9 @@
           "type": "missing"
         },
         ".github/workflows/.gitignore": {
+          "type": "missing"
+        },
+        ".scriptorium/.gitignore": {
           "type": "missing"
         },
         "docs/.gitignore": {
@@ -4829,6 +5112,9 @@
         },
         "vendor/postern/.gitignore": {
           "type": "missing"
+        },
+        "vendor/repo-canon/.gitignore": {
+          "type": "missing"
         }
       },
       "limits": {
@@ -4843,8 +5129,14 @@
     {
       "id": "documentation",
       "additions": [
-        "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md",
-        "docs/usage/body-contracts.md"
+        "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
+        "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
+        "docs/adr/0011-own-the-formats-the-factory-reads.md",
+        "docs/adr/0012-run-release-as-a-run-kind.md",
+        "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
+        "docs/adr/0014-give-each-run-a-private-git-directory.md",
+        "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
+        "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md"
       ],
       "removals": []
     }

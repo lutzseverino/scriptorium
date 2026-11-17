@@ -1,6 +1,6 @@
 # Installed rules
 
-These rules come from https://github.com/lutzseverino/repo-canon v0.27.0, profile factory.
+These rules come from https://github.com/lutzseverino/repo-canon v0.29.0, profile factory.
 Repo Standards installs and verifies them; adopt again to change them.
 Run `repo-standards rules <path>` to print the rules that cover a path.
 
@@ -16,6 +16,14 @@ Run `repo-standards rules <path>` to print the rules that cover a path.
   - `docs/adr/0006-reach-the-hosting-platform-through-postern.md`
   - `docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md`
   - `docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md`
+  - `docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md`
+  - `docs/adr/0010-link-run-results-and-mention-whoever-must-act.md`
+  - `docs/adr/0011-own-the-formats-the-factory-reads.md`
+  - `docs/adr/0012-run-release-as-a-run-kind.md`
+  - `docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md`
+  - `docs/adr/0014-give-each-run-a-private-git-directory.md`
+  - `docs/adr/0015-file-a-runs-findings-from-its-run-result.md`
+  - `docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md`
   - `docs/adr/README.md`
   - `docs/development/README.md`
   - `docs/development/release.md`

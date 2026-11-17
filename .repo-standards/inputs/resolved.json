@@ -26,6 +26,14 @@
       "exact": ".github/ISSUE_TEMPLATE/bug-report.yml"
     },
     {
+      "id": "canonical-label-metadata",
+      "checks": [],
+      "fixes": [],
+      "kind": "file",
+      "target": "operations/lib/canonical-labels.mjs",
+      "exact": "operations/lib/canonical-labels.mjs"
+    },
+    {
       "id": "comments",
       "checks": [],
       "fixes": [],
@@ -88,6 +96,14 @@
           "docs/adr/0006-reach-the-hosting-platform-through-postern.md",
           "docs/adr/0007-read-the-contract-decision-from-the-validators-posted-result.md",
           "docs/adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md",
+          "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
+          "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
+          "docs/adr/0011-own-the-formats-the-factory-reads.md",
+          "docs/adr/0012-run-release-as-a-run-kind.md",
+          "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
+          "docs/adr/0014-give-each-run-a-private-git-directory.md",
+          "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
+          "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md",
           "docs/adr/README.md",
           "docs/development/README.md",
           "docs/development/release.md",
@@ -117,6 +133,14 @@
       "exact": ".scriptorium/config.json"
     },
     {
+      "id": "factory-label-metadata",
+      "checks": [],
+      "fixes": [],
+      "kind": "file",
+      "target": "operations/lib/factory-labels.mjs",
+      "exact": "operations/lib/factory-labels.mjs"
+    },
+    {
       "id": "factory-sandbox-image",
       "checks": [],
       "fixes": [],
@@ -142,26 +166,7 @@
     },
     {
       "id": "factory-workflow",
-      "checks": [
-        {
-          "id": "factory-model-policy",
-          "run": {
-            "executable": "node",
-            "script": "operations/check-factory-model-policy.mjs",
-            "resources": [
-              "operations/lib/factory-model-policy.mjs"
-            ],
-            "arguments": []
-          },
-          "prerequisite": {
-            "version-arguments": [
-              "--version"
-            ],
-            "version": ">=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"
-          },
-          "timeout-seconds": 30
-        }
-      ],
+      "checks": [],
       "fixes": [],
       "kind": "repository",
       "guidance": "guidance/factory-workflow.md",
@@ -253,6 +258,8 @@
             "executable": "node",
             "script": "operations/setup-github-labels.mjs",
             "resources": [
+              "operations/lib/canonical-labels.mjs",
+              "operations/lib/factory-labels.mjs",
               "operations/lib/github-operation.mjs",
               "vendor/postern/postern.mjs",
               "vendor/postern/LICENSE",
@@ -605,8 +612,12 @@
               "operations/lib/entry-document.mjs",
               "operations/lib/rendered-markdown.mjs",
               "operations/lib/local-markdown-links.mjs",
+              "operations/lib/github-operation.mjs",
               "vendor/marked",
-              "vendor/parse5"
+              "vendor/parse5",
+              "vendor/postern/postern.mjs",
+              "vendor/postern/LICENSE",
+              "vendor/postern/README.md"
             ],
             "arguments": []
           },
