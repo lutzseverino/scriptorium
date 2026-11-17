@@ -70,6 +70,9 @@ export type Issue = {
   filedByTrustedRun?: boolean;
   trustedHistory?: boolean;
   lastTriageAt?: string;
+  // The latest carried-label application, even after removal: older triage
+  // triggers cannot revive a request whose fate was already settled.
+  carriedAt?: string;
   reviewedHeads?: string[];
   // The continuation its unfinished pass's run comment holds for a released
   // stop, which resumes its work on the same PRs.
@@ -1063,7 +1066,11 @@ function continuationExclusions(
           "no new trusted triage trigger"));
     if (reason) return skipped(next, reason);
   } else {
-    if (!issue.labels.includes(labels.ready))
+    // A carried issue reports its disposition even without readiness.
+    if (
+      !issue.labels.includes(labels.ready) &&
+      !(labels.carried && issue.labels.includes(labels.carried))
+    )
       return next.kind === "retry"
         ? [unretried(next.retry, `it no longer carries ${labels.ready}`)]
         : [];

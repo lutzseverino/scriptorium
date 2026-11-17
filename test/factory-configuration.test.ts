@@ -388,6 +388,32 @@ function invalid(t: TestContext, value: unknown, problems: string[]) {
   });
 }
 
+test("a carried label is optional in version 3, trimmed and distinct", (t) => {
+  const path = join(directory(t), "config.json");
+  writeFileSync(path, JSON.stringify(implementOnly));
+  assert.equal(readFactoryConfiguration(path).labels.carried, undefined);
+  const configuration = {
+    ...implementOnly,
+    labels: { ...implementOnly.labels, carried: "settled-elsewhere" },
+  };
+  writeFileSync(path, JSON.stringify(configuration));
+  assert.deepEqual(readFactoryConfiguration(path), configuration);
+  for (const carried of ["", " carried", "carried ", null, 7])
+    invalid(
+      t,
+      { ...configuration, labels: { ...configuration.labels, carried } },
+      ["labels.carried: is not a non-empty trimmed string"],
+    );
+  invalid(
+    t,
+    {
+      ...configuration,
+      labels: { ...configuration.labels, carried: "STATE:READY" },
+    },
+    ["labels.ready: must differ from labels.carried, ignoring case"],
+  );
+});
+
 test("version 2 refuses version 3 fields rather than synthesizing run kinds or labels", (t) => {
   const configuration = JSON.parse(readFileSync(fixture("valid"), "utf8"));
   invalid(

@@ -57,6 +57,7 @@ const labels = {
   reporter: "state:reporter",
   grill: "state:grill",
   owner: "state:owner",
+  carried: "settled-elsewhere",
   ready: "state:ready",
   ownerReview: "gate:owner-review",
   majorRelease: "gate:major-release",
@@ -650,6 +651,20 @@ test("pairs are direct and ordered, never downgrade, and leave policy fallback i
 
 // A version 3 issue's labels while a run holds it.
 const claimed = [labels.ready, labels.running];
+
+test("a carried issue is excluded and never claimed, even with a ready or triage label", () => {
+  for (const other of [[], [labels.ready], [labels.triage]]) {
+    const decisions = decide({
+      issues: [issue(4, [labels.carried, ...other], { author: owner })],
+    });
+    assert.equal(launchOf(decisions), undefined);
+    assert.ok(!decisions.some((decision) => decision.kind === "claim"));
+    assert.equal(
+      skipOf(decisions)?.reason,
+      `${other.includes(labels.triage) ? "triage waits: " : ""}carried by another record or ticket`,
+    );
+  }
+});
 
 // Custom names prove pickup reads roles from each repository's configuration.
 const priorityLabels = {

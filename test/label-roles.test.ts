@@ -96,6 +96,7 @@ const v3: Labels = {
   reporter: "asking-reporter",
   grill: "grilling",
   owner: "asking-owner",
+  carried: "settled-elsewhere",
   ready: "go",
   ownerReview: "owner-gate",
   running: "busy",
@@ -132,7 +133,7 @@ test("versions require and accept their own roles", () => {
   ]);
   assert.deepEqual(required(3), ["ready", "running", "failed", "paused"]);
   assert.ok(!versionRoles(3).some(([name]) => name === "needsInput"));
-  assert.equal(versionRoles(3).length, 16);
+  assert.equal(versionRoles(3).length, 17);
 });
 
 test("transitions write the configured names and claims carry their labels", () => {
@@ -205,4 +206,18 @@ test("labels exclude their continuations in one precedence", () => {
     exclusionReason(["question"], v2, "resume"),
     "labelled question; answer the question and remove the label to run it again",
   );
+});
+
+test("a carried label excludes every continuation with its own quiet reason", () => {
+  for (const continuing of [
+    "triage",
+    "fresh",
+    "retry",
+    "merge",
+    "resume",
+  ] as const)
+    assert.equal(
+      exclusionReason(["settled-elsewhere"], v3, continuing),
+      "carried by another record or ticket",
+    );
 });

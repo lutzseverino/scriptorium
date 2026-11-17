@@ -28,6 +28,7 @@ const states = {
   done: { status: "in progress" },
   paused: { status: "paused", unfinished: true },
   stopped: { status: "waiting for an answer", unfinished: true },
+  carried: { status: "carried", unfinished: true },
   "awaiting merge": { status: "awaiting merge" },
   merged: { status: "merged" },
   failed: { status: "failed" },

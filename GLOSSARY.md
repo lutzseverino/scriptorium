@@ -51,10 +51,12 @@ run does.
 _Avoid_: Stage, phase, mode
 
 **Stop**:
-An issue's wait on an answer from whoever its state names (triage, its
-reporter, a grill or the owner), which releases the factory's claim and keeps
-the work and pull request while the answer is outstanding. A person answers it
-by applying the issue's next state or closing the issue.
+An issue's wait in a state that releases the factory's claim and keeps the
+work and pull request. Most stops wait on an answer from whoever the state
+names (triage, its reporter, a grill or the owner), which a person gives by
+applying the issue's next state or closing the issue. A carried stop asks
+nobody: another record or ticket carries the request's fate, and removing its
+state starts nothing.
 _Avoid_: Needs input, question label
 
 **Gate**:

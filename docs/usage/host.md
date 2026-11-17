@@ -841,7 +841,7 @@ the interface for its kind and repository. The object holds only these fields:
 | Field     | Meaning                                                                                                                                                                                                                                                                                                   |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `outcome` | `done`, `stop` or `failed`.                                                                                                                                                                                                                                                                               |
-| `state`   | For a triage run that is done, the ready label. For a stop, the label of whoever must answer: version 2's needs-input label, or a configured reporter, grill or owner state. No other result has one.                                                                                                     |
+| `state`   | For a triage run that is done, the ready label. For a stop, the label of whoever must answer: version 2's needs-input label, or a configured reporter, grill or owner state; or, for a triage run, the configured carried state, which asks nobody. No other result has one.                              |
 | `labels`  | Optional other labels to apply, each in a family [`runKinds.<kind>.resultLabels`](factory-configuration.md#run-results) lists. A label a role gives factory mechanics, such as running, failed, a stop, a gate or readiness, is refused; `skip` and the priority roles are not. A failed result has none. |
 | `body`    | Markdown the factory posts on the issue, without a disclaimer, at most 60,000 characters.                                                                                                                                                                                                                 |
 | `reason`  | One line of at most 300 characters on why the run ended; required when it failed.                                                                                                                                                                                                                         |
@@ -974,9 +974,10 @@ exited by itself without a valid result into a success. Pull requests come
 from the issue's closing references and its `factory/issue-<n>` branch. A
 closed issue settles as done first. For an open issue, a merged PR's actual
 closing-reference evidence determines completion. A stop, a question waiting
-on an answer, takes precedence over an unmerged PR, even after timeout or
-orphaning: version 2's configured needs-input label, or in version 3 any of
-the configured triage, reporter, grill and owner states.
+on an answer or carried by another record, takes precedence over an unmerged
+PR, even after timeout or orphaning: version 2's configured needs-input label,
+or in version 3 any of the configured triage, reporter, grill, owner and
+carried states.
 
 | First matching observation                                 | Run outcome    | Action                                                                                |
 | ---------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------- |

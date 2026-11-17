@@ -23,8 +23,8 @@ type Role = {
   readiness?: true;
   // Only the factory writes it, and provisions it with this colour.
   color?: string;
-  // A stop waits on an answer: a run ending in it keeps its work and PR for
-  // resumption once the issue is ready again.
+  // A run ending in a stop keeps its work and PR for resumption once the
+  // issue is ready again. A carried stop needs no answer.
   stop?: true;
   // Only a person answers this stop, so its run comment's action asks them.
   asks?: true;
@@ -80,6 +80,17 @@ export const labelRoles = {
     stop: true,
     asks: true,
     excludes: [stopped],
+  },
+  carried: {
+    versions: { 3: "optional" },
+    stop: true,
+    excludes: [
+      {
+        precedence: 2,
+        from: ["triage", "fresh", "retry", "merge", "resume"],
+        reason: () => "carried by another record or ticket",
+      },
+    ],
   },
   ready: {
     versions: { 2: "required", 3: "required" },
@@ -259,7 +270,7 @@ export function exclusionReason(
   return excluded ? excluded.reason(excluded.label, labels.ready) : null;
 }
 
-// Whether the issue's labels hold it in a stop, waiting on an answer.
+// Whether the issue's labels hold it in a stop.
 export const isStopped = (issueLabels: string[], labels: Labels) =>
   stopLabels(labels).some((label) => issueLabels.includes(label));
 

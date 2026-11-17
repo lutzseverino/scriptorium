@@ -139,6 +139,33 @@ test("each outcome asks for the state its kind may: triage readiness, a stop's a
   });
 });
 
+test("only triage may stop in the carried state, which its prompt alone offers", () => {
+  const carried = {
+    ...v3,
+    labels: { ...v3.labels, carried: "state:carried" },
+  };
+  const stop = JSON.stringify({
+    outcome: "stop",
+    state: "state:carried",
+    body: "Carried by #3.",
+  });
+  assert.deepEqual(parseRunResult(stop, carried, "triage"), {
+    outcome: "stop",
+    state: "state:carried",
+    body: "Carried by #3.",
+  });
+  for (const kind of ["implement", "review"] as const)
+    assert.deepEqual(parseRunResult(stop, carried, kind), {
+      invalid:
+        "its run result asks for no state of state:reporter, state:owner",
+    });
+  assert.match(
+    resultGuidance(carried, "triage"),
+    /A stop asks for "state", the label of whoever must answer: "state:reporter", "state:owner"\. A stop asks for "state" "state:carried" when another record or ticket carries the request's fate, citing that carrier in "body"; it asks nobody for an answer\./,
+  );
+  assert.doesNotMatch(resultGuidance(carried, "implement"), /carried/);
+});
+
 test("a result asks only for labels in its kind's families that carry no factory mechanics", () => {
   const done = { outcome: "done", state: "state:ready", body: "Brief." };
   for (const label of [

@@ -14,7 +14,7 @@ import { sameLogin } from "./contract-protocol.ts";
 
 export type RunResult = {
   outcome: "done" | "stop" | "failed";
-  // Triage's readiness when it is done, or whoever must answer a stop.
+  // Triage's readiness when it is done, or the state of a stop.
   state?: string;
   // Other labels, from the families the kind may request.
   labels?: string[];
@@ -56,10 +56,18 @@ export function resultFamilies(
     : [];
 }
 
-// The states a stop may ask for: every stop but triage's own.
-function stopStates(configuration: FactoryConfiguration): string[] {
+// The states a stop of the kind may ask for: every stop but triage's own, and
+// the carried state only for triage, whose dispositions records settle.
+function stopStates(
+  configuration: FactoryConfiguration,
+  kind: RunKindName,
+): string[] {
   const { labels } = configuration;
-  return stopLabels(labels).filter((label) => label !== labels.triage);
+  return stopLabels(labels).filter(
+    (label) =>
+      label !== labels.triage &&
+      (label !== labels.carried || kind === "triage"),
+  );
 }
 
 // Reads the result the run left at `path`, validated for its kind.
@@ -142,7 +150,7 @@ export function parseRunResult(
     return invalid("fails without a reason");
   const states =
     outcome === "stop"
-      ? stopStates(configuration)
+      ? stopStates(configuration, kind)
       : outcome === "done" && kind === "triage"
         ? [configuration.labels.ready]
         : [];
@@ -205,7 +213,7 @@ type RunFacts = {
 
 // The comment the host posts for a result, its marker line, and the labels
 // it writes with it: the requested ones before the state, and a triage run's
-// own triage label removed.
+// own triage label removed, or every other stop for a carried result.
 export type ResultPost = {
   comment: string;
   marker: string;
@@ -248,7 +256,15 @@ export function resultPost(
     ].join("\n"),
     marker,
     add: [...(result.labels ?? []), ...(result.state ? [result.state] : [])],
-    remove: triage && labels.triage ? [labels.triage] : [],
+    // A carried result settles every stop it answers, such as the reporter
+    // state whose reply started it, so none asks for an answer.
+    remove: !triage
+      ? []
+      : labels.carried && result.state === labels.carried
+        ? stopLabels(labels).filter((label) => label !== labels.carried)
+        : labels.triage
+          ? [labels.triage]
+          : [],
     ...(triage &&
       result.outcome === "done" && {
         triage: {
@@ -311,7 +327,11 @@ export function resultGuidance(
   configuration: FactoryConfiguration,
   kind: RunKindName,
 ): string {
-  const stops = stopStates(configuration).map((label) => JSON.stringify(label));
+  const { carried } = configuration.labels;
+  const stops = stopStates(configuration, kind);
+  const answered = stops
+    .filter((label) => label !== carried)
+    .map((label) => JSON.stringify(label));
   const families = resultFamilies(configuration, kind).map((family) =>
     JSON.stringify(family),
   );
@@ -323,9 +343,14 @@ export function resultGuidance(
           `A done result asks for "state" ${JSON.stringify(configuration.labels.ready)}, the readiness the brief carries.`,
         ]
       : []),
-    ...(stops.length
+    ...(answered.length
       ? [
-          `A stop asks for "state", the label of whoever must answer: ${stops.join(", ")}.`,
+          `A stop asks for "state", the label of whoever must answer: ${answered.join(", ")}.`,
+        ]
+      : []),
+    ...(carried && stops.includes(carried)
+      ? [
+          `A stop asks for "state" ${JSON.stringify(carried)} when another record or ticket carries the request's fate, citing that carrier in "body"; it asks nobody for an answer.`,
         ]
       : []),
     families.length
