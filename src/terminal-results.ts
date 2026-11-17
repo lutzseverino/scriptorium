@@ -1,6 +1,6 @@
 // The supported process interface keeps private publication formats with
 // Scriptorium. Callers transport tracker facts and compare opaque identities.
-import { resultMarker, type TerminalResult } from "./run-result.ts";
+import { resultCommentTerminal, type TerminalResult } from "./run-result.ts";
 import { runCommentResults } from "./run-comment.ts";
 
 export const terminalResultsUsage =
@@ -18,22 +18,6 @@ const object = (value: unknown): Record<string, unknown> | null =>
     : null;
 const login = (value: string) =>
   value.toLowerCase().replace(/^app\/(.+)$/, "$1[bot]");
-
-function terminal(value: unknown): TerminalResult {
-  const entry = object(value);
-  if (
-    !entry ||
-    typeof entry.run !== "string" ||
-    entry.run.trim() === "" ||
-    typeof entry.outcome !== "string" ||
-    !["done", "stop", "failed"].includes(entry.outcome)
-  )
-    throw new Error("Invalid published terminal result data");
-  return {
-    run: entry.run,
-    outcome: entry.outcome as TerminalResult["outcome"],
-  };
-}
 
 export function terminalResults(args: string[], ports: Ports): number {
   if (
@@ -68,22 +52,12 @@ export function terminalResults(args: string[], ports: Ports): number {
       )
         throw new Error("Each comment must supply body and author facts");
       if (!author || login(author.login as string) !== login(args[1])) continue;
-      const last = comment.body.split(/\r\n?|\n/).at(-1) ?? "";
-      const match = new RegExp(`^<!-- ${resultMarker} (\\{.*\\}) -->$`).exec(
-        last,
-      );
+      const standalone = resultCommentTerminal(comment.body);
       const reported = runCommentResults(comment.body);
-      if (reported !== undefined && !Array.isArray(reported))
-        throw new Error("Invalid published terminal result data");
-      let entries: TerminalResult[];
-      try {
-        entries = [
-          ...(match ? [JSON.parse(match[1])] : []),
-          ...((reported as unknown[] | undefined) ?? []),
-        ].map(terminal);
-      } catch {
-        throw new Error("Invalid published terminal result data");
-      }
+      const entries = [
+        ...(standalone ? [standalone] : []),
+        ...(reported ?? []),
+      ];
       for (const entry of entries) {
         const previous = results.get(entry.run);
         if (previous && previous.outcome !== entry.outcome)

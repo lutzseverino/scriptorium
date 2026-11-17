@@ -170,6 +170,9 @@ export const dockerfilePath = ".scriptorium/Dockerfile";
 
 type HostRun = Run & {
   provenance?: Provenance;
+  // A launch's result identity is independent of the provenance a relaunch
+  // retains for filing attribution. Persist it before publication can retry.
+  resultId?: string;
   // Its run result's comment and labels are on the issue.
   resultPosted?: true;
   // The quota pause's label and cached run notice were written successfully.
@@ -747,7 +750,7 @@ export function createHost(
             run.result,
             {
               ...run,
-              id: run.provenance?.id ?? run.startedAt,
+              id: terminalIdentity(run),
               kind: run.continuation.runKind ?? "implement",
               attempt: run.continuation.attempt,
             },
@@ -812,7 +815,7 @@ export function createHost(
               result: {
                 ...run.result,
                 terminal: {
-                  run: run.provenance?.id ?? run.startedAt,
+                  run: terminalIdentity(run),
                   outcome: run.result.outcome,
                 },
               },
@@ -1324,6 +1327,7 @@ export function createHost(
           };
     const run: HostRun = {
       provenance,
+      resultId: continuation.relaunch ? randomUUID() : provenance.id,
       configuration: pass.configuration!,
       repository,
       base,
@@ -1552,8 +1556,8 @@ export function createHost(
   }
 
   // Writes the open issue's run comment and an action to tell once. A
-  // progress write is best-effort. A final write, a continuation or an
-  // action is required and rejects, so its decision retries on a later pass.
+  // progress write is best-effort. A final write, a continuation, a terminal
+  // result or an action is required and rejects, so it retries on a later pass.
   async function tell(
     pass: Pass,
     issue: Issue | undefined,
@@ -2110,6 +2114,11 @@ function stoppedWork(
 ): "implement" | "review" | undefined {
   const kind = run?.continuation.runKind ?? "implement";
   return kind === "triage" ? undefined : kind;
+}
+
+// Records predating per-launch result identity retain their published identity.
+function terminalIdentity(run: HostRun): string {
+  return run.resultId ?? run.provenance?.id ?? run.startedAt;
 }
 
 // The run comment's phase a run works in: a merge relaunch merges.

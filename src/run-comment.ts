@@ -9,13 +9,17 @@
 // next write, so the work resumes on the same PRs. A parent's close comment
 // is posted fresh.
 import type { Comment, IssueTracker } from "@lutzseverino/postern";
-import { renderComment } from "./comment-template.ts";
+import { lastCommentLine, renderComment } from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
 import { roleNames, type Labels, type RoleName } from "./label-roles.ts";
 import type { InputResume } from "./platform.ts";
-import type { RunResult, TerminalResult } from "./run-result.ts";
+import {
+  parseTerminalResult,
+  type RunResult,
+  type TerminalResult,
+} from "./run-result.ts";
 import { reference } from "./readiness.ts";
 import { contractEvidenceIds } from "./contract-protocol.ts";
 
@@ -124,8 +128,7 @@ const actionMarker = /^<!-- scriptorium:action \{.*\} -->$/;
 // Run result bodies are contained, so no body closes these.
 const bodyStart = "<!-- scriptorium:run-body -->\n";
 const bodyEnd = "\n<!-- /scriptorium:run-body -->";
-const lastLine = (comment: Comment) =>
-  comment.body.split(/\r\n?|\n/).at(-1) ?? "";
+const lastLine = (comment: Comment) => lastCommentLine(comment.body);
 // JSON whose text cannot close the HTML comment holding it.
 const encode = (value: unknown) =>
   JSON.stringify(value).replace(/[<>]/g, (character) =>
@@ -135,7 +138,7 @@ const encode = (value: unknown) =>
 // The run comment's owned state, independent of transport author selection.
 function readState(body: string): State | null {
   if (body.includes("<!-- repo-canon:triage-attestation ")) return null;
-  const match = runMarker.exec(body.split(/\r\n?|\n/).at(-1) ?? "");
+  const match = runMarker.exec(lastCommentLine(body));
   if (!match) return null;
   try {
     const state = JSON.parse(match[1]);
@@ -156,8 +159,12 @@ function runState(comment: Comment): State | null {
 
 // Internal access for the supported reader: it validates the retained facts
 // after selecting the caller's trusted author, independently of bot marking.
-export function runCommentResults(body: string): unknown {
-  return readState(body)?.results;
+export function runCommentResults(body: string): TerminalResult[] | undefined {
+  const results = readState(body)?.results;
+  if (results === undefined) return undefined;
+  if (!Array.isArray(results))
+    throw new Error("Invalid published terminal result data");
+  return results.map(parseTerminalResult);
 }
 
 // The mutable report role, without exposing its encoded state to the platform.

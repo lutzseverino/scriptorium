@@ -2,7 +2,8 @@
 // repository the host configuration lists until it is stopped, and
 // `node src/main.ts resume <host configuration> <provider>` queues the owner's
 // resume request for it. `status <host configuration> [--json]` reads the
-// operational observations without serving repositories.
+// operational observations without serving repositories. `results --author
+// <account>` reads terminal result facts from tracker comments on stdin.
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";

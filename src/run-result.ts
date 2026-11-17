@@ -11,6 +11,7 @@ import type {
 } from "./factory-configuration.ts";
 import { configured, stopLabels } from "./label-roles.ts";
 import { sameLogin } from "./contract-protocol.ts";
+import { lastCommentLine } from "./comment-template.ts";
 
 export type RunResult = {
   outcome: "done" | "stop" | "failed";
@@ -31,6 +32,26 @@ export type TerminalResult = {
   outcome: RunResult["outcome"];
 };
 
+function isOutcome(value: unknown): value is RunResult["outcome"] {
+  return value === "done" || value === "stop" || value === "failed";
+}
+
+// Validate retained and standalone observations with the producer's outcomes.
+export function parseTerminalResult(value: unknown): TerminalResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("run" in value) ||
+    typeof value.run !== "string" ||
+    value.run.trim() === "" ||
+    !("outcome" in value) ||
+    !isOutcome(value.outcome)
+  )
+    throw new Error("Invalid published terminal result data");
+  return { run: value.run, outcome: value.outcome };
+}
+
 // A result the host could not accept, which fails a normally exited run.
 export type ReadResult = RunResult | { invalid: string };
 
@@ -42,6 +63,22 @@ export const resultFile = "result.json";
 // The frame's own marker, unless a triage result names the factory's triage
 // result marker, which the issue-contract validator recognises.
 export const resultMarker = "scriptorium:run-result";
+
+// Read only the standalone format this module publishes. Custom triage
+// markers are observed through the mutable report's retained result facts.
+export function resultCommentTerminal(
+  body: string,
+): TerminalResult | undefined {
+  const match = new RegExp(`^<!-- ${resultMarker} (\\{.*\\}) -->$`).exec(
+    lastCommentLine(body),
+  );
+  if (!match) return undefined;
+  try {
+    return parseTerminalResult(JSON.parse(match[1]));
+  } catch {
+    throw new Error("Invalid published terminal result data");
+  }
+}
 
 // GitHub keeps a comment's body within 65,536 characters, frame included.
 const bodyLimit = 60_000;
@@ -121,7 +158,7 @@ export function parseRunResult(
   )
     return invalid("has a field the run-result interface does not name");
   const { outcome, state, labels = [], body, reason } = value;
-  if (!["done", "stop", "failed"].includes(outcome))
+  if (!isOutcome(outcome))
     return invalid("has no outcome of done, stop or failed");
   if (typeof body !== "string") return invalid("has no body");
   // Filing citations belong to finding issue bodies. Remove whole citation

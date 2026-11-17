@@ -10374,6 +10374,81 @@ test("a stop result posts its question and applies its state together, then rele
   assert.match(run.launched[1].options.prompt!, /Needs-input resume:/);
 });
 
+for (const outcome of ["done", "failed"] as const)
+  test(`a merge relaunch publishes a distinct terminal result after restart: ${outcome}`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    // A retry opens a PR and publishes a result before merge recovery launches.
+    run.launched[0].finish(undefined, undefined, null);
+    await run.drain();
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr);
+    run.launched[1].finish(undefined, undefined, {
+      outcome: "done",
+      body: "Delivered.",
+    });
+    await run.drain();
+    await run.tick();
+    const observe = (bodies: string[]) => {
+      const observed = execFileSync(
+        process.execPath,
+        ["src/main.ts", "results", "--author", "factory[bot]"],
+        {
+          cwd: new URL("..", import.meta.url),
+          input: JSON.stringify(
+            bodies.map((body) => ({ body, author: { login: "factory[bot]" } })),
+          ),
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      return JSON.parse(observed).results;
+    };
+    const first = observe(issue.comments);
+    assert.equal(first.length, 1);
+    assert.equal(first[0].outcome, "done");
+    advanceDefault(bare);
+    await run.tick();
+    assert.equal(run.launched.length, 3);
+    assert.match(run.launched[2].options.prompt!, /Merge relaunch:/);
+    run.launched[2].finish(undefined, undefined, {
+      outcome,
+      body: "Delivered.",
+      ...(outcome === "failed" && { reason: "Merge checks failed" }),
+    });
+    await run.drain();
+    // The pending result must retain its launch identity across host restart.
+    const restarted = run.restart();
+    await restarted.tick();
+    const results = observe(issue.comments);
+    assert.equal(results.length, 2);
+    assert.deepEqual(
+      results.find((entry: { run: string }) => entry.run === first[0].run),
+      first[0],
+    );
+    assert.equal(
+      results.find((entry: { run: string }) => entry.run !== first[0].run)
+        .outcome,
+      outcome,
+    );
+    // The mutable report and standalone publications expose the same facts.
+    assert.deepEqual(observe(runComments(issue)), results);
+    assert.deepEqual(
+      observe(
+        issue.comments.filter((body) => !runComments(issue).includes(body)),
+      ),
+      results,
+    );
+    await restarted.tick();
+    assert.deepEqual(observe(issue.comments), results);
+  });
+
 test("terminal result observation retries an unavailable report and survives a host restart", async (t) => {
   let failReport = false;
   const run = host(t, {
