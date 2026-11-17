@@ -45,7 +45,13 @@ export type HostConfiguration = {
   // The host-written, non-secret credential observations document the
   // factory reads on each pass, or absent when the host writes none.
   credentialObservations?: string;
+  // Host-owned user token source, supplied only to implement runs for uploads.
+  // Seam (deferred): attachment-upload credential source; consumers: 1; extract at 3.
+  attachmentUploadCredential?: AttachmentUploadCredential;
 };
+
+export type AttachmentUploadCredential =
+  { command: string[] } | { file: string };
 
 // Optional sandbox admission limits across providers; omission adds no limit.
 export type ImplementLimits = { total?: number; perRepository?: number };
@@ -384,6 +390,21 @@ function hostConfigurationProblems(value: unknown): string[] {
         ["cachePath"],
       ),
       credentialObservations: text(isAbsolute, "is not an absolute path"),
+      attachmentUploadCredential: (source, path, problems) => {
+        if (
+          !valid(
+            object({ command: list(text(), { nonEmpty: true }) }),
+            source,
+          ) &&
+          !valid(
+            object({ file: text(isAbsolute, "is not an absolute path") }),
+            source,
+          )
+        )
+          problems.push(
+            `${path}: must name exactly one command (a nonempty argument array) or file (an absolute path)`,
+          );
+      },
       imageRetention: object(
         {
           obsoletePairs: number(
@@ -405,6 +426,7 @@ function hostConfigurationProblems(value: unknown): string[] {
       "imageRetention",
       "imageStorage",
       "credentialObservations",
+      "attachmentUploadCredential",
       ...(shorthand ? ["platforms"] : ["readiness", "github"]),
     ],
   )(value, "", problems);

@@ -68,11 +68,14 @@ import {
   type RepositoryPlatform,
 } from "./platform.ts";
 import {
+  attachmentUploadEnvironment,
+  attachmentUploadToken,
   githubTokens,
   runKindPermissions,
   sandboxEnvironment,
   version2Permissions,
   writeSandboxToken,
+  writeSandboxAttachmentToken,
   type TokenCommand,
 } from "./github-token.ts";
 import type { HostConfiguration } from "./host-configuration.ts";
@@ -231,6 +234,13 @@ export function createHost(
   // launch delivers stays out of the logs and the status file.
   const redactor = createRedactor();
   const tokens = githubTokens(ports.token, ports.now, redactor);
+  const attachmentTokens = configuration.attachmentUploadCredential
+    ? githubTokens(
+        attachmentUploadToken(configuration.attachmentUploadCredential),
+        ports.now,
+        redactor,
+      )
+    : undefined;
   const report = (line: string) => ports.report(redactor.redact(line));
   // Git as the repository's own token holder, a token no sandbox gets. Each
   // call takes the token as it stands, so a long pass outlives none.
@@ -1056,13 +1066,10 @@ export function createHost(
   async function refreshTokens() {
     for (const run of runs.filter((run) => !run.exited)) {
       const name = `${run.repository}#${run.issue}`;
+      const kind = run.continuation.runKind ?? "implement";
       let token;
       try {
-        token = await sandboxToken(
-          run.repository,
-          run.configuration,
-          run.continuation.runKind ?? "implement",
-        );
+        token = await sandboxToken(run.repository, run.configuration, kind);
       } catch (error) {
         report(`${name}'s token was not refreshed: ${error}`);
         continue;
@@ -1076,6 +1083,20 @@ export function createHost(
           if (!run.exited)
             report(`${name}'s token file was not rewritten: ${error}`);
         }
+      if (attachmentTokens && kind === "implement") {
+        try {
+          const upload = await attachmentTokens.get(run.repository);
+          await writeSandboxAttachmentToken(
+            join(run.sandbox, "github"),
+            upload,
+          );
+        } catch (error) {
+          if (!run.exited)
+            report(
+              `${name}'s attachment-upload credential was not refreshed: ${error}`,
+            );
+        }
+      }
     }
   }
 
@@ -1092,6 +1113,10 @@ export function createHost(
     const paths = directory(repository);
     // Run start mints the sandbox's token for its run kind alone.
     const token = await sandboxToken(repository, pass.configuration!, kind);
+    const upload =
+      kind === "implement"
+        ? await attachmentTokens?.get(repository)
+        : undefined;
     const git = hostGit(repository);
     const base = (await git(paths.clone, ["rev-parse", "HEAD"])).trim();
     const previous = find(decision);
@@ -1118,6 +1143,8 @@ export function createHost(
       await mkdir(join(sandbox, "github"), { mode: 0o700 });
       await mkdir(join(sandbox, "result"), { mode: 0o700 });
       github = await writeSandboxToken(join(sandbox, "github"), token);
+      if (upload)
+        await writeSandboxAttachmentToken(join(sandbox, "github"), upload);
       follower = await followRunLog(raw, log, redactor.redact);
     } catch (error) {
       await rm(sandbox, { recursive: true, force: true });
@@ -1241,8 +1268,9 @@ export function createHost(
               : undefined,
           filingRun: provenance.id,
           models: kind === "triage" ? registry.modelFacts : undefined,
-          credentialLimits:
-            "Use only the supplied credentials; never discover or switch identities.",
+          credentialLimits: upload
+            ? "Use only the supplied credentials for their documented purposes; never discover or switch to other identities. FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE names the read-only file containing the supplied attachment-upload credential. Use it only for GitHub attachment uploads; keep the installation token for every other GitHub operation. Never put the upload token in the environment, logs or run result."
+            : "Use only the supplied credentials; never discover or switch identities.",
         }),
         branch: runBranch(issue),
         log: raw,
@@ -1254,7 +1282,9 @@ export function createHost(
             sandboxPath: sandboxResultDirectory,
           },
         ],
-        env: sandboxEnvironment,
+        env: upload
+          ? { ...sandboxEnvironment, ...attachmentUploadEnvironment }
+          : sandboxEnvironment,
         signal: controller.signal,
         delivered: redactor.add,
       })

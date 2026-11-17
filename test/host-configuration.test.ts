@@ -46,6 +46,46 @@ function read(path: string) {
   return { configuration, warnings };
 }
 
+test("the optional attachment-upload credential names exactly one command or absolute file", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  assert.equal(
+    read(fixture("valid")).configuration.attachmentUploadCredential,
+    undefined,
+  );
+  for (const source of [
+    { command: ["/usr/local/bin/upload-token", "bot"] },
+    { file: "/etc/factory/upload-token" },
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, attachmentUploadCredential: source }),
+    );
+    assert.deepEqual(
+      read(path).configuration.attachmentUploadCredential,
+      source,
+    );
+  }
+  for (const source of [
+    null,
+    "secret",
+    {},
+    { command: [] },
+    { command: [""] },
+    { command: "token" },
+    { file: "relative" },
+    { file: "" },
+    { file: "/token", command: ["token"] },
+    { file: "/token", extra: true },
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...base, attachmentUploadCredential: source }),
+    );
+    assert.match(refused(path).join("\n"), /attachmentUploadCredential:/);
+  }
+});
+
 test("host effort is required rather than inferred from the adapter", (t) => {
   const path = join(directory(t), "host.json");
   const config = JSON.parse(readFileSync(fixture("valid"), "utf8"));

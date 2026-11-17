@@ -11,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, sep } from "node:path";
@@ -1572,6 +1573,10 @@ test("a sandbox reads its repository's token from a mounted file that outlives n
     merge: "accepted",
   });
   assert.deepEqual(launch.docker.env, sandboxEnvironment);
+  assert.deepEqual(readdirSync(github.hostPath).sort(), [
+    "config.yml",
+    "hosts.yml",
+  ]);
   assert.equal(
     JSON.stringify(launch.options).includes("ghs_acme_widgets"),
     false,
@@ -1584,6 +1589,203 @@ test("a sandbox reads its repository's token from a mounted file that outlives n
   launch.finish();
   await until(() => !existsSync(github.hostPath));
   assert.equal(existsSync(github.hostPath), false);
+});
+
+test("an implement run's upload credential is read-only, refreshed, redacted and removed at exit", async (t) => {
+  const source = join(directory(t), "upload-token");
+  writeFileSync(source, "upload_first\n");
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { attachmentUploadCredential: { file: source } },
+  });
+  await run.tick();
+  const [launch] = run.launched;
+  const github = launch.docker.mounts!.find(
+    (mount) => mount.sandboxPath === "/run/factory/github",
+  )!;
+  const path = join(github.hostPath, "attachment-upload-token");
+  assert.equal(github.readonly, true);
+  assert.equal(readFileSync(path, "utf8"), "upload_first\n");
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  assert.equal(
+    launch.docker.env?.FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE,
+    "/run/factory/github/attachment-upload-token",
+  );
+  assert.match(
+    JSON.stringify(launch.options),
+    /FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE/,
+  );
+  assert.match(
+    JSON.stringify(launch.options),
+    /only for GitHub attachment uploads/,
+  );
+  assert.equal(JSON.stringify(launch.options).includes("upload_first"), false);
+  writeFileSync(source, "upload_second\n");
+  await run.refreshTokens();
+  assert.equal(readFileSync(path, "utf8"), "upload_first\n");
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.refreshTokens();
+  assert.equal(readFileSync(path, "utf8"), "upload_second\n");
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  appendFileSync(rawLog(launch.options), "upload_first upload_second\n");
+  launch.finish();
+  await run.drain();
+  assert.equal(existsSync(github.hostPath), false);
+  assert.match(
+    readFileSync(recordOf(run.state, 4, 1).log, "utf8"),
+    /<REDACTED> <REDACTED>/,
+  );
+  assert.equal(
+    JSON.stringify(recordOf(run.state, 4, 1)).includes("upload_"),
+    false,
+  );
+  assert.equal(JSON.stringify(run.status()).includes("upload_"), false);
+});
+
+test("an implement run receives the configured command's upload token for its repository", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+    configuration: {
+      attachmentUploadCredential: {
+        command: [
+          process.execPath,
+          "-e",
+          "process.stdout.write('upload_command_' + process.argv[1].replace('/', '_'))",
+        ],
+      },
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  const [launch] = run.launched;
+  const github = launch.docker.mounts!.find(
+    (mount) => mount.sandboxPath === "/run/factory/github",
+  )!;
+  assert.equal(
+    readFileSync(join(github.hostPath, "attachment-upload-token"), "utf8"),
+    "upload_command_acme_widgets\n",
+  );
+  launch.finish();
+  await run.drain();
+  assert.equal(existsSync(github.hostPath), false);
+});
+
+for (const kind of ["triage", "review"] as const)
+  test(`${kind} never reads or receives a configured attachment-upload credential`, async (t) => {
+    const bare = remote(t, kindsFiles);
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: kind === "triage" ? ["state:triage"] : [],
+            ...(kind === "review" && {
+              isPullRequest: true,
+              branchPullRequests: [
+                {
+                  ...publishedPR(bare, "proposal/changes"),
+                  number: 4,
+                  body: "Direct change: requested improvement",
+                  author: { login: "owner", bot: false },
+                },
+              ],
+            }),
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+      configuration: {
+        attachmentUploadCredential: {
+          file: join(directory(t), "missing-upload-token"),
+        },
+      },
+    });
+    if (kind === "review") run.github.drafts.add(4);
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    const [launch] = run.launched;
+    const github = launch.docker.mounts!.find(
+      (mount) => mount.sandboxPath === "/run/factory/github",
+    )!;
+    assert.equal(
+      existsSync(join(github.hostPath, "attachment-upload-token")),
+      false,
+    );
+    assert.deepEqual(launch.docker.env, sandboxEnvironment);
+    assert.doesNotMatch(
+      launch.options.prompt!,
+      /FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE/,
+    );
+    run.clock.now = new Date("2026-10-09T12:30:00Z");
+    await run.refreshTokens();
+    assert.equal(
+      existsSync(join(github.hostPath, "attachment-upload-token")),
+      false,
+    );
+    assert.doesNotMatch(run.reports.join("\n"), /attachment-upload/);
+  });
+
+test("a failed upload source prevents implement launch without leaking its output", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: {
+      attachmentUploadCredential: {
+        command: [
+          process.execPath,
+          "-e",
+          "console.log('upload_private'); console.error('upload_private'); process.exit(3)",
+        ],
+      },
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.match(
+    run.reports.join("\n"),
+    /attachment-upload credential: .*failed with 3/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(run.status()) + run.reports.join("\n"),
+    /upload_private/,
+  );
+});
+
+test("a failed upload refresh keeps the last token and retries without stopping its run", async (t) => {
+  const source = join(directory(t), "upload-token");
+  writeFileSync(source, "upload_valid\n");
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    configuration: { attachmentUploadCredential: { file: source } },
+  });
+  await run.tick();
+  const [launch] = run.launched;
+  const github = launch.docker.mounts!.find(
+    (mount) => mount.sandboxPath === "/run/factory/github",
+  )!;
+  writeFileSync(source, "malformed private token\n");
+  run.clock.now = new Date("2026-10-09T12:30:00Z");
+  await run.refreshTokens();
+  assert.equal(
+    readFileSync(join(github.hostPath, "attachment-upload-token"), "utf8"),
+    "upload_valid\n",
+  );
+  assert.match(
+    run.reports.join("\n"),
+    /attachment-upload credential was not refreshed/,
+  );
+  assert.doesNotMatch(run.reports.join("\n"), /malformed private token/);
+  writeFileSync(source, "upload_retried\n");
+  await run.refreshTokens();
+  assert.equal(
+    readFileSync(join(github.hostPath, "attachment-upload-token"), "utf8"),
+    "upload_retried\n",
+  );
+  launch.finish();
+  await run.drain();
 });
 
 test("a repository's token is reused, refreshed before it expires, and rewritten into its running sandbox", async (t) => {

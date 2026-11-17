@@ -154,6 +154,7 @@ and nothing comes from environment variables.
 | `imageStorage.reserveBytes`             | Positive whole-byte minimum available space required before starting each new build.                                                                                                                                                                 |
 | `imageStorage.resumeBytes`              | Positive whole-byte recovery threshold, strictly greater than the reserve; required to release a storage hold.                                                                                                                                       |
 | `credentialObservations`                | Optional absolute path of the non-secret credential observations document the host writes and the factory only reads. See [credential health](#credential-health).                                                                                   |
+| `attachmentUploadCredential`            | Optional host-owned user token source for implement runs' GitHub attachment uploads: exactly one `command` argument array or absolute `file` path. See [attachment-upload credential](#attachment-upload-credential).                                |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -343,6 +344,44 @@ mint at launch launches nothing, and the claimed issue launches on a later
 pass. A running sandbox keeps its last token, which is still valid, and the
 factory retries the refresh every minute. The factory names the failure but
 never logs the command's output.
+
+### Attachment-upload credential
+
+Optionally set one source in the host configuration:
+
+```json
+{ "attachmentUploadCredential": { "command": ["/usr/local/bin/upload-token"] } }
+```
+
+Or use a host-managed file:
+
+```json
+{ "attachmentUploadCredential": { "file": "/etc/factory/upload-token" } }
+```
+
+The command receives the repository's `<owner>/<name>` as its last argument,
+without a permission-set argument. It must exit 0 within 60 seconds and print
+one user token, with no internal whitespace. A file must contain the same
+single token; leading and trailing whitespace is trimmed. Neither form stores
+the token value in the configuration. The host owns provisioning, access and
+renewal. A yielded token must remain valid for at least 45 minutes, as with the
+[installation-token command](#token-command).
+
+Only implement runs receive this credential, including version 2's runs,
+retries and recoveries. Triage and review runs never read its source or receive
+its file or environment variable. With no field, launches behave as before.
+The factory caches each repository's upload token for 30 minutes, adds every
+value to its redactor, and refreshes the mounted file alongside the run's
+installation token. A failed source prevents the implement launch; a failed
+refresh keeps the previous token and retries on the next refresh, without
+using another source. Command output and file contents never enter failure
+messages.
+
+The [sandbox access section](#sandbox-github-access) describes the mount and
+the credential's upload-only purpose. `status` reports only whether this source
+is configured, in text and as `attachmentUploadCredential.configured` in JSON.
+It neither reads the source nor runs its command and exposes no path, command
+arguments or token value.
 
 ### Run kind token permissions
 
@@ -773,8 +812,18 @@ replace it. The
 factory removes the directory when the run's agent exits, so a token outlives
 no run.
 
-That installation token is the sandbox agent's only GitHub identity, so a push
-that the GitHub App or the run kind's permissions don't allow stays refused.
+The installation token is the sandbox agent's GitHub identity for repository
+work. An implement run also receives the host's optional
+[attachment-upload credential](#attachment-upload-credential), solely for
+GitHub attachment uploads. Its private file is mounted read-only at
+`/run/factory/github/attachment-upload-token`, beside the installation-token
+configuration. `FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE` names that file; the
+token value never enters the environment. The run's prompt names the variable
+and its purpose. Refresh replaces the file whole, and exit removes it with
+the run's private directory.
+
+The upload credential supplies no alternate identity for repository operations.
+A push that the GitHub App or the run kind's permissions don't allow stays refused.
 The provider login a run signs in with adds none: the image's provider policy
 turns off ChatGPT apps for Codex and claude.ai connectors for Claude Code,
 which could otherwise act as the account's linked GitHub user. The
@@ -873,7 +922,8 @@ comment's wording comes from the
 ## Redaction
 
 The factory replaces with `<REDACTED>` every token the token command printed
-during the process's lifetime, including replaced ones, and every provider
+during the process's lifetime, including replaced ones, every attachment-upload
+token read from its configured source, and every provider
 credential value a launch delivered: the Claude Code token, and the Codex
 login's API key and tokens. It redacts them from:
 
@@ -1973,7 +2023,9 @@ modification time establishes no daemon liveness. `unavailable` has `at: null`.
 
 The command's JSON document has `version: 1`, `observedAt` (when inspection
 began), `capacity`, [`coverage`](#coverage), [`health`](#health), `models`,
-[`narrowerModels`](#narrower-models) and `providers`. Each
+[`narrowerModels`](#narrower-models), `attachmentUploadCredential` and `providers`.
+`attachmentUploadCredential` contains only `configured`, a boolean from the
+host configuration, never a credential value or its source. Each
 provider reuses the operational fields documented under
 [Status file](#status-file), with the following additions and unavailable
 representations. Its `observedAt` identifies the projection time, while the
