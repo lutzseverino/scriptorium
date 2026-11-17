@@ -1377,6 +1377,11 @@ read, including another quota probe, runs there before its deadline. At the
 deadline the host probes again before polling or launching; continued
 exhaustion starts another hold. Holds persist in `quota.json` across restarts.
 
+A held repository is a [repository pause](#repository-pauses) with the `host`
+cause and the reason `GitHub rate limit; quota held until <deadline>`. Its
+passes therefore show as failing in [health](#health), with `failingSince` and
+`failure` set, until the quota resets and a pass completes there again.
+
 A run ending during a hold releases its sandbox slot. The host records its
 pause before publishing any quota-related owner stop, and writes its paused
 label and run notice using cached comment facts without another read. If
@@ -1751,16 +1756,17 @@ A repository is paused for a pass, claiming and launching nothing there, when:
 - its configured state labels cannot be created;
 - its [hosting platform](#hosting-platform) isn't served;
 - its platform reads fail;
+- its [GitHub quota is held](#github-quota-holds);
 - an open issue or PR carries its [factory hold](factory-configuration.md#factory-hold)
   label, or that hold cannot be read. A merge relaunch whose target PR alone
   carries the label still launches.
 
 The status file and the [`status` command's coverage](#coverage) record the
 pause with its cause: `repository-input` for the repository's own inputs,
-`host` for the token command, the clone, the platform, the state labels and
-storage admission, and `factory-hold` for the factory hold. When several
-conditions apply, the pass's final pause reason is the one reported, and a
-factory hold never replaces a pass pause. Pause reasons name repository inputs
+`host` for the token command, the clone, the platform, the state labels,
+storage admission and a GitHub quota hold, and `factory-hold` for the factory
+hold. When several conditions apply, the pass's final pause reason is the one
+reported, and a factory hold never replaces a pass pause. Pause reasons name repository inputs
 by their repository path, such as `.scriptorium/config.json`, never by the
 host's clone path.
 
