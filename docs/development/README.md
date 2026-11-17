@@ -171,7 +171,8 @@ frame. `test/run-comment.test.ts` drives the one writer of the run, action and
 close comments over a fake tracker: passes, final-write retries, actions told
 once and continuations. `test/label-roles.test.ts`
 checks that every label consumer derives its roles from `src/label-roles.ts`,
-and `test/model-policy.test.ts` reads repository model policies. The host
+and `test/model-policy.test.ts` reads repository model policies at their
+current and previous paths. The host
 configuration's tests read the fixture files in
 `test/fixtures/host-configuration/`. Factory configuration validation reads
 the fixtures in `test/fixtures/factory-configuration/`; run it alone with

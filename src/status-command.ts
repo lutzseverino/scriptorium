@@ -28,6 +28,7 @@ import {
   time,
   type ConfigurationCoverage,
   type ConfigurationProblemState,
+  type ModelPolicyCoverage,
   type ObjectValue,
   type OwnerWaits,
   type PassHealth,
@@ -42,6 +43,7 @@ import {
   type ModelFacts,
   type Registry,
 } from "./providers.ts";
+import { modelPolicyPaths, type ModelPolicyPath } from "./model-policy.ts";
 import { UsageReadError, type UsageWindow } from "./providers/usage.ts";
 import { credentialHealths, type Credentials } from "./credentials.ts";
 
@@ -102,13 +104,14 @@ type BudgetCapacity = {
   repositories: (ObservedCapacityCounts & { repository: string })[];
 };
 
-// Null configuration and pause establish nothing while the observation is
-// unavailable.
+// Null configuration, model policy and pause establish nothing while the
+// observation is unavailable.
 type Coverage = {
   observation: Observation;
   repositories: {
     repository: string;
     configuration: ConfigurationCoverage | null;
+    modelPolicy: ModelPolicyCoverage | null;
     paused: RepositoryPause | null;
   }[];
 };
@@ -386,8 +389,44 @@ function configurationCoverage(value: unknown): ConfigurationCoverage | null {
     : null;
 }
 
+// The model policy read a status file entry records beside its
+// configuration, or null when it is not one a pass writes: a pass that read
+// a valid configuration reads the policy only for version 3, and a pass that
+// never reached the configuration never reached the policy either.
+function modelPolicyCoverage(
+  value: unknown,
+  configuration: ConfigurationCoverage,
+): ModelPolicyCoverage | null {
+  const record = object(value);
+  if (!record) return null;
+  const fields = Object.keys(record).sort().join();
+  const read: ModelPolicyCoverage | null =
+    record.state === "read" &&
+    fields === "path,state" &&
+    modelPolicyPaths.includes(record.path as ModelPolicyPath)
+      ? { state: "read", path: record.path as ModelPolicyPath }
+      : (record.state === "absent" || record.state === "not-read") &&
+          fields === "state"
+        ? { state: record.state as "absent" | "not-read" }
+        : record.state === "rejected" &&
+            fields === "problem,state" &&
+            typeof record.problem === "string"
+          ? { state: "rejected", problem: record.problem }
+          : null;
+  const reached =
+    configuration.state === "valid"
+      ? configuration.version === 3
+      : configuration.state === "not-read"
+        ? false
+        : null;
+  return read && (reached === null || reached === (read.state !== "not-read"))
+    ? read
+    : null;
+}
+
 type CoverageEntry = {
   configuration: ConfigurationCoverage;
+  modelPolicy: ModelPolicyCoverage;
   paused: RepositoryPause | null;
   // The entry as the status file holds it.
   recorded: ObjectValue;
@@ -409,6 +448,7 @@ function coverageEntries(
     for (const value of recorded) {
       const entry = object(value);
       const read = configurationCoverage(entry?.configuration);
+      const modelPolicy = read && modelPolicyCoverage(entry?.modelPolicy, read);
       const paused =
         entry?.state === "paused" &&
         pauseCauses.includes(entry.cause as RepositoryPause["cause"]) &&
@@ -423,14 +463,19 @@ function coverageEntries(
         typeof entry.repository !== "string" ||
         entries.has(entry.repository) ||
         !read ||
+        !modelPolicy ||
         (entry.state === "running"
-          ? "cause" in entry || "reason" in entry || read.state !== "valid"
+          ? "cause" in entry ||
+            "reason" in entry ||
+            read.state !== "valid" ||
+            modelPolicy.state === "rejected"
           : paused === null)
       )
         valid = false;
       else
         entries.set(entry.repository, {
           configuration: read,
+          modelPolicy,
           paused,
           recorded: entry,
         });
@@ -461,6 +506,7 @@ function readCoverage(
     repositories: configuration.repositories.map((repository) => ({
       repository,
       configuration: entries ? entries.get(repository)!.configuration : null,
+      modelPolicy: entries ? entries.get(repository)!.modelPolicy : null,
       paused: entries ? entries.get(repository)!.paused : null,
     })),
   };
@@ -1101,8 +1147,8 @@ export function formatStatus(budget: LaunchBudget): string {
     ),
     `capacity observation=${JSON.stringify(budget.capacity.observation)}`,
     ...budget.coverage.repositories.map(
-      ({ repository, configuration, paused }) =>
-        `${repository}: configuration=${value(configuration)} paused=${configuration === null ? "unavailable" : paused === null ? "none" : JSON.stringify(paused)}`,
+      ({ repository, configuration, modelPolicy, paused }) =>
+        `${repository}: configuration=${value(configuration)} modelPolicy=${value(modelPolicy)} paused=${configuration === null ? "unavailable" : paused === null ? "none" : JSON.stringify(paused)}`,
     ),
     `coverage observation=${JSON.stringify(budget.coverage.observation)}`,
     ...budget.health.repositories.map(

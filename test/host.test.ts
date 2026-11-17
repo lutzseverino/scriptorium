@@ -1648,6 +1648,7 @@ test("a token command that fails at refresh holds only its repository", async (t
       cause: "host",
       reason: failure,
       configuration: { state: "not-read", problem: failure },
+      modelPolicy: { state: "not-read" },
       held: [],
       pass: failing("2026-10-09T12:30:00.000Z", failure),
       ownerWaits: null,
@@ -1656,6 +1657,7 @@ test("a token command that fails at refresh holds only its repository", async (t
       repository: "acme/gadgets",
       state: "running",
       configuration: version2,
+      modelPolicy: { state: "not-read" },
       held: [],
       pass: passing,
       ownerWaits: null,
@@ -1937,6 +1939,7 @@ test("the status file lists each repository's state and its held issues", async 
         repository: "acme/widgets",
         state: "running",
         configuration: version2,
+        modelPolicy: { state: "not-read" },
         held: [{ issue: 5, reason: "blocked by #4" }],
         pass: passing,
         ownerWaits: null,
@@ -1947,6 +1950,7 @@ test("the status file lists each repository's state and its held issues", async 
         cause: "repository-input",
         reason: "it has no .scriptorium/Dockerfile",
         configuration: version2,
+        modelPolicy: { state: "not-read" },
         held: [
           {
             issue: 2,
@@ -1968,6 +1972,7 @@ test("the status file lists each repository's state and its held issues", async 
           state: "not-read",
           problem: "the token command for acme/tools failed with 1",
         },
+        modelPolicy: { state: "not-read" },
         held: [],
         pass: failing(
           "2026-10-09T12:00:00.000Z",
@@ -2451,6 +2456,7 @@ test("an image that does not build pauses only its repository until it builds", 
     reason:
       "its sandbox image did not build from .scriptorium/Dockerfile: Error: apt-get exited with 100",
     configuration: version2,
+    modelPolicy: { state: "not-read" },
     held: [
       {
         issue: 4,
@@ -8184,7 +8190,7 @@ for (const [name, policy] of [
       remotes: {
         "acme/widgets": remote(t, {
           ...factoryFiles,
-          ".github/factory-model-policy.json": policy,
+          ".scriptorium/model-policy.json": policy,
         }),
       },
     });
@@ -8232,11 +8238,11 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   const legacyRemote = remote(t, {
     ...factoryFiles,
     ".scriptorium/config.json": JSON.stringify(legacy),
-    ".github/factory-model-policy.json": policy,
+    ".scriptorium/model-policy.json": policy,
   });
   const currentRemote = remote(t, {
     ...kindsFiles,
-    ".github/factory-model-policy.json": policy,
+    ".scriptorium/model-policy.json": policy,
   });
   const run = host(t, {
     repositories: {
@@ -8409,7 +8415,7 @@ test("a version 3 triage label a person applied starts triage on the model polic
     remotes: {
       "acme/widgets": remote(t, {
         ...kindsFiles,
-        ".github/factory-model-policy.json": JSON.stringify(policy),
+        ".scriptorium/model-policy.json": JSON.stringify(policy),
       }),
     },
   });
@@ -8440,7 +8446,7 @@ test("a present model policy that is invalid pauses the repository with its corr
     remotes: {
       "acme/widgets": remote(t, {
         ...kindsFiles,
-        ".github/factory-model-policy.json": JSON.stringify({
+        ".scriptorium/model-policy.json": JSON.stringify({
           version: 1,
           runKinds: {},
         }),
@@ -8453,7 +8459,7 @@ test("a present model policy that is invalid pauses the repository with its corr
   assert.equal(repository.state, "paused");
   assert.match(
     repository.reason,
-    /The model policy \.github\/factory-model-policy\.json is invalid:\n- fallback: is missing/,
+    /The model policy \.scriptorium\/model-policy\.json is invalid:\n- fallback: is missing/,
   );
   assert.match(
     run.github.find("acme/widgets", 4).comments.join("\n"),
@@ -10680,7 +10686,18 @@ const coverageStorage: ImageStorageStatus = {
   filesystems: [],
   reclamation: { pressure: true, freed: null, error: null },
 };
-const policyFile = ".github/factory-model-policy.json";
+const policyFile = ".scriptorium/model-policy.json";
+const legacyPolicyFile = ".github/factory-model-policy.json";
+const emptyPolicy = JSON.stringify({
+  version: 1,
+  fallback: "wait",
+  runKinds: {},
+});
+const allKinds = {
+  state: "valid",
+  version: 3,
+  runKinds: ["triage", "implement", "review"],
+};
 
 // Each case sets up acme/widgets; acme/gadgets keeps its valid version 2
 // inputs and continues beside it.
@@ -10690,6 +10707,9 @@ for (const [name, setup] of Object.entries<{
   options?: Partial<Parameters<typeof host>[1]>;
   arrange?: (run: ReturnType<typeof host>) => void;
   configuration: Record<string, unknown>;
+  // Where the pass read the model policy from; by default, absent for a
+  // valid version 3 configuration and not read otherwise.
+  modelPolicy?: Record<string, unknown>;
   paused: { cause: string; reason: RegExp } | null;
   // Whether acme/widgets#4 launches, as pickup or triage.
   launches?: boolean;
@@ -10825,12 +10845,45 @@ for (const [name, setup] of Object.entries<{
       reason: /did not build from \.scriptorium\/Dockerfile: .*100$/,
     },
   },
+  "a model policy at the new path": {
+    files: { ...kindsFiles, [policyFile]: emptyPolicy },
+    configuration: allKinds,
+    modelPolicy: { state: "read", path: ".scriptorium/model-policy.json" },
+    paused: null,
+    launches: true,
+  },
+  "a model policy only at the old path": {
+    files: { ...kindsFiles, [legacyPolicyFile]: emptyPolicy },
+    configuration: allKinds,
+    modelPolicy: { state: "read", path: ".github/factory-model-policy.json" },
+    paused: null,
+    launches: true,
+  },
+  "a model policy at both paths": {
+    files: {
+      ...kindsFiles,
+      [policyFile]: emptyPolicy,
+      [legacyPolicyFile]: emptyPolicy,
+    },
+    configuration: allKinds,
+    modelPolicy: {
+      state: "rejected",
+      problem:
+        /^The model policy is at both \.scriptorium\/model-policy\.json and \.github\/factory-model-policy\.json, /,
+    },
+    paused: {
+      cause: "repository-input",
+      reason:
+        /^The model policy is at both \.scriptorium\/model-policy\.json and \.github\/factory-model-policy\.json, /,
+    },
+  },
   "an unreadable model policy": {
     files: { ...kindsFiles, [policyFile]: "{" },
-    configuration: {
-      state: "valid",
-      version: 3,
-      runKinds: ["triage", "implement", "review"],
+    configuration: allKinds,
+    modelPolicy: {
+      state: "rejected",
+      problem:
+        /^The model policy \.scriptorium\/model-policy\.json is not JSON/,
     },
     paused: { cause: "repository-input", reason: /model policy .* not JSON/ },
   },
@@ -10895,11 +10948,8 @@ for (const [name, setup] of Object.entries<{
         "acme/widgets issues",
         new PlatformError("unavailable", "issues unavailable"),
       ),
-    configuration: {
-      state: "valid",
-      version: 3,
-      runKinds: ["triage", "implement", "review"],
-    },
+    configuration: allKinds,
+    modelPolicy: { state: "rejected", problem: /is not JSON/ },
     paused: { cause: "host", reason: /^its platform reads failed/ },
   },
   "a factory hold beside a pass pause": {
@@ -10942,6 +10992,7 @@ for (const [name, setup] of Object.entries<{
     assert.deepEqual(gadgets, {
       repository: "acme/gadgets",
       configuration: version2,
+      modelPolicy: { state: "not-read" },
       paused: null,
     });
     assert.equal(widgets.repository, "acme/widgets");
@@ -10956,6 +11007,21 @@ for (const [name, setup] of Object.entries<{
       );
       assert.match(widgets.configuration.problem, problem);
     } else assert.deepEqual(widgets.configuration, setup.configuration);
+    const { problem: policyProblem, ...modelPolicy } =
+      setup.modelPolicy ??
+      (setup.configuration.version === 3
+        ? { state: "absent" }
+        : { state: "not-read" });
+    if (policyProblem instanceof RegExp) {
+      assert.deepEqual(
+        { ...widgets.modelPolicy, problem: null },
+        {
+          ...modelPolicy,
+          problem: null,
+        },
+      );
+      assert.match(widgets.modelPolicy.problem, policyProblem);
+    } else assert.deepEqual(widgets.modelPolicy, modelPolicy);
     if (setup.paused === null) assert.equal(widgets.paused, null);
     else {
       assert.equal(widgets.paused.cause, setup.paused.cause);
@@ -10964,6 +11030,7 @@ for (const [name, setup] of Object.entries<{
     // The status file records the same facts the command projects.
     const [entry] = run.status().repositories;
     assert.deepEqual(entry.configuration, widgets.configuration);
+    assert.deepEqual(entry.modelPolicy, widgets.modelPolicy);
     assert.deepEqual(
       entry.state === "paused"
         ? { cause: entry.cause, reason: entry.reason }
@@ -11043,6 +11110,7 @@ test("status reports the pass's coverage and health as text and JSON without rea
         problem:
           "The factory configuration .scriptorium/config.json is missing",
       },
+      modelPolicy: { state: "not-read" },
       paused: {
         cause: "repository-input",
         reason: "The factory configuration .scriptorium/config.json is missing",
@@ -11055,14 +11123,20 @@ test("status reports the pass's coverage and health as text and JSON without rea
         version: 3,
         runKinds: ["triage", "implement", "review"],
       },
+      modelPolicy: { state: "absent" },
       paused: null,
     },
   ]);
   const text = hostCommand(run, "status").split("\n");
-  for (const { repository, configuration, paused } of coverage.repositories)
+  for (const {
+    repository,
+    configuration,
+    modelPolicy,
+    paused,
+  } of coverage.repositories)
     assert.ok(
       text.includes(
-        `${repository}: configuration=${JSON.stringify(configuration)} paused=${paused === null ? "none" : JSON.stringify(paused)}`,
+        `${repository}: configuration=${JSON.stringify(configuration)} modelPolicy=${JSON.stringify(modelPolicy)} paused=${paused === null ? "none" : JSON.stringify(paused)}`,
       ),
       text.join("\n"),
     );

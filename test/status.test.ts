@@ -2,12 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { providerStatus } from "../src/events.ts";
 import { emptyRunKindCounts, type Run } from "../src/factory.ts";
-import { hostStatus, type ConfigurationCoverage } from "../src/status.ts";
+import {
+  hostStatus,
+  type ConfigurationCoverage,
+  type ModelPolicyCoverage,
+} from "../src/status.ts";
 
 const configuration: ConfigurationCoverage = {
   state: "valid",
   version: 3,
   runKinds: ["implement"],
+};
+const modelPolicy: ModelPolicyCoverage = {
+  state: "read",
+  path: ".scriptorium/model-policy.json",
 };
 
 test("host status accepts the original three arguments with no provider statuses", () => {
@@ -15,7 +23,7 @@ test("host status accepts the original three arguments with no provider statuses
   assert.deepEqual(
     hostStatus(
       now,
-      [{ name: "acme/widgets", paused: null, configuration }],
+      [{ name: "acme/widgets", paused: null, configuration, modelPolicy }],
       [],
     ),
     {
@@ -42,6 +50,7 @@ test("host status accepts the original three arguments with no provider statuses
           repository: "acme/widgets",
           state: "running",
           configuration,
+          modelPolicy,
           held: [],
           pass: {
             failingSince: null,
@@ -130,13 +139,14 @@ test("capacity projection counts run exits independently of retained endings acr
     ),
   ];
   const repos = [
-    { name: "acme/widgets", paused: null, configuration },
+    { name: "acme/widgets", paused: null, configuration, modelPolicy },
     {
       name: "acme/gadgets",
       paused: { cause: "factory-hold" as const, reason: "held" },
       configuration,
+      modelPolicy,
     },
-    { name: "acme/empty", paused: null, configuration },
+    { name: "acme/empty", paused: null, configuration, modelPolicy },
   ];
   for (const limits of [
     undefined,

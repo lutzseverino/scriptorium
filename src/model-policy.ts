@@ -3,8 +3,18 @@
 // only; the host's capabilities and defaults bound every choice, and the
 // decision core resolves them.
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-export const modelPolicyPath = ".github/factory-model-policy.json";
+export const modelPolicyPath = ".scriptorium/model-policy.json";
+// The policy's previous path, read for one configuration version when the
+// new path is absent.
+export const legacyModelPolicyPath = ".github/factory-model-policy.json";
+export type ModelPolicyPath =
+  typeof modelPolicyPath | typeof legacyModelPolicyPath;
+export const modelPolicyPaths: readonly ModelPolicyPath[] = [
+  modelPolicyPath,
+  legacyModelPolicyPath,
+];
 
 // A named model, or the issue's own model label.
 export type Selection =
@@ -21,32 +31,43 @@ export type ModelPolicy = {
   };
 };
 
-// The policy at `path`, or null when the repository has none. A present file
-// that is unreadable or invalid throws, naming every problem: it never reads
-// as absence.
-export function readModelPolicy(path: string): ModelPolicy | null {
-  let source;
-  try {
-    source = readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+// The policy in the repository checkout at `root` and the path it came
+// from, or null when the repository has none. A present file that is
+// unreadable or invalid throws, naming every problem: it never reads as
+// absence. Both paths present throws too, rather than choosing one.
+export function readModelPolicy(
+  root: string,
+): { path: ModelPolicyPath; policy: ModelPolicy } | null {
+  const [current, legacy] = modelPolicyPaths.map((path) => {
+    try {
+      return { path, source: readFileSync(join(root, path), "utf8") };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      return { path, error };
+    }
+  });
+  if (current && legacy)
     throw new Error(
-      `The model policy ${modelPolicyPath} is unreadable: ${error}`,
-      {
-        cause: error,
-      },
+      `The model policy is at both ${modelPolicyPath} and ${legacyModelPolicyPath}, and the factory does not choose between them: keep one policy, at ${modelPolicyPath}`,
     );
-  }
+  const read = current ?? legacy;
+  if (!read) return null;
+  if ("error" in read)
+    throw new Error(
+      `The model policy ${read.path} is unreadable: ${read.error}`,
+      { cause: read.error },
+    );
+  return { path: read.path, policy: parseModelPolicy(read.path, read.source) };
+}
+
+function parseModelPolicy(file: ModelPolicyPath, source: string): ModelPolicy {
   let value;
   try {
     value = JSON.parse(source);
   } catch (error) {
-    throw new Error(
-      `The model policy ${modelPolicyPath} is not JSON: ${error}`,
-      {
-        cause: error,
-      },
-    );
+    throw new Error(`The model policy ${file} is not JSON: ${error}`, {
+      cause: error,
+    });
   }
   const problems: string[] = [];
   const object = (
@@ -128,7 +149,7 @@ export function readModelPolicy(path: string): ModelPolicy | null {
   }
   if (problems.length > 0)
     throw new Error(
-      `The model policy ${modelPolicyPath} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+      `The model policy ${file} is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
     );
   return value;
 }
