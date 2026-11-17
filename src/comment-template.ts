@@ -1,4 +1,6 @@
 // The factory's deterministic issue-comment language and its own wording.
+import { roleNames } from "./label-roles.ts";
+
 // The names within a run comment phase, which renders as one line.
 const lineNames = [
   "check",
@@ -24,9 +26,19 @@ const names = {
     ...lineNames,
     "result",
   ],
-  action: ["failed", "stopped", "gate", "reason", "unpushable", "link"],
+  // A stop names the role it asks and each role whose label answers it.
+  action: [
+    "failed",
+    "stopped",
+    ...roleNames((role) => role.asks || role.answers),
+    "resume",
+    "gate",
+    "reason",
+    "unpushable",
+    "link",
+  ],
   close: ["tickets"],
-} as const;
+};
 
 type Comment = keyof typeof names;
 type Values = {
@@ -41,7 +53,7 @@ const phase = (name: string, title: string) =>
 const defaults = {
   run: `**Factory run: {status}**\n\n${phase("triage", "Triage")}${phase("implement", "Implement")}${phase("review", "Review")}${phase("merge", "Merge")}{#result}\n<details>\n<summary>Latest run result</summary>\n\n{result}\n\n</details>\n{/result}`,
   action:
-    "{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link}).",
+    "{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link}).",
   close:
     "All sub-issues are closed. Closing this parent.\n{#tickets}\n- {tickets}{/tickets}",
 };

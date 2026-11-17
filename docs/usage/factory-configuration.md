@@ -254,6 +254,30 @@ checks:
 Version 3 has no needs-input label: state labels name who must act, or that
 another record carries the request's fate.
 
+### Answers
+
+A person answers any version 3 stop with one act: applying the issue's next
+state, or closing the issue. Each stop's action comment names the states that
+answer it.
+
+- **Readiness**: a person's `labels.ready` at the unchanged approved contract
+  resumes a stopped implement or review run on its work and PR, through the
+  usual [readiness](host.md#readiness) checks. After a triage run's stop, it
+  starts implement as any accepted readiness does.
+- **Triage**: a person's `labels.triage` starts a triage run through the
+  label trigger above, after any stop, including a grill's once the grill has
+  settled the request. A grill that revises the contract returns it instead
+  through readiness at the revised contract's accepted revision.
+- **Reporter replies**: a reporter stop keeps its reply trigger; a person may
+  instead apply the triage state.
+- **Carried or closed**: applying `labels.carried`, or closing the issue,
+  starts nothing.
+
+Apart from a reporter's reply, a comment alone, by anyone, starts nothing, and
+neither does a bot's label, including the validator's fallback. An answer
+given while the repository is held waits for the hold to end, as every launch
+does.
+
 ### Run results
 
 Every run ends with a [run result](host.md#run-results), which the host posts
@@ -598,7 +622,7 @@ syntax. These are the only names for each comment:
 | Comment  | Names                                                                                                                                                                                         |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `run`    | `status`, `triage`, `implement`, `review`, `merge`, `result`, and within a phase `check`, `state`, `reason`, `reset`, `provider`, `model`, `effort`, `attempt`, `round`, `link`, `unpushable` |
-| `action` | `failed`, `stopped`, `gate`, `reason`, `unpushable`, `link`                                                                                                                                   |
+| `action` | `failed`, `stopped`, `owner`, `reporter`, `grill`, `ready`, `resume`, `triage`, `carried`, `gate`, `reason`, `unpushable`, `link`                                                             |
 | `close`  | `tickets`                                                                                                                                                                                     |
 
 For `run`, `status` is the pass's state: `in progress`, `paused`,
@@ -622,7 +646,12 @@ phrases.
 
 For `action`, exactly one of `failed`, `stopped` and `gate` is present, the
 occasion's label: the failed label, the stop state that waits on a person, or
-the gate labels review stopped at. `reason` is the failure, and `unpushable`
+the gate labels review stopped at. A stop also names who it waits on and the
+states that [answer](#answers) it: exactly one of `owner`, `reporter` and
+`grill` repeats the stop state; `ready` is the ready label; `resume` is
+`implement` or `review`, the stopped work that readiness resumes, absent after
+a triage run; `triage` is the triage label when the repository runs triage;
+and `carried` is the carried label when configured. `reason` is the failure, and `unpushable`
 the code-formatted unpushable paths of a failure, joined with commas, present
 only when at least one exists. `link` is the run comment's URL. `tickets`
 contains closed-ticket references such as `#4` or `owner/repo#4`.
@@ -652,7 +681,7 @@ Run:
 Action:
 
 ```json
-"{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
+"{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
 ```
 
 Parent close:

@@ -1009,6 +1009,137 @@ test("returning to the ready state resumes the same work and PR", () => {
   assert.equal(launchOf(decisions)?.continuation.runKind, undefined);
 });
 
+test("an answered stop returns only by a person applying its next state", () => {
+  const answered = "2026-10-10T00:00:00Z";
+  const stoppedAt = { lastTriageAt: "2026-10-09T00:00:00Z" };
+  const work: Claim = {
+    issue: 4,
+    pullRequest: "open",
+    inputResume: {
+      pullRequests: [
+        {
+          number: 42,
+          headBranch: "factory/issue-4",
+          state: "open",
+          createdAt: pr.createdAt,
+        },
+      ],
+    },
+  };
+  const review: Claim = {
+    ...work,
+    inputResume: {
+      pullRequests: [],
+      review: { target: pr, handBacks: 0, gated: false },
+    },
+  };
+  // A person's triage state after a triage run's owner or grill stop starts
+  // triage through the label trigger; it waits while the stop remains.
+  const triaged = issue(4, [labels.triage], {
+    ...stoppedAt,
+    triage: { at: answered, actor: owner },
+  });
+  assert.deepEqual(launchOf(decide({ issues: [triaged] }))?.continuation, {
+    runKind: "triage",
+    attempt: 1,
+    trigger: { id: `label:${answered}`, at: answered },
+  });
+  for (const stop of [labels.owner, labels.grill])
+    assert.equal(
+      launchOf(
+        decide({
+          issues: [{ ...triaged, labels: [stop, labels.triage] }],
+        }),
+      ),
+      undefined,
+      stop,
+    );
+  // A person's readiness after an implement or review stop resumes its work.
+  assert.deepEqual(
+    launchOf(decide({ issues: [issue(4)], claims: [work] }))?.continuation
+      .inputResume,
+    work.inputResume,
+  );
+  assert.equal(
+    launchOf(decide({ issues: [issue(4)], claims: [review] }))?.continuation
+      .runKind,
+    "review",
+  );
+  for (const claim of [work, review]) {
+    // The carried state holds the request, and a closed issue ends it.
+    assert.equal(
+      launchOf(
+        decide({ issues: [issue(4, [labels.carried])], claims: [claim] }),
+      ),
+      undefined,
+    );
+    assert.equal(launchOf(decide({ issues: [], claims: [claim] })), undefined);
+    // A comment, even the issue author's, leaves an owner stop where it is.
+    assert.equal(
+      launchOf(
+        decide({
+          issues: [
+            issue(4, [labels.owner], {
+              author: owner,
+              authorReply: answered,
+              ...stoppedAt,
+            }),
+          ],
+          claims: [claim],
+        }),
+      ),
+      undefined,
+    );
+    // An answer during a repository hold waits for the hold to end.
+    assert.equal(
+      launchOf(
+        decide({
+          issues: [issue(4)],
+          claims: [claim],
+          details: { factoryHold: [9] },
+        }),
+      ),
+      undefined,
+    );
+  }
+  // After a triage stop too, a comment alone starts nothing, nor does the
+  // carried state.
+  for (const stop of [labels.owner, labels.grill, labels.carried, undefined])
+    assert.equal(
+      launchOf(
+        decide({
+          issues: [
+            issue(4, stop ? [stop] : [], {
+              author: owner,
+              authorReply: answered,
+              ...stoppedAt,
+            }),
+          ],
+        }),
+      ),
+      undefined,
+      stop,
+    );
+  assert.equal(
+    launchOf(decide({ issues: [triaged], details: { factoryHold: [9] } })),
+    undefined,
+  );
+  // A reporter's reply to its stop starts triage once, as before.
+  const replied = issue(4, [labels.reporter], {
+    author: { kind: "user", login: "reporter", role: null },
+    reporter: { at: "2026-10-08T00:00:00Z", actor: owner },
+    authorReply: answered,
+  });
+  assert.equal(
+    launchOf(decide({ issues: [replied] }))?.continuation.runKind,
+    "triage",
+  );
+  assert.equal(
+    launchOf(decide({ issues: [{ ...replied, lastTriageAt: answered }] })),
+    undefined,
+  );
+});
+
 test("each optional-kind combination runs only its kinds", () => {
   for (const triage of [false, true])
     for (const review of [false, true]) {

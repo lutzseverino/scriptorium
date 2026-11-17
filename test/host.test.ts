@@ -8765,10 +8765,11 @@ test("a full pass leaves one run comment from triage to merge, and asks a person
   await run.drain();
   await run.tick();
   assert.deepEqual(issue.labels, ["state:owner"]);
+  // A triage stop names the triage state, not readiness, as its answer.
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/comment).",
+      "The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
     ],
   );
   // The pass's state lives in its comment, so a restart neither asks again
@@ -9292,7 +9293,7 @@ test("a review stop while the gate read fails asks for its stop, not a gate", as
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/comment).",
+      "The factory waits in `state:owner` for an answer. To answer, apply `state:ready` at the unchanged approved contract to resume the stopped review run, `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
     ],
   );
 });
