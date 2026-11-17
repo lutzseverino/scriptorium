@@ -607,12 +607,24 @@ test("a current result that does not approve the ready-label event holds with a 
     { label: "ready-for-human" },
     { reviewEventId: "40" },
     { reviewEventId: 42 },
+    { reviewEventId: "opened:1" },
   ])
     assertHold(
       await held([briefComment, resultComment(resultState(fields))]),
       refused(/does not approve the current ready-for-agent event/),
       JSON.stringify(fields),
     );
+  // A pseudo-ID names no event the read can show, so a missing event keeps
+  // the ordinary refusal instead of waiting.
+  const opened = await resultIssues(
+    [briefComment, resultComment(resultState({ reviewEventId: "opened:1" }))],
+    { missingReady: true },
+  );
+  assert.equal(opened[0].contractHold, null);
+  assert.match(
+    readinessExclusion(opened[0], opened, policy)?.reason ?? "",
+    /is refused: no event applying ready-for-agent was found/,
+  );
   // An approval of a visible older application is not evidence of a missing re-add.
   assertHold(
     await held([briefComment, resultComment()], {

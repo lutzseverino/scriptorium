@@ -570,10 +570,12 @@ export function missingReadinessHold(
     return null;
   const posted = latestResult(facts.comments, configuration.contractResult)!;
   const result = readResult(posted, facts.comments);
+  // A pseudo-ID, such as an `opened:` creation snapshot, names no event the
+  // read can show, so it keeps the ordinary refusal.
+  const event = String(result.reviewEventId);
   if (
-    facts.labelChanges.some(
-      (change) => String(change.id) === result.reviewEventId,
-    )
+    !/^\d+$/.test(event) ||
+    facts.labelChanges.some((change) => String(change.id) === event)
   )
     return null;
   const at = Date.parse(posted.comment.updatedAt);
