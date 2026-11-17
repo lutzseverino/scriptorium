@@ -1187,7 +1187,7 @@ export function formatStatus(budget: LaunchBudget): string {
         (key) => `  ${key}=${value(provider[key as keyof BudgetProvider])}`,
       ),
     ]),
-    `attachment upload credential configured=${budget.attachmentUploadCredential.configured}`,
+    `attachment-upload credential configured=${budget.attachmentUploadCredential.configured}`,
     `credentials health=${budget.credentials.health} observedAt=${value(budget.credentials.observedAt)}`,
     ...Object.entries(budget.credentials.providers).map(
       ([provider, { health, loginExpiry, renewalDueAt, lastRenewal }]) =>

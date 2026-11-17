@@ -93,7 +93,7 @@ test("status reports whether an upload credential is configured without reading 
     assert.match(
       text.output.join("\n"),
       new RegExp(
-        `attachment upload credential configured=${source !== undefined}`,
+        `attachment-upload credential configured=${source !== undefined}`,
       ),
     );
     assert.doesNotMatch(

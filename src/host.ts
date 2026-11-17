@@ -1066,13 +1066,10 @@ export function createHost(
   async function refreshTokens() {
     for (const run of runs.filter((run) => !run.exited)) {
       const name = `${run.repository}#${run.issue}`;
+      const kind = run.continuation.runKind ?? "implement";
       let token;
       try {
-        token = await sandboxToken(
-          run.repository,
-          run.configuration,
-          run.continuation.runKind ?? "implement",
-        );
+        token = await sandboxToken(run.repository, run.configuration, kind);
       } catch (error) {
         report(`${name}'s token was not refreshed: ${error}`);
         continue;
@@ -1086,10 +1083,7 @@ export function createHost(
           if (!run.exited)
             report(`${name}'s token file was not rewritten: ${error}`);
         }
-      if (
-        attachmentTokens &&
-        (run.continuation.runKind ?? "implement") === "implement"
-      ) {
+      if (attachmentTokens && kind === "implement") {
         try {
           const upload = await attachmentTokens.get(run.repository);
           await writeSandboxAttachmentToken(
