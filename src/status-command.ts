@@ -169,6 +169,7 @@ export type LaunchBudget = {
   health: Health;
   providers: BudgetProvider[];
   credentials: BudgetCredentials;
+  attachmentUploadCredential: { configured: boolean };
 };
 
 export type StatusPorts = {
@@ -691,6 +692,9 @@ export async function readBudget(
   const budget = {
     version: 1 as const,
     observedAt,
+    attachmentUploadCredential: {
+      configured: configuration.attachmentUploadCredential !== undefined,
+    },
     capacity: readCapacity(
       configuration,
       workFile,
@@ -1183,6 +1187,7 @@ export function formatStatus(budget: LaunchBudget): string {
         (key) => `  ${key}=${value(provider[key as keyof BudgetProvider])}`,
       ),
     ]),
+    `attachment upload credential configured=${budget.attachmentUploadCredential.configured}`,
     `credentials health=${budget.credentials.health} observedAt=${value(budget.credentials.observedAt)}`,
     ...Object.entries(budget.credentials.providers).map(
       ([provider, { health, loginExpiry, renewalDueAt, lastRenewal }]) =>

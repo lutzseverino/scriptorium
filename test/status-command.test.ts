@@ -70,6 +70,39 @@ async function command(args: string[], extra: Partial<StatusPorts> = {}) {
   return { code, output, errors };
 }
 
+test("status reports whether an upload credential is configured without reading or exposing its source", async (t) => {
+  const { path } = fixture(t);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  for (const source of [
+    undefined,
+    { file: "/unreadable-upload-source" },
+    { command: ["/never-run-upload-command", "private-argument"] },
+  ]) {
+    writeFileSync(
+      path,
+      JSON.stringify({ ...config, attachmentUploadCredential: source }),
+    );
+    const json = await command([path, "--json"]);
+    assert.equal(json.code, 0, json.errors.join("\n"));
+    assert.equal(
+      JSON.parse(json.output[0]).attachmentUploadCredential.configured,
+      source !== undefined,
+    );
+    const text = await command([path]);
+    assert.equal(text.code, 0, text.errors.join("\n"));
+    assert.match(
+      text.output.join("\n"),
+      new RegExp(
+        `attachment upload credential configured=${source !== undefined}`,
+      ),
+    );
+    assert.doesNotMatch(
+      [...json.output, ...text.output].join("\n"),
+      /unreadable-upload-source|never-run-upload-command|private-argument/,
+    );
+  }
+});
+
 test("text and JSON status share the normalized catalog, guidance, effort and defaults", async (t) => {
   const { path, state } = fixture(t);
   const config = JSON.parse(readFileSync(path, "utf8"));

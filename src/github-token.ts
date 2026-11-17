@@ -4,11 +4,12 @@
 // read-only and rewrites on every refresh. The host's own reads and writes use
 // the repository's token; a sandbox's is narrowed to its run kind.
 import { execFile } from "node:child_process";
-import { rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunKindName } from "./factory-configuration.ts";
 import type { Mount } from "./providers.ts";
 import type { Redactor } from "./redaction.ts";
+import type { AttachmentUploadCredential } from "./host-configuration.ts";
 
 const reads = Object.freeze({
   contents: "read",
@@ -139,8 +140,53 @@ export function tokenCommand(command: string[]): TokenCommand {
     });
 }
 
+// The host supplies this source explicitly. It is never used by Git or the
+// platform client; only implement sandboxes receive its upload-only token.
+export function attachmentUploadToken(
+  source: AttachmentUploadCredential,
+): TokenCommand {
+  if ("command" in source) {
+    const command = tokenCommand(source.command);
+    return async (repository) => {
+      try {
+        return await command(repository);
+      } catch (error) {
+        throw new Error(
+          `attachment-upload credential: ${(error as Error).message}`,
+          { cause: error },
+        );
+      }
+    };
+  }
+  return async () => {
+    let token;
+    try {
+      token = (await readFile(source.file, "utf8")).trim();
+    } catch {
+      throw new Error("attachment-upload credential file could not be read");
+    }
+    if (token === "" || /\s/.test(token))
+      throw new Error(
+        "attachment-upload credential file contains no single token",
+      );
+    return token;
+  };
+}
+
 // Where the sandbox finds its GitHub CLI configuration.
 export const sandboxGitHubDirectory = "/run/factory/github";
+
+const attachmentUploadFilename = "attachment-upload-token";
+export const attachmentUploadEnvironment = {
+  FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE: `${sandboxGitHubDirectory}/${attachmentUploadFilename}`,
+};
+
+export async function writeSandboxAttachmentToken(
+  directory: string,
+  token: string,
+): Promise<void> {
+  await replace(join(directory, attachmentUploadFilename), `${token}\n`);
+}
 
 // The GitHub CLI reads the token from this configuration directory, and Git
 // asks the GitHub CLI for its GitHub credentials.
