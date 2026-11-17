@@ -1763,11 +1763,12 @@ function pickupOrder<
   );
 }
 
-// Whether a launch finishes work on an open PR the factory owns, as its own
-// facts show, a resume's being those of the run it relaunches: a merge
+// Whether a launch finishes work on an open PR the factory owns: a merge
 // relaunch; a review, hand-back or hand-back's retry of its PR; or a first
-// attempt whose answered stop names an open PR. A review triggered by a PR the
-// factory did not open starts work, as every other launch does.
+// attempt whose answered stop names an open PR. A resume carries the facts of
+// the run it relaunches, so it keeps that run's group. Only an outside PR's
+// review carries both a PR work item and a trigger; it starts work, as every
+// other launch does.
 function finishes({ issue, launch }: { issue: Issue; launch: Continuation }) {
   if (launch.mergeRelaunch) return true;
   if (launch.target) return !(issue.pullRequest && launch.trigger);

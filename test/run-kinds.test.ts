@@ -843,6 +843,16 @@ test("priority still orders work within the finishing group", () => {
     runs: [normal.run, urgent.run],
   };
   assert.deepEqual(ordered(input, 1), [widgets + "#6"]);
+  assert.equal(
+    skipOf(
+      decide({
+        details: { configuration: priorityConfiguration },
+        settings: { caps: { "provider-a": 1, "provider-b": 1 } },
+        ...input,
+      }),
+    )?.reason,
+    "review waits: provider-a already runs its cap of 1 agent",
+  );
   assert.deepEqual(ordered(input, 3), [
     widgets + "#6",
     widgets + "#5",
@@ -991,7 +1001,7 @@ test("answered stops on open PRs finish work, while external review and unobserv
       },
       false,
     );
-  // With factory:failed removed, the run the host still holds shows its PR.
+  // The host forgets a failed run, so only a run it still holds can show the PR.
   placed(
     "failed label removed, the open PR observed",
     {
