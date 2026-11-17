@@ -28,7 +28,7 @@ export type Policy = {
   neverAuthorize: string[];
 };
 
-// A permanent refusal or a transient wait while a role lookup is unreadable.
+// A permanent refusal or a transient wait for platform or validator facts.
 export type ReadinessHold = { reason: string; waiting: boolean };
 
 // An issue that carries readiness the factory accepts, with at least one
@@ -102,11 +102,16 @@ export function readinessExclusions(
 function refusal(issue: Issue, policy: Policy, on = ""): ReadinessHold | null {
   const { ready } = policy;
   const reapply = `remove and re-apply ${ready}${on}`;
+  // Without an event, the platform projects a contract hold only when a
+  // current validator approval vouches for that missing event. It still
+  // cannot authorize pickup, parent release or closure.
   if (issue.ready === null)
-    return {
-      reason: `is refused: no event applying ${ready} was found; ${reapply}`,
-      waiting: false,
-    };
+    return (
+      issue.contractHold ?? {
+        reason: `is refused: no event applying ${ready} was found; ${reapply}`,
+        waiting: false,
+      }
+    );
   const { at, actor, triage } = issue.ready;
   const refused =
     !triage &&

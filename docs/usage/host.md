@@ -715,6 +715,24 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   - names a contract source, an Agent Brief comment or the issue body, that
     the platform still reports with the edit time the result records.
 
+  If the ready label is present but the factory's events read lacks the
+  validator-approved `reviewEventId`, the factory waits silently for up to
+  60 minutes from that approving result's platform published or updated time.
+  This includes re-applied readiness when an older add event is still visible.
+  The approval must pass the same author, freshness and source checks above.
+  Every pass re-reads the events; no hold comment is posted and retries are
+  kept. The same wait applies to parents, so their sub-issues receive no
+  parent-readiness holds during the wait. The missing event authorizes no
+  launch, parent release or closure; once it appears, its actor must still
+  pass authorization.
+
+  At 60 minutes, the factory posts: "readiness is held: the validator approved
+  event `<id>`, but the factory's read of the issue's events doesn't show it
+  after 60 minutes; check the platform's event history before re-applying
+  readiness". This uses the shared silent-wait bound. Without a current
+  authenticated approval naming the missing event, the existing refusal
+  remains.
+
   A missing result, one whose format the factory doesn't read, an unreadable
   one, and one that doesn't approve the current ready-label event hold the
   issue with a hold comment. A result older than a change, or whose source has

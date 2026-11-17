@@ -42,6 +42,7 @@ import type {
 import { configured } from "./label-roles.ts";
 import type { ReadinessHold } from "./readiness.ts";
 import { isFactoryComment } from "./run-comment.ts";
+import { silentWaitMilliseconds, silentWaitMinutes } from "./wait.ts";
 
 // The legacy result format; bodyResultFormat names the supported v2 wire.
 // V3 is validated by Canon, then read under its base format below.
@@ -63,6 +64,10 @@ export type ContractFacts = {
     observation: string;
     edits: Record<string, Edit>;
   };
+};
+
+export type ContractReadinessFacts = Omit<ContractFacts, "ready"> & {
+  ready: LabelChange | null;
 };
 
 // A result's fields the factory reads; any may be missing or malformed.
@@ -369,7 +374,7 @@ export async function currentBodyDecision(
 // writes of the labels its configuration names, other than the ready label,
 // are not changes the validator's decision on an open issue reads.
 export function contractResultHold(
-  facts: ContractFacts,
+  facts: ContractReadinessFacts,
   configuration: Pick<FactoryConfiguration, "labels" | "contractResult">,
 ): ReadinessHold | null {
   const { labels, contractResult } = configuration;
@@ -427,7 +432,9 @@ export function contractResultHold(
     if (
       result.status !== "approved" ||
       result.label !== labels.ready ||
-      result.reviewEventId !== String(ready.id)
+      (ready
+        ? result.reviewEventId !== String(ready.id)
+        : !text(result.reviewEventId))
     )
       return refuse(
         "the validator does not approve the current readiness event",
@@ -514,7 +521,9 @@ export function contractResultHold(
   if (
     result.status !== "approved" ||
     result.label !== labels.ready ||
-    result.reviewEventId !== String(ready.id)
+    (ready
+      ? result.reviewEventId !== String(ready.id)
+      : !text(result.reviewEventId))
   )
     return refuse(
       `the validator's latest contract result${typeof result.status === "string" ? `, ${result.status},` : ""} does not approve the current ${labels.ready} event`,
@@ -547,6 +556,37 @@ export function contractResultHold(
     return comment && sameTime(comment.updatedAt) ? null : waits;
   }
   return unreadableSource;
+}
+
+// A missing event grants no launch authority. Only a current authenticated
+// approval for a readable source can replace the ordinary missing-event hold
+// with a bounded wait. Use the platform comment time, never payload timestamps.
+export function missingReadinessHold(
+  facts: ContractReadinessFacts,
+  configuration: Pick<FactoryConfiguration, "labels" | "contractResult">,
+  now: Date,
+): ReadinessHold | null {
+  if (contractResultHold({ ...facts, ready: null }, configuration) !== null)
+    return null;
+  const posted = latestResult(facts.comments, configuration.contractResult)!;
+  const result = readResult(posted, facts.comments);
+  // A pseudo-ID, such as an `opened:` creation snapshot, names no event the
+  // read can show, so it keeps the ordinary refusal.
+  const event = String(result.reviewEventId);
+  if (
+    !/^\d+$/.test(event) ||
+    facts.labelChanges.some((change) => String(change.id) === event)
+  )
+    return null;
+  const at = Date.parse(posted.comment.updatedAt);
+  if (!Number.isFinite(at)) return null;
+  const detail = `the validator approved event \`${result.reviewEventId}\`, but the factory's read of the issue's events doesn't show it`;
+  return now.getTime() - at < silentWaitMilliseconds
+    ? { reason: `waits: ${detail} yet`, waiting: true }
+    : {
+        reason: `is held: ${detail} after ${silentWaitMinutes} minutes; check the platform's event history before re-applying readiness`,
+        waiting: false,
+      };
 }
 
 // Whether the factory's triage run applied the ready label for the brief the
