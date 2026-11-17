@@ -10497,10 +10497,17 @@ test("terminal result observation retries an unavailable report and survives a h
   assert.equal(runComment(issue), original);
   assert.deepEqual(observe().results, []);
   assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+  assert.equal(healthOf(run).repositories[0].pass.lastPublication, null);
   failReport = false;
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
   await run.restart().tick();
   assert.deepEqual(observe().results, [{ run: identity, outcome: "stop" }]);
   assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+  assert.deepEqual(healthOf(run).repositories[0].pass.lastPublication, {
+    at: "2026-10-09T12:05:00.000Z",
+    issue: 4,
+    runKind: "implement",
+  });
   assert.equal(runComments(issue).length, 1);
   assert.equal(
     issue.comments.length,
