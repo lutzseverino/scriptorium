@@ -101,9 +101,10 @@ result. A deleted or edited attestation holds without posting a second one.
 
 The host reads only the published state line: its revision, source, status,
 evaluation time and review attestation. Checkpoints save the accepted revision
-and source before the attestation and the readiness request before its write,
-so a restart recovers the posted attestation and the applied ready event by
-their saved identities, without a second attestation or readiness event. When
+and source before the attestation and the readiness request once it is written.
+A restart recovers the posted attestation by its saved identity and an applied
+ready event from the label's history, without a second attestation or readiness
+event. When
 the repository's installed module has no review attestation, the result is
 refused as invalid with that reason, and nothing is posted.
 

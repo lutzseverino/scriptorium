@@ -10,7 +10,7 @@ import type {
   RunKindName,
 } from "./factory-configuration.ts";
 import { configured, stopLabels } from "./label-roles.ts";
-import { sameLogin } from "./contract-protocol.ts";
+import { hash, sameLogin } from "./contract-protocol.ts";
 import { lastCommentLine } from "./comment-template.ts";
 import { object } from "./status.ts";
 import {
@@ -211,7 +211,7 @@ export function parseRunResult(
       return invalid(
         `accepts a revision, which a ${outcome} ${kind} result has none of`,
       );
-    if (typeof revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(revision))
+    if (!hash(revision))
       return invalid("accepts a revision that is not a sha256: revision");
     if (!attestation)
       return invalid(
