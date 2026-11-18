@@ -17,28 +17,25 @@ Use /tdd where possible, at pre-agreed seams.
 Run typechecking regularly, single test files regularly, and the repository's
 required validation on the final commit.
 
-Before delivery in a factory repository, read the installed `factory-workflow`
-rules' Run kinds section and `.scriptorium/config.json`'s `runKinds`. When no
+Before factory delivery, read the installed `factory-workflow` rules' Run kinds
+section to determine the configured route. When no
 review run is configured, commit and push the work, write the PR body with
 `pr`, open a ready pull request (or mark its existing draft ready), and invoke
 `babysit` to deliver it under those rules, including any prescribed worker handoff.
 Before reporting success, satisfy `CONTRIBUTING.md`'s Worker handoff condition
-and include its head, trusted required-check authority, check-location, command
-and outcome record.
-That route retains babysit's applicable internal reviews and merge conditions.
+and report its required record. Retain babysit's internal reviews and merge gates.
 
 Otherwise, for new work, commit and push the branch, write the body with `pr`,
 and open one **draft** pull request as `CONTRIBUTING.md` directs. For review findings,
 commit and push the fixes to the same pull request and leave it a draft;
 before replying to findings, read the installed `comments` rules' Review-thread
 replies section and answer there as it directs.
-Before reporting success, satisfy `CONTRIBUTING.md`'s Worker handoff condition.
-Report the pull request and its required head, trusted required-check authority,
-check-location, command and outcome record, then stop. Leave review, marking ready,
-babysitting and merging to the separate agent running `review`; do not run a
-self-review.
-
-<!-- Seam (deferred): Scriptorium configuration reads; consumers: 6; extraction proposed in https://github.com/lutzseverino/repo-canon/issues/967. -->
+Before reporting success on this separate-review route, satisfy `CONTRIBUTING.md`'s
+Worker handoff condition, applying the factory rules'
+[environment-performed step rule](../../../.repo-standards/rules/factory-workflow.md#run-kinds)
+to its passing-checks condition. Report the pull request, head, trusted required-check
+authority, check-location, command and outcomes, then stop. Leave review, marking
+ready, babysitting and merging to the separate `review` agent; do not self-review.
 
 ## Reads
 
@@ -50,11 +47,8 @@ Paths are relative to the repository root.
 - `.repo-standards/rules/comments.md`: how to reply to review findings.
   When it is missing, follow the contribution guide's comment requirements;
   without either source, report the fixes in the handoff.
-- `.repo-standards/rules/factory-workflow.md`: the factory's delivery route.
+- `.repo-standards/rules/factory-workflow.md`: delivery and environment-performed steps.
   When it is missing, use the draft handoff above.
-- `.scriptorium/config.json`: the configured review run under `runKinds.review`.
-  When it is missing in a factory repository, no review run is configured;
-  follow the installed factory rules' delivery route.
 - The `codebase-design` skill: the check applied above. When missing, report
   the gap through the contribution guide's Findings route, or in the handoff
   when the guide is missing; retain the recorded contract.

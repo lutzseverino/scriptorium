@@ -30,11 +30,16 @@ The fix establishes and reads back strict required-check freshness through
 classic protection or its managed ruleset when it establishes the required
 check, preserving other checks, rules and bypass settings. Changes to existing
 policy require confirmation. Adoption deferrals do not authorize unattended
-merging. Only positively established private-plan limitations covering both
-classic protection and rulesets permit immediate merging-agent freshness
-verification under the rules, with the accepted residual concurrent-base race.
-Strict GitHub enforcement remains required wherever available; ordinary
-permission refusals, unreadable evidence and unconfirmed freshness stop delivery.
+merging. On a confirmed private repository, immediate merging-agent freshness
+verification under the rules requires recognized plan-limit 403 responses on
+the branch-rules and rulesets-list reads. The classic-protection read must
+return either the recognized plan-limit 403 or HTTP 403 with the platform
+message `Resource not accessible by integration`; this integration refusal
+qualifies only on that protection probe after the plan-limited branch-rules
+read. The residual concurrent-base race is accepted only on this proven
+plan-limited path. Strict GitHub enforcement remains required wherever
+available; every other permission refusal, unreadable or missing evidence and
+unconfirmed freshness stop delivery.
 
 ## Remote setup
 

@@ -1,3 +1,5 @@
+import { marked } from "../../../vendor/marked/marked.esm.js";
+
 // The comment rules' Reviews section defines this review. The wait prints its
 // template; merge accepts only a completed review of the current head.
 export const reviewsSection = ".repo-standards/rules/comments.md#reviews";
@@ -27,14 +29,167 @@ const completed = (value) =>
   ) &&
   !placeholders.some((line) => value.includes(line.slice(line.indexOf("<"))));
 
+const blank = (text) => text.replace(/[^\r\n]/g, " ");
+
+const exampleElements = new Set([
+  "blockquote",
+  "code",
+  "pre",
+  "kbd",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+  "iframe",
+  "noembed",
+  "noframes",
+]);
+const normalElements = new Set(["blockquote", "code", "pre", "kbd"]);
+
+function htmlContext(raw, context) {
+  let at = 0;
+  while (at < raw.length) {
+    const element = context.elements.at(-1);
+    // Raw-text elements do not nest. Their first matching end tag closes
+    // them even when it occurs inside otherwise tag-shaped or comment text.
+    if (element && !normalElements.has(element)) {
+      const close = new RegExp(`</${element}\\s*>`, "i").exec(raw.slice(at));
+      if (!close) return;
+      context.elements.pop();
+      at += close.index + close[0].length;
+      continue;
+    }
+    const start = raw.indexOf("<", at);
+    if (start < 0) return;
+    // A block HTML token can contain several tags. Reuse Marked's HTML-token
+    // rule so comments and quoted attributes cannot masquerade as end tags.
+    const html = marked.Lexer.rules.inline.normal.tag.exec(raw.slice(start));
+    at = start + (html?.[0].length ?? 1);
+    if (!html) continue;
+    const tag = /^<(\/?)([a-z][\w:-]*)(?=[\s/>])/i.exec(html[0]);
+    if (!tag) continue;
+    const name = tag[2].toLowerCase();
+    if (tag[1] && name === "blockquote") {
+      const quote = context.elements.lastIndexOf(name);
+      // A quote closes its normal descendants. Active code formatting is
+      // reconstructed outside it; a raw-text child consumes the end tag above.
+      if (quote >= 0)
+        context.elements.splice(
+          quote,
+          context.elements.length - quote,
+          ...context.elements
+            .slice(quote + 1)
+            .filter((name) => name === "code"),
+        );
+    } else if (tag[1] && element === name) context.elements.pop();
+    else if (!tag[1] && exampleElements.has(name)) context.elements.push(name);
+  }
+}
+
+// Keep character offsets while excluding inline metadata. Its non-rendered line
+// breaks and code-span line breaks become spaces, as their displayed text does.
+// A child that cannot be located hides its parent instead of exposing evidence.
+function shown(token, context) {
+  if (token.type === "html") {
+    htmlContext(token.raw, context);
+    return " ".repeat(token.raw.length);
+  }
+  if (token.type === "image") return " ".repeat(token.raw.length);
+  if (token.type === "codespan")
+    return context.elements.length
+      ? " ".repeat(token.raw.length)
+      : token.raw.replace(/[\r\n]/g, " ");
+  if (token.type === "link" && !token.autolink) {
+    // Marked removes escaped brackets from a link's label. Locate that label
+    // only at its source prefix; titles and reference/destination syntax never
+    // participate in the recursive read. Keep the brackets themselves so
+    // removing markup cannot manufacture a field at either end of the label.
+    let end = 1;
+    for (let index = 0; index < token.text.length; index++, end++) {
+      if (token.raw[end] !== token.text[index]) {
+        if (token.raw[end] !== "\\" || token.raw[end + 1] !== token.text[index])
+          return blank(token.raw);
+        end++;
+      }
+    }
+    if (token.raw[0] !== "[" || token.raw[end] !== "]") return blank(token.raw);
+    const label = shown(
+      {
+        type: "text",
+        raw: token.text,
+        tokens: token.tokens,
+      },
+      context,
+    );
+    if (!label.trim()) return blank(token.raw);
+    const padding = " ".repeat(end - 1 - token.text.length);
+    // Retain link delimiters so a visible label is not mistaken for a plain
+    // bracketed placeholder after its metadata is hidden.
+    const metadata = token.raw.slice(end + 1).replace(/[^\r\n()[\]]/g, " ");
+    return `[${label}]${padding}${metadata}`;
+  }
+  let text = context.elements.length ? " ".repeat(token.raw.length) : token.raw;
+  let at = 0;
+  let visibleChild = false;
+  for (const child of token.tokens ?? []) {
+    const start = token.raw.indexOf(child.raw, at);
+    if (start < 0) return blank(token.raw);
+    const content = shown(child, context);
+    visibleChild ||= Boolean(content.trim());
+    text =
+      text.slice(0, start) + content + text.slice(start + child.raw.length);
+    at = start + child.raw.length;
+  }
+  // Delimiters around hidden children are not an outcome of their own.
+  if (["strong", "em", "del"].includes(token.type) && !visibleChild)
+    return blank(token.raw);
+  return text;
+}
+
+// The lines a reader sees outside examples, built from the visible tokens
+// rather than by masking source positions, which tokenization does not always
+// preserve. Any other token, such as code, a quote, raw HTML or a link
+// definition, becomes one blank line, so its content can neither supply
+// evidence nor join the lines around it. Text keeps its lines inside list
+// items too, so a field continuing an item still counts. An item's first line
+// keeps its marker unless an example opens it, indented when nested, so only
+// top-level items are findings.
+function visibleLines(tokens, nested = false, context = { elements: [] }) {
+  return tokens.flatMap((token) => {
+    if (token.type === "blockquote") {
+      htmlContext("<blockquote>", context);
+      visibleLines(token.tokens, true, context);
+      htmlContext("</blockquote>", context);
+      return [""];
+    }
+    if (["paragraph", "text", "heading"].includes(token.type))
+      return shown(token, context).replace(/\n+$/, "").split("\n");
+    // A closing tag can be a separate block token after an inline opening.
+    // The block's own content remains excluded.
+    if (token.type === "html") htmlContext(token.raw, context);
+    if (token.type !== "list") return [""];
+    return token.items.flatMap((entry) => {
+      // Marked separates a task checkbox from its text. Keep them on the
+      // same line, even when comments hide all remaining text, so task
+      // findings and field-shaped tasks retain their marker.
+      const checkbox =
+        entry.tokens[0]?.type === "checkbox" ? entry.tokens[0].raw : "";
+      const content = checkbox ? entry.tokens.slice(1) : entry.tokens;
+      const [first, ...rest] = visibleLines(content, true, context);
+      const marker = /^[\t ]*\S+[\t ]*/.exec(entry.raw)?.[0] ?? "";
+      const opening = (nested ? "  " : "") + marker + checkbox + first;
+      return [checkbox || first?.trim() ? opening : "", ...rest];
+    });
+  });
+}
+
 // A review's fields in the template's shape, or null when it is not one: the
 // head it names, whether it is complete, and whether it holds (complete, with
 // no open finding).
 function readReview(body) {
   if (typeof body !== "string") return null;
-  // The review is plain text, never a quoted example or HTML comment.
-  if (/^\s*(?:`{3,}|~{3,})/m.test(body) || body.includes("<!--")) return null;
-  const lines = body.split(/\r?\n/);
+  const lines = visibleLines(marked.lexer(body));
   const entries = lines.flatMap((line, index) => {
     const match = field.exec(line);
     return match ? [{ key: match[1], value: match[2], index }] : [];
@@ -44,7 +199,9 @@ function readReview(body) {
     new Set(entries.map(({ key }) => key)).size !== fields.length
   )
     return null;
-  const byField = Object.fromEntries(entries.map((entry) => [entry.key, entry]));
+  const byField = Object.fromEntries(
+    entries.map((entry) => [entry.key, entry]),
+  );
   const next = entries.find(({ index }) => index > byField.Findings.index);
   const findings = lines
     .slice(byField.Findings.index + 1, next?.index)

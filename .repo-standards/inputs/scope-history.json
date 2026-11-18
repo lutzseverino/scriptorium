@@ -1,7 +1,7 @@
 {
   "format": "repo-standards/scope-history/v7",
   "evidence": "historical",
-  "inspection": "sha256:b6f66d817f5f431c86bad8f83931c289efe9eae56b26bb733cd341d624f4dbbf",
+  "inspection": "sha256:9905e3489d387c0662c71c5361f3d0bfa7b23189fe5f4c5545834ab7a1040752",
   "resolved": {
     "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
@@ -115,7 +115,8 @@
             "docs/usage/body-contracts.md",
             "docs/usage/factory-configuration.md",
             "docs/usage/host.md",
-            "docs/usage/sandbox-image.md"
+            "docs/usage/sandbox-image.md",
+            "docs/usage/terminal-results.md"
           ],
           "directories": []
         }
@@ -1865,7 +1866,7 @@
     ]
   },
   "discovery": {
-    "identity": "sha256:198a744cf4d739f704ef55f07304eea1699cdc86472464f0ef54658cf36fa7ce",
+    "identity": "sha256:945c9aebe83d8c8c0017dad8180dd0e48c422df918f7fcafb4e42793fae815bf",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
@@ -2118,6 +2119,14 @@
               "evidence": [
                 "docs/usage/sandbox-image.md"
               ]
+            },
+            {
+              "path": "docs/usage/terminal-results.md",
+              "decision": "include",
+              "reason": "A file under the documentation root `docs`.",
+              "evidence": [
+                "docs/usage/terminal-results.md"
+              ]
             }
           ],
           "unresolved": []
@@ -2130,7 +2139,7 @@
         },
         {
           "id": "github-repository-configuration",
-          "coverage": "Intentionally empty content scope: CLI-ready remote fixes reconcile GitHub settings and read-only checks validate policy without editing it. Authenticated gh establishes PUBLIC user-owned lutzseverino/scriptorium with REPO_CANON_RUNS_ON absent and no organization inheritance; only REPO_CANON_UPDATES=true is set. Adoption request authorizes those fixes. Main supplies required-check policy PR metadata/Test in .github/required-checks.json. Legacy needs-triage is reconciled only by CLI canonical-labels, with actual outcome reported.",
+          "coverage": "Intentionally empty content scope: CLI-ready remote fixes reconcile GitHub settings and read-only checks validate policy without editing it. Authenticated gh establishes PUBLIC user-owned lutzseverino/scriptorium with REPO_CANON_RUNS_ON absent and no organization inheritance; only REPO_CANON_UPDATES=true is set. Adoption request authorizes those fixes. Main supplies required-check policy PR metadata/Test in .github/required-checks.json. Legacy needs-triage is reconciled only by CLI canonical-labels, with actual outcome reported. For the v0.30.0 update, both remote fixes probed HTTP 403 under the supplied factory credentials and are deferred.",
           "candidates": [],
           "unresolved": []
         },
@@ -2290,7 +2299,7 @@
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "bca3dc03f7c84cabd8149c420900cf9d219c239bd653ef3f932ebb377cb540a5",
+          "sha256": "597b3d633071f9352f314786bbde7e47f7d3b31c0d0197f8776a2bd7c4373b6e",
           "executable": false
         },
         "docs/development/release.md": {
@@ -2300,12 +2309,12 @@
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "64e1b458e2ec04800f14739ad801fbb2de45ba4422f880013f81b661495c52f4",
+          "sha256": "1e7e109001f46813c79a3694b2c3738b41791fa2e4bbd5a467136296901e1760",
           "executable": false
         },
         "docs/usage/body-contracts.md": {
           "type": "file",
-          "sha256": "6eafb5b814345c166292c83e1721f8da51525de0401b02389acf15c681510ebe",
+          "sha256": "4fe6befa4ee947148696806f86efbe159a30785b3d652e109516fa6eca9a8c0a",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
@@ -2315,12 +2324,17 @@
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "5eed2a83e20923521245f890db345add32af487a307527eeadf53e2de1be5a84",
+          "sha256": "9c83aa807b4cdc59bbcc3b0223362f7cf588cae4460b33f527f2e6342ccaffd1",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
           "sha256": "c951850998e8ac4855a8bdc8dde7b158081add440e663041a39bb657c3672a97",
+          "executable": false
+        },
+        "docs/usage/terminal-results.md": {
+          "type": "file",
+          "sha256": "342e4bcf70895a534beedf1aebe3796b272dadda3959ade4104be1e6725369b4",
           "executable": false
         },
         "package.json": {
@@ -2574,6 +2588,14 @@
             "evidence": [
               "docs/usage/sandbox-image.md"
             ]
+          },
+          {
+            "path": "docs/usage/terminal-results.md",
+            "decision": "include",
+            "reason": "A file under the documentation root `docs`.",
+            "evidence": [
+              "docs/usage/terminal-results.md"
+            ]
           }
         ],
         "unresolved": []
@@ -2697,7 +2719,7 @@
         },
         ".agents/skills/babysit/SKILL.md": {
           "type": "file",
-          "sha256": "0fd76955ad2b752809799eddd274486af13640ff16e062f1448bf5c281c081e5",
+          "sha256": "eacf6fe48d52cb49562e9302e822f13b95694793766d40fb767fca9052e38fe8",
           "executable": false
         },
         ".agents/skills/babysit/body-links.mjs": {
@@ -2707,12 +2729,17 @@
         },
         ".agents/skills/babysit/merge.mjs": {
           "type": "file",
-          "sha256": "2cb20c6582ccff25d7821112aa30781820190ecd5662e4cd9e56e7a4f6fc8492",
+          "sha256": "6bc63ad548d5360554280b1e31c7c1e746a630e7ef68c29831f1b1a0fe6ca540",
+          "executable": false
+        },
+        ".agents/skills/babysit/owner-gates.mjs": {
+          "type": "file",
+          "sha256": "2d0beceaf2c1a39c52f9dc046240483a2383941fac0e14ec528d9e9d52f344e1",
           "executable": false
         },
         ".agents/skills/babysit/platform.mjs": {
           "type": "file",
-          "sha256": "7275843cf10d1ca4b8dd150066141dffbb6cb9f931b8b967fd99cf9c9ee53d1c",
+          "sha256": "dc7f37a59b6ce753871a4423a9e2a9e00d577cc15024f4203c0764f87d97dc34",
           "executable": false
         },
         ".agents/skills/babysit/pull-request-reviewer.mjs": {
@@ -2742,7 +2769,7 @@
         },
         ".agents/skills/babysit/reviewer.mjs": {
           "type": "file",
-          "sha256": "fb4d068de25ec4f473fe9dd6e361c395e500fd824563d30f84497bec2eade3b3",
+          "sha256": "1bb1964291f043d5eea4f54247bfaa12f05201458ef5a1fdac38ded3efde3564",
           "executable": false
         },
         ".agents/skills/babysit/trusted-review-config.mjs": {
@@ -2792,7 +2819,7 @@
         },
         ".agents/skills/codebase-design/SKILL.md": {
           "type": "file",
-          "sha256": "1495f4368b689d14d52282f93eb65dec2760e1aebbb202be739e459b6cc2e9cd",
+          "sha256": "b44990fe0a3e4c2c911908c95602deb85032b24293295092d241688820e71c94",
           "executable": false
         },
         ".agents/skills/codebase-design/agents/openai.yaml": {
@@ -2852,7 +2879,7 @@
         },
         ".agents/skills/factory/SKILL.md": {
           "type": "file",
-          "sha256": "9a0df66e24b4d3ae2da6378c055097d88b4a7cd6f96dc6713e31f42704634c0c",
+          "sha256": "8631c2e2c100b6e2bb842a7c70cc2990b55e7c1982a1e92e4df9c423615ffbb9",
           "executable": false
         },
         ".agents/skills/grill-with-docs/CREDITS.md": {
@@ -2992,12 +3019,12 @@
         },
         ".agents/skills/review/SKILL.md": {
           "type": "file",
-          "sha256": "8760d2756881988980baa39cbc069195bd78689d2d03025879f67c28390f795b",
+          "sha256": "a459001f1f52246dc4233c4220a719a7115468df7cdb9c57d19cc188d8e987be",
           "executable": false
         },
         ".agents/skills/review/round.mjs": {
           "type": "file",
-          "sha256": "878bba6ce24758c5b7769cee395d1c784c290f230847bd158ace54bbfc584a1a",
+          "sha256": "471a5f3a382cdef765454deda61f2b472ace58244678b5e2ff82a9812e0baddc",
           "executable": false
         },
         ".agents/skills/tdd/CREDITS.md": {
@@ -3062,7 +3089,7 @@
         },
         ".agents/skills/triage/CREDITS.md": {
           "type": "file",
-          "sha256": "374203880c94f935c6eea9e50adbf38c6c896c6c1bc5fa823a0599f358108c8e",
+          "sha256": "2a81c614cc02b8e600ffce05364c486caaaab31684c3cb02ae049782d0fa7709",
           "executable": false
         },
         ".agents/skills/triage/OUT-OF-SCOPE.md": {
@@ -3072,7 +3099,7 @@
         },
         ".agents/skills/triage/SKILL.md": {
           "type": "file",
-          "sha256": "1593e9df610265d357bc97f7eb0893e7a272c58fbba8867513e16cbd31a9eb23",
+          "sha256": "8c4e192ee30957283a3b5453c290023c4c0dcc98ef9aee5dcf0a072260431ba2",
           "executable": false
         },
         ".agents/skills/triage/agents/openai.yaml": {
@@ -3082,7 +3109,7 @@
         },
         ".agents/skills/triage/ready.mjs": {
           "type": "file",
-          "sha256": "615ac52ce5c59d1c39a4b323f5f6f97643fe703773250f1a5f0f20075293c8ea",
+          "sha256": "884a09c9dd9381c88e1a53c505171aa0eaa42f87b77e7f5730711616b289cdb9",
           "executable": false
         },
         ".agents/skills/wayfinder/CREDITS.md": {
@@ -3206,7 +3233,7 @@
         },
         ".gitattributes": {
           "type": "file",
-          "sha256": "601a97d49feba6c7314ce9ad2690236c5ba0c66856a0fc7ec27de36494b1f270",
+          "sha256": "e5877b62785e65300a50fec0124b2c76e7af5307d0463b15f0466a859d0094b1",
           "executable": false
         },
         ".github/ISSUE_TEMPLATE/bug-report.yml": {
@@ -3251,7 +3278,7 @@
         },
         ".github/scripts/validate-pr-metadata.mjs": {
           "type": "file",
-          "sha256": "386c3a830876da63e16d9e6591d2a0a4c56d57af10f4422c5240c0e3dde71f12",
+          "sha256": "a32f66c1652ca938b67da552e8e424e830be305e66c3b6d154925a597aa94dcc",
           "executable": false
         },
         ".github/scripts/validate.mjs": {
@@ -3306,7 +3333,7 @@
         },
         ".scriptorium/config.json": {
           "type": "file",
-          "sha256": "b84128dca8667b8490f0f9436b996cd686f7255060614f0af8260c174cd99cb9",
+          "sha256": "5229d7eb8c3077471691aae4ed0a1fba8ac6910553d67754cfcfdd2e4c1293c8",
           "executable": false
         },
         "AGENTS.md": {
@@ -3316,7 +3343,7 @@
         },
         "CONTRIBUTING.md": {
           "type": "file",
-          "sha256": "1eb41ff2c50cb6bdbc9561a713ff55e0ef325bb91a639d88c200ecc20b19c930",
+          "sha256": "1827dc79bef54fc21abec1a44adde1946683e1299de82809a20718d9f0641156",
           "executable": false
         },
         "GLOSSARY.md": {
@@ -3441,12 +3468,12 @@
         },
         "docs/agents/triage-labels.md": {
           "type": "file",
-          "sha256": "6668843407bb5169d8655ed75f30e1e531d0f895ab19b20bd3dc633f668be3b3",
+          "sha256": "6dcd641788dcf3fba088e082d2ced46fb0731befb071f3c3a572a7e9f8257998",
           "executable": false
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "bca3dc03f7c84cabd8149c420900cf9d219c239bd653ef3f932ebb377cb540a5",
+          "sha256": "597b3d633071f9352f314786bbde7e47f7d3b31c0d0197f8776a2bd7c4373b6e",
           "executable": false
         },
         "docs/development/release.md": {
@@ -3456,12 +3483,12 @@
         },
         "docs/usage/README.md": {
           "type": "file",
-          "sha256": "64e1b458e2ec04800f14739ad801fbb2de45ba4422f880013f81b661495c52f4",
+          "sha256": "1e7e109001f46813c79a3694b2c3738b41791fa2e4bbd5a467136296901e1760",
           "executable": false
         },
         "docs/usage/body-contracts.md": {
           "type": "file",
-          "sha256": "6eafb5b814345c166292c83e1721f8da51525de0401b02389acf15c681510ebe",
+          "sha256": "4fe6befa4ee947148696806f86efbe159a30785b3d652e109516fa6eca9a8c0a",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
@@ -3471,12 +3498,27 @@
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "5eed2a83e20923521245f890db345add32af487a307527eeadf53e2de1be5a84",
+          "sha256": "9c83aa807b4cdc59bbcc3b0223362f7cf588cae4460b33f527f2e6342ccaffd1",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
           "type": "file",
           "sha256": "c951850998e8ac4855a8bdc8dde7b158081add440e663041a39bb657c3672a97",
+          "executable": false
+        },
+        "docs/usage/terminal-results.md": {
+          "type": "file",
+          "sha256": "342e4bcf70895a534beedf1aebe3796b272dadda3959ade4104be1e6725369b4",
+          "executable": false
+        },
+        "operations/lib/canonical-labels.mjs": {
+          "type": "file",
+          "sha256": "811395a0625754735c2b2e9533d335f769d7610d24fb9dcf19ff0c95a8facf6a",
+          "executable": false
+        },
+        "operations/lib/factory-labels.mjs": {
+          "type": "file",
+          "sha256": "5205c0558cab9568a910ad34621eae4d80871a4c2cd994134364b88d56924cec",
           "executable": false
         },
         "operations/lib/rendered-markdown.mjs": {
@@ -3516,12 +3558,12 @@
         },
         "scripts/issue-contract-sources.mjs": {
           "type": "file",
-          "sha256": "499e8d36ec621993ecebc5e22fea68c64343213dd646dd9d06e72e7c4c3fea7c",
+          "sha256": "c42a91c91491bb74a6053aa290f73aba67a4768b6048a0d056b1c22c523473fd",
           "executable": false
         },
         "scripts/issue-contract-store.mjs": {
           "type": "file",
-          "sha256": "2e191ad301c454303b215098a226595b7a341b59a8ab7dc6efc385a9add90944",
+          "sha256": "1e15c9b40cfcbfcbd2186e7ec3d080bbf2fa10e576bcd8ee43a01b5adb1fb49e",
           "executable": false
         },
         "src/agent-layer.Dockerfile": {
@@ -3536,22 +3578,22 @@
         },
         "src/comment-template.ts": {
           "type": "file",
-          "sha256": "f1b432b140d1179cf23ac298bb3e8e68393106abb35d94b80f3c6979cca85e93",
+          "sha256": "410d352c8f6d6131ba337267a7e2da414ece9bbbaadc912f80caa3c4ca71c041",
           "executable": false
         },
         "src/contract-protocol.ts": {
           "type": "file",
-          "sha256": "76d9151171a25f2cff147babed58616c8930163571c9c2182ea160039276e119",
+          "sha256": "c4434116595e03ffc2741d5d060375432c1cbaab31be6b25f6f437240e6b0502",
           "executable": false
         },
         "src/contract-publication.ts": {
           "type": "file",
-          "sha256": "8556e0abb42527bf600a3c1f8d8361d59c13a69a1e871fe1249f36b94b098979",
+          "sha256": "3c2691b31bc1cb8c86e07b5c1db8526e3b745c63ba0e9f37e59e4864c03ecd26",
           "executable": false
         },
         "src/contract-result.ts": {
           "type": "file",
-          "sha256": "0c077759f9c0064d9a7b80551198486e4d6a1f98abf35ebb6d588dfd450d8a3b",
+          "sha256": "b6aef849c97c71ab9bcb2a71c3aa00b4e03623ddaa6ee1474cc76f8835d196d7",
           "executable": false
         },
         "src/credentials.ts": {
@@ -3571,7 +3613,7 @@
         },
         "src/factory.ts": {
           "type": "file",
-          "sha256": "7204feb3ad5760b1573c5e9e1c2095bcc8b2bd5df8c48981a4bafbb1bfacd365",
+          "sha256": "cc4ee2e6ea4c159e1507fe7a1b8ceeb074c9e5cdd7521cbcb5b55a8f9fd44211",
           "executable": false
         },
         "src/github-token.ts": {
@@ -3591,7 +3633,7 @@
         },
         "src/host.ts": {
           "type": "file",
-          "sha256": "d6f9ae84710e47b6c6f5ed6877bcb113bfac0e66897468aeda5382bea4f1e755",
+          "sha256": "3be121acba7db603781c2194ed50d1e62888f238eab10f6c0fc4ae81779c51f2",
           "executable": false
         },
         "src/image-retention.ts": {
@@ -3611,7 +3653,7 @@
         },
         "src/main.ts": {
           "type": "file",
-          "sha256": "0272893789f1ca2ef1cc3600cc95aaa171760032b983c2d9ec5da938b8c39425",
+          "sha256": "9f3d5b4be3e7cc6db1cf7187bfd749f51a815fe056dfd978610433497ad5e07b",
           "executable": false
         },
         "src/model-policy.ts": {
@@ -3631,7 +3673,7 @@
         },
         "src/platform.ts": {
           "type": "file",
-          "sha256": "8431633555469cca5292906b5405d04bfa5dccb411312361959f8dc9fc2b3332",
+          "sha256": "a04b6cabf173820ea233603a28fa6cf9c9a411ebd9974aedae59f1082c3486d9",
           "executable": false
         },
         "src/prompt.ts": {
@@ -3676,7 +3718,7 @@
         },
         "src/readiness.ts": {
           "type": "file",
-          "sha256": "bf5b9067ffb2cbdfa7c57beedde278cd4a7898c294eb074a73fa81c527187ebf",
+          "sha256": "f7c08860c664096ebdc4b4d148fd7e31029f27eff32689a62b3cfbc3db701de5",
           "executable": false
         },
         "src/redaction.ts": {
@@ -3696,7 +3738,7 @@
         },
         "src/run-comment.ts": {
           "type": "file",
-          "sha256": "850121934270058dca05d8b55e0b017df9753a8fff6ba20708fc54a7ce131e2c",
+          "sha256": "44d6160c9cb4c3faa8b966a9bc123d649ed52f2689254ae294b6bca00bd9d043",
           "executable": false
         },
         "src/run-ending.ts": {
@@ -3711,7 +3753,7 @@
         },
         "src/run-result.ts": {
           "type": "file",
-          "sha256": "eae63ffdb7351a818c12bfe4a8e695117f514b38974b57c6904482fcc13d8b1d",
+          "sha256": "8ebd0243aea309c44a0eb32850ce9af4d99a4ee8b6cd39accce183946be04888",
           "executable": false
         },
         "src/sandbox-image.ts": {
@@ -3732,6 +3774,11 @@
         "src/storage-filesystem.ts": {
           "type": "file",
           "sha256": "64aeaa35867715e0db14f53f20cb68d4c3c341e2212ab0734bfe1596449a1807",
+          "executable": false
+        },
+        "src/terminal-results.ts": {
+          "type": "file",
+          "sha256": "b6381c5610782279e61bbd32806bfac3f8b050418601e93255d9b805b32a4337",
           "executable": false
         },
         "src/triggers.ts": {
@@ -3796,7 +3843,7 @@
         },
         "test/contract-fixture.ts": {
           "type": "file",
-          "sha256": "489c270735b42f084f60620964e145a576875a513fbfe20641914d05f4d22d4c",
+          "sha256": "ca77e200531422986f6e64ff87f8fd63e16d2f2341bf1566ee613dd18b4dfb9f",
           "executable": false
         },
         "test/contract-protocol.test.ts": {
@@ -3806,7 +3853,7 @@
         },
         "test/contract-publication.test.ts": {
           "type": "file",
-          "sha256": "5ad77da88a10a029e751ed2b097453f1660b2331740c6269e956c359b016423c",
+          "sha256": "32c41adc30740606db25edf5ecf544d65147191d508bf1357334768a80fa5c9d",
           "executable": false
         },
         "test/contract-result-fixture.ts": {
@@ -3826,7 +3873,7 @@
         },
         "test/factory.test.ts": {
           "type": "file",
-          "sha256": "b5b883e838081d93caa88dcf84ceb0f46943f2ab08f7e9b0d2de00c47cff8623",
+          "sha256": "bde359ac80e9fd58829a8b2395897fc8963a84e8b012571826fbbd186c5efe4f",
           "executable": false
         },
         "test/fakes.ts": {
@@ -3971,12 +4018,12 @@
         },
         "test/host-configuration.test.ts": {
           "type": "file",
-          "sha256": "7a388668838e76902a5560c1cb9db22573d08f0b15e6101bffd5a2d21e9d06d9",
+          "sha256": "aa8fdaf208b48ca727274d4f78c5b517697183d353bd88c53310cb2e5f25c276",
           "executable": false
         },
         "test/host.test.ts": {
           "type": "file",
-          "sha256": "47ab1225412855ab5642b772b6fa779b193b1d5431abef7c02753a358d030f7b",
+          "sha256": "61153d1f72d6971a342fc4455be445d54d0521087345e2a7a48e1ac96b445527",
           "executable": false
         },
         "test/image-retention.test.ts": {
@@ -4011,7 +4058,7 @@
         },
         "test/platform.test.ts": {
           "type": "file",
-          "sha256": "5aece88690cef119dcde695d232975668bda2819e9cc309f4e73258f67e492b8",
+          "sha256": "2ba4e2377963e6f66cd6a255a468fc1be93e48b1b7b3acee74c5d6433a5891b4",
           "executable": false
         },
         "test/prompt.test.ts": {
@@ -4061,7 +4108,7 @@
         },
         "test/run-result.test.ts": {
           "type": "file",
-          "sha256": "11fa5e7e3123212ec01cf789bb09447af4e8bd8b4507e03eebec62b624f3b589",
+          "sha256": "4f2a937264ba7fb5d53908e260cc0fccadceddce735123a2ddcb0661e3645d25",
           "executable": false
         },
         "test/sandbox-image-build.test.ts": {
@@ -4087,6 +4134,11 @@
         "test/status.test.ts": {
           "type": "file",
           "sha256": "6eb23d596f84074fa08210ca71970d43af96f6bb8730595d3d86add603934838",
+          "executable": false
+        },
+        "test/terminal-results.test.ts": {
+          "type": "file",
+          "sha256": "29f91ce688bde108a99c36267c2ab7a161c4243538d097470d074ba672a8edf2",
           "executable": false
         },
         "test/triggers.test.ts": {
@@ -4156,7 +4208,7 @@
         },
         "vendor/repo-canon/validate-issue-contract.mjs": {
           "type": "file",
-          "sha256": "fe13b317f71c647975a1d5dc663a2a78bd26f6ec25ab5be21d56c55d314596c5",
+          "sha256": "8269294034982636fe70ae352e4066074d27f31f2c25f6062a11f449d342fd8a",
           "executable": false
         },
         "vendor/repo-canon/validate.mjs": {
@@ -4225,6 +4277,7 @@
           ".agents/skills/babysit/SKILL.md",
           ".agents/skills/babysit/body-links.mjs",
           ".agents/skills/babysit/merge.mjs",
+          ".agents/skills/babysit/owner-gates.mjs",
           ".agents/skills/babysit/platform.mjs",
           ".agents/skills/babysit/pull-request-reviewer.mjs",
           ".agents/skills/babysit/request.mjs",
@@ -4502,12 +4555,15 @@
           "docs/usage/body-contracts.md",
           "docs/usage/factory-configuration.md",
           "docs/usage/host.md",
-          "docs/usage/sandbox-image.md"
+          "docs/usage/sandbox-image.md",
+          "docs/usage/terminal-results.md"
         ],
         "operations": [
           "operations/lib"
         ],
         "operations/lib": [
+          "operations/lib/canonical-labels.mjs",
+          "operations/lib/factory-labels.mjs",
           "operations/lib/rendered-markdown.mjs"
         ],
         "schemas": [
@@ -4558,6 +4614,7 @@
           "src/status-command.ts",
           "src/status.ts",
           "src/storage-filesystem.ts",
+          "src/terminal-results.ts",
           "src/triggers.ts",
           "src/usage.ts",
           "src/wait.ts"
@@ -4614,6 +4671,7 @@
           "test/sandcastle.test.ts",
           "test/status-command.test.ts",
           "test/status.test.ts",
+          "test/terminal-results.test.ts",
           "test/triggers.test.ts",
           "test/usage.test.ts"
         ],
@@ -4901,7 +4959,7 @@
         },
         "info": {
           "type": "file",
-          "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+          "sha256": "6e662a9785c07fb3b9b0fef9a834aab1f1f693b5348d90720d3b7464c498fcfe",
           "executable": false
         },
         ".gitignore": {
@@ -5129,14 +5187,7 @@
     {
       "id": "documentation",
       "additions": [
-        "docs/adr/0009-stand-in-a-broader-model-at-launch-by-provider-pace.md",
-        "docs/adr/0010-link-run-results-and-mention-whoever-must-act.md",
-        "docs/adr/0011-own-the-formats-the-factory-reads.md",
-        "docs/adr/0012-run-release-as-a-run-kind.md",
-        "docs/adr/0013-detect-github-quota-exhaustion-in-the-host.md",
-        "docs/adr/0014-give-each-run-a-private-git-directory.md",
-        "docs/adr/0015-file-a-runs-findings-from-its-run-result.md",
-        "docs/adr/0016-wait-on-pending-required-checks-in-the-handoff-gate.md"
+        "docs/usage/terminal-results.md"
       ],
       "removals": []
     }
