@@ -1716,10 +1716,10 @@ export function createHost(
               ? (reached.length ? reached : gates).join(", ")
               : undefined;
           // A publication stop names the triage state, which asks no role.
-          const published =
+          const publicationStop =
             previous?.resultPosted &&
             previous.result &&
-            "outcome" in previous.result &&
+            !("invalid" in previous.result) &&
             previous.result.outcome === "stop" &&
             previous.result.state === labels.triage &&
             stop === labels.triage
@@ -1727,7 +1727,7 @@ export function createHost(
               : undefined;
           const asked =
             askLabels(labels).find((label) => issue.labels.includes(label)) ??
-            (published ? stop : undefined);
+            (publicationStop ? stop : undefined);
           const action: Action | undefined =
             !previous && issue.continuation
               ? undefined
@@ -1751,7 +1751,7 @@ export function createHost(
                 phase: previous ? phaseOf(previous) : "implement",
                 facts: {
                   state: stop === labels.carried ? "carried" : "stopped",
-                  reason: `${published ? `${published}; ` : ""}waits in \`${stop}\``,
+                  reason: `${publicationStop ? `${publicationStop}; ` : ""}waits in \`${stop}\``,
                 },
                 resume: {
                   ...(since && { since }),
