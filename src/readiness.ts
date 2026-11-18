@@ -89,55 +89,55 @@ export function readinessExclusions(
         waiting: false,
       },
     ];
-  if (typeof issue.nativeParent === "string") {
-    if (issue.nativeParentState === "closed") return holds;
-    const [path, number] = issue.nativeParent.split("#");
-    const repository = repositories?.read.find(
-      (other) => other.name.toLowerCase() === path.toLowerCase(),
-    );
-    const served =
-      repository ||
-      repositories?.served.some(
-        (name) => name.toLowerCase() === path.toLowerCase(),
-      );
-    const parent = repository?.issues.find(
-      (other) => other.number === Number(number),
-    );
-    const held: (ReadinessHold & { blocked?: true }) | null = !served
-      ? {
-          reason:
-            "whose repository is not served by the host; the factory cannot read its readiness",
-          waiting: false,
-        }
-      : !repository || !parent
-        ? {
-            reason:
-              "whose readiness waits: its facts could not be read this pass",
-            waiting: true,
-          }
-        : parentHold(parent, repository.policy, path);
-    if (held)
-      holds.push({
-        ...held,
-        ...(!held.waiting &&
-          !held.blocked && {
-            key: holdKeys.parentReadiness,
-          }),
-        reason: `sub-issue of ${issue.nativeParent}, ${held.reason}`,
-      });
-    return holds;
-  }
-  const parent = openIssues.find(
-    (other) => other.number === issue.nativeParent,
-  );
-  const held = parent && parentHold(parent, policy);
+  const parent =
+    typeof issue.nativeParent === "number" &&
+    openIssues.find((other) => other.number === issue.nativeParent);
+  const held =
+    typeof issue.nativeParent === "string"
+      ? crossRepositoryParentHold(issue, issue.nativeParent, repositories)
+      : parent && parentHold(parent, policy);
   if (held)
     holds.push({
       ...held,
       ...(!held.waiting && !held.blocked && { key: holdKeys.parentReadiness }),
-      reason: `sub-issue of ${reference(parent.number)}, ${held.reason}`,
+      reason: `sub-issue of ${reference(issue.nativeParent!)}, ${held.reason}`,
     });
   return holds;
+}
+
+// A parent in another repository is judged from that repository's own pass
+// under its own policy. A closed one holds nothing; one whose served
+// repository has no read this pass waits; an unserved one cannot be read.
+function crossRepositoryParentHold(
+  issue: Issue,
+  id: string,
+  repositories: ParentRepositories | undefined,
+): (ReadinessHold & { blocked?: true }) | null {
+  if (issue.nativeParentState === "closed") return null;
+  const [path, number] = id.split("#");
+  const repository = repositories?.read.find(
+    (other) => other.name.toLowerCase() === path.toLowerCase(),
+  );
+  const served =
+    repository ||
+    repositories?.served.some(
+      (name) => name.toLowerCase() === path.toLowerCase(),
+    );
+  const parent = repository?.issues.find(
+    (other) => other.number === Number(number),
+  );
+  if (!served)
+    return {
+      reason:
+        "whose repository is not served by the host; the factory cannot read its readiness",
+      waiting: false,
+    };
+  if (!repository || !parent)
+    return {
+      reason: "whose readiness waits: its facts could not be read this pass",
+      waiting: true,
+    };
+  return parentHold(parent, repository.policy, path);
 }
 
 // Why a ready-labelled issue's readiness doesn't count, as a clause after

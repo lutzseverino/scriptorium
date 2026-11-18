@@ -264,7 +264,7 @@ export type Snapshot = {
   now: string;
   repositories: Repository[];
   // Includes served repositories whose configuration or issue read failed.
-  // Absent in older snapshots, where only read repositories are known served.
+  // When a snapshot omits it, only read repositories are known served.
   servedRepositories?: string[];
   runs: Run[];
   usage: Record<string, Usage | null>;
