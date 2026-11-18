@@ -765,6 +765,7 @@ export function repositoryPlatform(
           editedAt: capabilities.bodyEditTime ? issue.bodyEditTime : null,
           contractHold: contract?.hold ?? null,
           nativeParent: issue.parent && id(issue.parent),
+          ...(issue.parent && { nativeParentState: issue.parent.state }),
           // The platform reports when the latest sub-issue was linked, not
           // which.
           latestLink:

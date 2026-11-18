@@ -760,17 +760,23 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   doesn't count. After reviewing an edit, remove and re-apply the label.
   Whether an edit cancels another issue's readiness is the validator's
   decision.
-- **Parents.** An open issue with native sub-issues in the same repository is
-  a parent, and it never launches. Its sub-issue runs only while the parent's
-  readiness counts and the parent has no open native blocker. With complete
-  link history, additions at or after readiness keep it valid only when every
-  link actor passes the same readiness policy: an authorized person who is not
-  a bot or never-authorize account. An unauthorized, unknown or unreadable actor,
-  or an unknown link time, holds the parent; a later authorized link never hides
-  an earlier unauthorized one. Without complete history, readiness must be newer
-  than the parent's latest sub-issue link, to the second. On a platform that
-  doesn't report link times, the factory skips the link check. A native
-  parent that is closed or in another repository holds nothing.
+- **Parents.** An open issue with native sub-issues is a parent, and it never
+  launches. Its sub-issue runs only while the parent's readiness counts and the
+  parent has no open native blocker. With complete link history, additions at or
+  after readiness keep it valid only when every link actor passes the same
+  readiness policy: an authorized person who is not a bot or never-authorize
+  account. An unauthorized, unknown or unreadable actor, or an unknown link
+  time, holds the parent; a later authorized link never hides an earlier
+  unauthorized one. Without complete history, readiness must be newer than the
+  parent's latest sub-issue link, to the second. On a platform that doesn't
+  report link times, the factory skips the link check. A native parent in
+  another served repository is judged from that repository's own pass, ready
+  label and authorization policy. If its configuration or facts could not be
+  read this pass, including during a quota hold, its sub-issue waits without a
+  hold comment; retries wait too. A parent in a repository the host does not
+  serve holds pickup with a reason in status and a parent-readiness hold comment
+  on the sub-issue. A native parent reported closed holds nothing, whether or
+  not its repository is served.
 - **Closing.** An open issue whose readiness counts, with at least one native
   sub-issue and every sub-issue closed, in any repository, is closed with a
   comment listing them.

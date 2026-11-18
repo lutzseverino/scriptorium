@@ -101,6 +101,7 @@ function snapshot({
   runs = [],
   claims = [],
   repositories,
+  servedRepositories,
   usage = {},
   holds = {},
   owners = {},
@@ -111,6 +112,7 @@ function snapshot({
   runs?: Run[];
   claims?: Claim[];
   repositories?: Repository[];
+  servedRepositories?: string[];
   usage?: Record<string, number | Usage | null>;
   holds?: Record<string, UsageHold | null>;
   owners?: Snapshot["owners"];
@@ -119,6 +121,7 @@ function snapshot({
 } = {}): Snapshot {
   return {
     now,
+    ...(servedRepositories && { servedRepositories }),
     repositories: repositories ?? [
       repository(widgets, issues, {
         claims,
@@ -922,19 +925,177 @@ test("a sub-issue waits while its parent has an open native blocker", () => {
   assert.deepEqual(launched(unblocked), ["acme/widgets#5", "acme/widgets#6"]);
 });
 
-test("a sub-issue of a closed parent or one in another repository runs directly", () => {
-  for (const nativeParent of [4, "acme/gadgets#3"]) {
+test("a sub-issue of a closed parent runs directly", () => {
+  const decisions = decide({
+    issues: [
+      parent(released, { labels: [] }),
+      issue(7, ["ready-for-agent"], { nativeParent: 4 }),
+    ],
+  });
+  assert.deepEqual(launched(decisions), ["acme/widgets#7"]);
+});
+
+test("a cross-repository parent holds pickup under its own ready label and releases it once ready", () => {
+  const child = issue(7, undefined, { nativeParent: "ACME/Gadgets#3" });
+  const plans = repository(gadgets, [parent(released, { labels: [] })]);
+  plans.configuration.labels.ready = "plan-approved";
+  const repositories = [repository(widgets, [child]), plans];
+  const held = decide({ repositories });
+  assert.deepEqual(launches(held), []);
+  assert.equal(
+    skipOf(held, 7),
+    "sub-issue of ACME/Gadgets#3, which is not ready; apply plan-approved to ACME/Gadgets#3 once its tickets are published",
+  );
+  assert.ok(
+    held.some(
+      (decision) =>
+        decision.kind === "skip" &&
+        decision.issue === 7 &&
+        decision.hold === holdKeys.parentReadiness,
+    ),
+  );
+  plans.issues[0].labels = ["plan-approved"];
+  assert.deepEqual(launched(decide({ repositories })), ["acme/widgets#7"]);
+});
+
+test("cross-repository parent refusals use its repository's authorization, validator and link facts", () => {
+  const cases: [Partial<Issue>, RegExp, boolean][] = [
+    [
+      { ready: { at: released, actor: owner } },
+      /role admin is not authorized/,
+      false,
+    ],
+    [{ editedAt: released }, /not after the body's last edit/, false],
+    [
+      {
+        contractHold: {
+          reason: "is refused: contract result needs attention",
+          waiting: false,
+        },
+      },
+      /contract result needs attention/,
+      false,
+    ],
+    [
+      {
+        linkAdditions: [
+          { ticket: "acme/widgets#7", at: released, actor: owner },
+        ],
+      },
+      /ticket acme\/widgets#7 was linked.*role admin is not authorized/,
+      false,
+    ],
+    [
+      { latestLink: { ticket: "acme/widgets#7", at: released } },
+      /predates its latest ticket acme\/widgets#7/,
+      false,
+    ],
+    [
+      { linkAdditions: [{ ticket: 8, at: released, actor: owner }] },
+      /ticket acme\/gadgets#8 was linked.*on acme\/gadgets#3/,
+      false,
+    ],
+    [
+      { latestLink: { ticket: 8, at: released } },
+      /predates its latest ticket acme\/gadgets#8; .* on acme\/gadgets#3/,
+      false,
+    ],
+    [
+      {
+        ready: { at: released, actor: { kind: "unreadable", login: "owner" } },
+      },
+      /role of @owner.*could not be read/,
+      true,
+    ],
+    [
+      { blockedBy: [{ number: 9, state: "open" }] },
+      /blocked by acme\/gadgets#9; it waits until acme\/gadgets#3's blockers close/,
+      false,
+    ],
+  ];
+  for (const [details, reason, waiting] of cases) {
+    const plans = repository(
+      gadgets,
+      [
+        parent(released, {
+          ready: {
+            at: released,
+            actor: { kind: "user", login: "planner", role: "write" },
+          },
+          ...details,
+        }),
+      ],
+      { authorization: { authorizedRoles: ["write"], neverAuthorize: [] } },
+    );
     const decisions = decide({
-      issues: [
-        parent(released, { labels: [] }),
-        issue(7, ["ready-for-agent"], { nativeParent }),
+      repositories: [
+        repository(widgets, [
+          issue(7, undefined, { nativeParent: "acme/gadgets#3" }),
+        ]),
+        plans,
       ],
     });
-    assert.deepEqual(
-      launched(decisions),
-      ["acme/widgets#7"],
-      `native parent ${nativeParent}`,
+    assert.deepEqual(launches(decisions), []);
+    assert.match(skipOf(decisions, 7)!, reason);
+    const skip = decisions.find(
+      (decision) => decision.kind === "skip" && decision.issue === 7,
     );
+    assert.ok(skip?.kind === "skip");
+    assert.equal(
+      skip.hold,
+      waiting || details.blockedBy ? undefined : holdKeys.parentReadiness,
+    );
+  }
+});
+
+test("an unread cross-repository parent waits on fresh pickup and retry without posting a hold", () => {
+  for (const retry of [false, true]) {
+    const child = issue(7, retry ? claimed : undefined, {
+      nativeParent: "acme/gadgets#3",
+    });
+    const decisions = decide({
+      repositories: [repository(widgets, [child])],
+      servedRepositories: [widgets, "ACME/Gadgets"],
+      runs: retry ? [run(7, { ended: none })] : [],
+    });
+    assert.deepEqual(launches(decisions), []);
+    assert.ok(decisions.every(({ kind }) => kind !== "fail"));
+    assert.match(
+      skipOf(decisions, 7)!,
+      /acme\/gadgets#3.*could not be read this pass/,
+    );
+    assert.ok(
+      decisions.every((decision) => decision.kind !== "skip" || !decision.hold),
+    );
+  }
+});
+
+test("an unserved cross-repository parent posts an actionable hold, but a closed parent holds nothing", () => {
+  for (const served of [false, true]) {
+    for (const state of ["open", "closed"] as const) {
+      const child = issue(7, undefined, {
+        nativeParent: "acme/gadgets#3",
+        nativeParentState: state,
+      });
+      const decisions = decide({
+        repositories: [repository(widgets, [child])],
+        servedRepositories: served ? [widgets, gadgets] : [widgets],
+      });
+      if (state === "closed")
+        assert.deepEqual(launched(decisions), ["acme/widgets#7"]);
+      else {
+        assert.deepEqual(launches(decisions), []);
+        assert.match(
+          skipOf(decisions, 7)!,
+          served ? /could not be read/ : /repository is not served/,
+        );
+        const skip = decisions.find(
+          (decision) => decision.kind === "skip" && decision.issue === 7,
+        );
+        assert.ok(skip?.kind === "skip");
+        assert.equal(skip.hold, served ? undefined : holdKeys.parentReadiness);
+      }
+    }
   }
 });
 

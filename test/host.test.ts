@@ -77,7 +77,7 @@ type IssueSpec = {
   state?: "OPEN" | "CLOSED";
   createdAt?: string;
   labels?: string[];
-  parent?: number;
+  parent?: number | { repository: string; number: number; state?: IssueState };
   subIssues?: { number: number; state?: string }[];
   blockedBy?: { number: number; state: string }[];
   pullRequests?: (string | PullRequest)[];
@@ -366,7 +366,12 @@ function fakePlatform(
       author: account(issue.author ?? "owner"),
       labels: [...issue.labels],
       createdAt: issue.createdAt,
-      parent: issue.parent ? reference(issue.parent, "OPEN") : null,
+      parent:
+        typeof issue.parent === "number"
+          ? reference(issue.parent, "OPEN")
+          : issue.parent
+            ? { ...issue.parent, state: issue.parent.state ?? "open" }
+            : null,
       subIssues: issue.subIssues.map((child) =>
         reference(child.number, child.state ?? "OPEN"),
       ),
@@ -4768,6 +4773,136 @@ test("a failed link-history read pauses pickup until a successful pass", async (
     run.launched.map(({ options }) => options.name),
     ["acme/widgets#2"],
   );
+});
+
+test("a cross-repository parent holds pickup with a comment and status reason until ready", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 2, parent: { repository: "acme/gadgets", number: 1 } },
+      ],
+      "acme/gadgets": [{ number: 1, labels: [], subIssues: [{ number: 2 }] }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.match(
+    held(run, 2),
+    /sub-issue of acme\/gadgets#1, which is not ready/,
+  );
+  const child = run.github.find("acme/widgets", 2);
+  assert.match(child.comments.join("\n"), /scriptorium:hold:parent-readiness/);
+  const parent = run.github.find("acme/gadgets", 1);
+  parent.labels = [ready];
+  parent.timeline.push(labelled("owner"));
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#2"],
+  );
+  assert.match(
+    child.comments.join("\n"),
+    /Resolved: this reason no longer holds the issue/,
+  );
+});
+
+for (const fault of ["connection", "quota", "configuration"])
+  test(`a cross-repository parent waits without a comment when its ${fault} read is unavailable`, async (t) => {
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          { number: 2, parent: { repository: "acme/gadgets", number: 1 } },
+        ],
+        "acme/gadgets": [{ number: 1, subIssues: [{ number: 2 }] }],
+      },
+      remotes: {
+        "acme/widgets": remote(t, factoryFiles),
+        "acme/gadgets": remote(
+          t,
+          fault === "configuration"
+            ? { ".scriptorium/Dockerfile": toolchain }
+            : factoryFiles,
+        ),
+      },
+    });
+    if (fault === "connection")
+      run.github.failedRequests.set(
+        "acme/gadgets issues",
+        new PlatformError("unavailable", "connection failed"),
+      );
+    if (fault === "quota") {
+      run.github.quotas["acme/gadgets"] = {
+        remaining: 0,
+        reset: Date.parse("2026-10-09T12:05:00Z") / 1000,
+      };
+      run.github.failedRequests.set(
+        "acme/gadgets issues",
+        new PlatformError("rateLimited", "quota exhausted"),
+      );
+    }
+    await run.tick();
+    assert.equal(run.launched.length, 0);
+    assert.match(held(run, 2), /acme\/gadgets#1.*could not be read this pass/);
+    assert.equal(run.github.find("acme/widgets", 2).comments.length, 0);
+  });
+
+test("an unserved cross-repository parent posts its hold, while a closed parent launches", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 2, parent: { repository: "acme/unserved", number: 1 } },
+        {
+          number: 3,
+          parent: { repository: "acme/unserved", number: 1, state: "closed" },
+        },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#3"],
+  );
+  assert.match(held(run, 2), /acme\/unserved#1.*repository is not served/);
+  assert.match(
+    run.github.find("acme/widgets", 2).comments.join("\n"),
+    /scriptorium:hold:parent-readiness[\s\S]*repository is not served/,
+  );
+  assert.ok(run.github.calls.every(([name]) => name === "acme/widgets"));
+});
+
+test("a cached parent configuration cannot release a cross-repository ticket after the configuration becomes unreadable", async (t) => {
+  const bare = remote(t, factoryFiles);
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        {
+          number: 2,
+          labels: [],
+          parent: { repository: "acme/gadgets", number: 1 },
+        },
+      ],
+      "acme/gadgets": [{ number: 1, subIssues: [{ number: 2 }] }],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles), "acme/gadgets": bare },
+  });
+  await run.tick();
+  const child = run.github.find("acme/widgets", 2);
+  child.labels = [ready];
+  child.timeline.push(labelled("owner"));
+  const work = join(dirname(bare), "work");
+  git(work, ["rm", "--quiet", ".scriptorium/config.json"]);
+  git(work, ["commit", "--quiet", "-am", "remove parent configuration"]);
+  git(work, ["push", "--quiet", bare, "main"]);
+  await run.tick();
+  assert.equal(run.launched.length, 0);
+  assert.match(held(run, 2), /could not be read this pass/);
+  assert.equal(child.comments.length, 0);
 });
 
 test("a parent's readiness releases its tickets and closes it only when it counts and follows its latest link", async (t) => {

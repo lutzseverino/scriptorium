@@ -31,6 +31,13 @@ export type Policy = {
 // A permanent refusal or a transient wait for platform or validator facts.
 export type ReadinessHold = { reason: string; waiting: boolean };
 
+// Successfully read parent facts under their own policy, plus served paths
+// whose pass may be unreadable. No caller reads an unserved repository.
+export type ParentRepositories = {
+  served: string[];
+  read: { name: string; issues: Issue[]; policy: Policy }[];
+};
+
 // An issue that carries readiness the factory accepts, with at least one
 // native sub-issue, every sub-issue closed and no open blockers, is finished.
 export function closes(issue: Issue, policy: Policy): boolean {
@@ -50,8 +57,11 @@ export function readinessExclusion(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
+  repositories?: ParentRepositories,
 ): (ReadinessHold & { key?: HoldKey }) | null {
-  return readinessExclusions(issue, openIssues, policy)[0] ?? null;
+  return (
+    readinessExclusions(issue, openIssues, policy, repositories)[0] ?? null
+  );
 }
 
 // All readiness reasons, so one actionable reason cannot hide another's
@@ -60,6 +70,7 @@ export function readinessExclusions(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
+  repositories?: ParentRepositories,
 ): (ReadinessHold & { key?: HoldKey })[] {
   const holds: (ReadinessHold & { key?: HoldKey })[] = [];
   const refused = refusal(issue, policy);
@@ -78,17 +89,55 @@ export function readinessExclusions(
         waiting: false,
       },
     ];
-  const parent = openIssues.find(
-    (other) => other.number === issue.nativeParent,
-  );
-  const held = parent && parentHold(parent, policy);
+  const parent =
+    typeof issue.nativeParent === "number" &&
+    openIssues.find((other) => other.number === issue.nativeParent);
+  const held =
+    typeof issue.nativeParent === "string"
+      ? crossRepositoryParentHold(issue, issue.nativeParent, repositories)
+      : parent && parentHold(parent, policy);
   if (held)
     holds.push({
       ...held,
       ...(!held.waiting && !held.blocked && { key: holdKeys.parentReadiness }),
-      reason: `sub-issue of ${reference(parent.number)}, ${held.reason}`,
+      reason: `sub-issue of ${reference(issue.nativeParent!)}, ${held.reason}`,
     });
   return holds;
+}
+
+// A parent in another repository is judged from that repository's own pass
+// under its own policy. A closed one holds nothing; one whose served
+// repository has no read this pass waits; an unserved one cannot be read.
+function crossRepositoryParentHold(
+  issue: Issue,
+  id: string,
+  repositories: ParentRepositories | undefined,
+): (ReadinessHold & { blocked?: true }) | null {
+  if (issue.nativeParentState === "closed") return null;
+  const [path, number] = id.split("#");
+  const repository = repositories?.read.find(
+    (other) => other.name.toLowerCase() === path.toLowerCase(),
+  );
+  const served =
+    repository ||
+    repositories?.served.some(
+      (name) => name.toLowerCase() === path.toLowerCase(),
+    );
+  const parent = repository?.issues.find(
+    (other) => other.number === Number(number),
+  );
+  if (!served)
+    return {
+      reason:
+        "whose repository is not served by the host; the factory cannot read its readiness",
+      waiting: false,
+    };
+  if (!repository || !parent)
+    return {
+      reason: "whose readiness waits: its facts could not be read this pass",
+      waiting: true,
+    };
+  return parentHold(parent, repository.policy, path);
 }
 
 // Why a ready-labelled issue's readiness doesn't count, as a clause after
@@ -198,13 +247,19 @@ export function actorRefusal(
 
 // A parent's readiness releases its sub-issues while it counts, every link
 // since readiness is authorized, and no open blocker holds the parent. Without
-// complete link history, readiness must follow the latest link time.
+// complete link history, readiness must follow the latest link time. A
+// parent in another repository qualifies that repository's own numbers.
 function parentHold(
   parent: Issue,
   policy: Policy,
+  repository?: string,
 ): (ReadinessHold & { blocked?: true }) | null {
   const { ready } = policy;
-  const name = reference(parent.number);
+  const qualified = (id: IssueId) =>
+    repository && typeof id === "number"
+      ? `${repository}#${id}`
+      : reference(id);
+  const name = qualified(parent.number);
   if (!parent.labels.includes(ready))
     return {
       reason: `which is not ready; apply ${ready} to ${name} once its tickets are published`,
@@ -226,7 +281,7 @@ function parentHold(
         addition.actor,
         policy,
         {
-          subject: `ticket${addition.ticket === null ? "" : ` ${reference(addition.ticket)}`}`,
+          subject: `ticket${addition.ticket === null ? "" : ` ${qualified(addition.ticket)}`}`,
           action: "linked",
         },
         ` on ${name}`,
@@ -236,7 +291,7 @@ function parentHold(
     }
   } else if (link && Date.parse(parent.ready!.at) <= Date.parse(link.at))
     return {
-      reason: `whose readiness predates its latest ticket${link.ticket === null ? "" : ` ${reference(link.ticket)}`}; remove and re-apply ${ready} on ${name} once its tickets are published`,
+      reason: `whose readiness predates its latest ticket${link.ticket === null ? "" : ` ${qualified(link.ticket)}`}; remove and re-apply ${ready} on ${name} once its tickets are published`,
       waiting: false,
     };
   const blockers = parent.blockedBy.filter(
@@ -244,7 +299,7 @@ function parentHold(
   );
   if (blockers.length > 0)
     return {
-      reason: `which is blocked by ${references(blockers)}; it waits until ${name}'s blockers close`,
+      reason: `which is blocked by ${blockers.map(({ number }) => qualified(number)).join(", ")}; it waits until ${name}'s blockers close`,
       waiting: false,
       blocked: true,
     };

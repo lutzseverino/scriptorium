@@ -835,6 +835,7 @@ export function createHost(
       pass.read = {
         name,
         configuration: pass.configuration,
+        configurationReadable: pass.configurationFile.state === "valid",
         authorization: served.authorization,
         ownedPullRequests: recordedPullRequests(name),
         paused: pass.paused?.reason ?? null,
@@ -1834,6 +1835,7 @@ export function createHost(
     const snapshot: Snapshot = {
       now: ports.now().toISOString(),
       repositories: passes.flatMap((pass) => (pass.read ? [pass.read] : [])),
+      servedRepositories: passes.map((pass) => pass.name),
       runs: runs
         .filter((run) => readable.has(run.repository) || !run.exited)
         .map((run): Run => ({
