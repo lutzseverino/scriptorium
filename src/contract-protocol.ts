@@ -113,6 +113,8 @@ export const validBodySource = (value: unknown): value is BodySource =>
   text(value.editId);
 
 export class ContractPublicationHold extends Error {}
+// Publication ends the retained result as a stop that names the triage state.
+export class ContractPublicationStop extends Error {}
 export const hold = (reason: string): never => {
   throw new ContractPublicationHold(
     `${reason}; restore trusted contract facts and retry, or obtain a fresh triage/review of the current revision`,

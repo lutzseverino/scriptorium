@@ -214,7 +214,10 @@ changes, the factory's own hold comments and label writes, changed or deleted
 contract sources, unreadable comments and parent readiness. The host fake
 stands in for the validator: unless an issue opts out, its comment list ends
 with a current result approving the latest ready-label event, so host tests
-that opt out drive missing, stale and newer results across passes. GitHub
+that opt out drive missing, stale and newer results across passes. Both fakes
+evaluate a prepared brief in a later second than the brief comment; contract
+publication tests override the notice's `source`, `status` and `evaluatedAt`
+to drive its wait, visible holds and triage-state stop. GitHub
 deletion facts not exposed by the neutral comment port use Postern's
 authenticated `access.request` fallback. `src/contract-result.ts` reads the
 `repo-canon/issue-contract-state/v1` format that

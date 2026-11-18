@@ -14,6 +14,7 @@ import {
   contractFile,
   contractEvidence,
   commentDeletionIdentity,
+  ContractPublicationStop,
   digest,
   hold,
   ledgerBranch,
@@ -122,7 +123,20 @@ export async function publishContract(
       )
     )
       return hold("Legacy evidence was deleted or edited before readiness");
-    const notice = preparedContractNotice(comments, configuration, evidence);
+    let notice;
+    try {
+      notice = preparedContractNotice(comments, configuration, evidence);
+    } catch (error) {
+      // The stop names the triage state, which the issue keeps or regains.
+      const triage = configuration.labels.triage;
+      if (
+        error instanceof ContractPublicationStop &&
+        triage &&
+        !(await tracker.issue(number)).labels.includes(triage)
+      )
+        await tracker.addLabels(number, [triage]);
+      throw error;
+    }
     if (!notice) return null;
     if (!state.readyRequested) {
       const issue = await tracker.issue(number);
