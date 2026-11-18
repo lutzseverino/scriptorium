@@ -10340,6 +10340,53 @@ test("a triage run's result posts its brief in the factory's frame and applies i
   );
 });
 
+test("a triage stop normalizes its reason, publishes its result and logs the original only privately", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(resultConventions),
+      }),
+    },
+  });
+  await run.tick();
+  const reason = "x".repeat(300) + "\r\nOriginal tail\rnext\nlast";
+  const kept = "x".repeat(299) + "…";
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    labels: ["priority:high"],
+    body: "Which recovery should we use?",
+    reason,
+  });
+  await run.drain();
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.deepEqual(issue.labels, ["priority:high", "state:owner"]);
+  const [posted] = notices(issue).filter((comment) =>
+    comment.includes("Run: triage"),
+  );
+  assert.ok(posted.includes("Which recovery should we use?"));
+  assert.ok(posted.includes(`stop: ${kept}.`));
+  assert.ok(
+    issue.comments.every((comment) => !comment.includes("Original tail")),
+  );
+  assert.ok(
+    run.reports.includes(
+      `acme/widgets#4 ended with its run result, stop: ${kept}; original reason: ${JSON.stringify(reason)}`,
+    ),
+    run.reports.join("\n"),
+  );
+  assert.ok(
+    !JSON.stringify(recordOf(run.state, 4, 1)).includes("Original tail"),
+  );
+  for (const file of ["status.json", "events.jsonl"])
+    assert.ok(
+      !readFileSync(join(run.state, file), "utf8").includes("Original tail"),
+    );
+});
+
 test("a stop result posts its question and applies its state together, then releases the claim", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },
