@@ -1,6 +1,6 @@
 # Installed rules
 
-These rules come from https://github.com/lutzseverino/repo-canon v0.29.0, profile factory.
+These rules come from https://github.com/lutzseverino/repo-canon v0.30.0, profile factory.
 Repo Standards installs and verifies them; adopt again to change them.
 Run `repo-standards rules <path>` to print the rules that cover a path.
 
@@ -32,6 +32,7 @@ Run `repo-standards rules <path>` to print the rules that cover a path.
   - `docs/usage/factory-configuration.md`
   - `docs/usage/host.md`
   - `docs/usage/sandbox-image.md`
+  - `docs/usage/terminal-results.md`
 - [`factory-sandbox-image`](factory-sandbox-image.md) covers:
   - `.scriptorium/Dockerfile`
   - `.factory/Dockerfile`

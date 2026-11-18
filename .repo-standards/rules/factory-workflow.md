@@ -49,6 +49,9 @@ merges its own PR. Otherwise only review merges. Triage stays read-only, and
 every run ends with a result the factory posts and turns into labels.
 Configuration holds mechanics; execution choices follow Model selection below.
 
+Where the run's environment states it performs a named step, the run leaves
+that step to it.
+
 ## Handoffs
 
 Runs hand off through the issue's workflow state and pull request:
@@ -60,17 +63,18 @@ Runs hand off through the issue's workflow state and pull request:
 2. **Triage** ends with `state:ready` and the labels readiness needs, or in a
    `state:` stop.
 3. **Readiness** starts implement when applied by a person or the factory's
-   own triage run under the GitHub rules' Readiness roles. Other bot/App
-   readiness never starts a run, even if validator-approved. An orchestrating
-   agent on such an account applies no readiness: it stops at acceptance under
-   `triage` and never reports factory work started.
+   own triage run under the GitHub rules' Readiness roles, for its own brief or
+   a direct contract it reviewed. Other bot/App readiness never starts a run,
+   even if validator-approved. An orchestrating agent on such an account
+   applies no readiness: it stops at acceptance under `triage` and never
+   reports factory work started.
 4. **Implement** ends at a draft pull request, which starts review on it.
 5. **Review** ends in a merge, a hand-back to implement on the same pull
    request, a stop at an owner gate, or a `state:grill` stop for a wrong or
    ambiguous contract. When its rounds do not converge, the issue gets
    `factory:failed`.
-6. **A `state:` stop** leaves the issue with whoever must answer until it is
-   back in `state:ready`, as Questions and stops says.
+6. **A `state:` stop** leaves the issue with whoever must answer until a
+   person applies its next state, as Questions and stops says.
 
 ## Implementation inputs
 
@@ -165,8 +169,8 @@ Triage run says.
 
 Factory triage uses `triage` on one issue, without an orchestrating agent,
 workbench or decision inbox. It only reads: no posts, labels, pushes or fixes.
-Its result asks the factory to post its brief or question and apply its chosen
-labels, never a `gate:` label.
+Its result asks the factory to post its brief, question or cited carrier and
+apply its chosen labels, never a `gate:` label.
 
 It applies the contribution guide's inference test with sources recorded only
 in the repository: its ADRs, its glossary, and linked issues and their
@@ -175,8 +179,12 @@ inferred answer for the owner to veto, in place of the orchestrating agent's
 report. Every other intent question, and any it is unsure of, moves the issue
 to `state:grill` with the facts gathered and the open questions. A fact only
 an outside reporter holds moves it to `state:reporter`, and one only the owner
-holds to `state:owner`, each with its question; whether to close a request
-already implemented or rejected before is the owner's. For an intake request,
+holds to `state:owner`, each with its question. A disposition no record
+settles is the owner's. When the records settle it, the run asks for
+`state:carried`, citing the carrier: the change on the default branch, the
+duplicate, the ticket whose pull request closes it, or a past rejection the
+request adds nothing to. A request that brings a new argument against a
+rejection stays `state:owner`. For an intake request,
 a bug report, feature request or triaged request, every outcome carries the
 issue's one `type:` label. A directly authored specification or implementation
 ticket needs no category label under the contribution guide's Implementation
@@ -187,6 +195,20 @@ Readiness roles allow, asking for `state:ready` with the labels readiness
 needs: one `model:` label it chooses under Model selection, any
 `factory:skip` that Skipped work requires, and a `priority:` label as the
 GitHub rules' Labels section says.
+
+A directly authored specification or implementation ticket, an issue-body
+contract with no category label, gets no Agent Brief, and the run does not
+accept it. The run reviews the revision the validator's current notice names,
+as `triage`'s accept mode reviews a direct contract, and stops. A body that
+holds stops in `state:owner`, naming `state:ready` at that exact `sha256:`
+revision with the labels a brief it accepts asks for, and recording the
+review's findings. A body that needs correction stops in `state:owner`, naming
+the correction a separate writer makes before the issue returns to
+`state:triage`, as the contribution guide's Owner questions section says. An
+open intent question stops in `state:grill`. Without a notice naming the
+revision, the run stops in `state:owner` and says the notice is missing. A
+person or orchestrating agent the GitHub rules' Readiness roles authorize then
+applies readiness to a holding revision.
 
 ## Gates
 
@@ -234,6 +256,12 @@ Skip and hold labels follow Skipped work and Repository and release holds.
 
 `state:owner` is for an answer, an account, a credential or a grant only the
 owner has, and for work an owner gate stopped.
+
+`state:carried` means another record or ticket carries the request's fate, and
+the factory leaves it; it mentions nobody. The orchestrating agent closes a
+carried request whose carrier is done, as an issue verified as done. A request
+carried by open work stays carried until that work's pull request closes it.
+Removing `state:carried` starts nothing.
 
 ## Skipped work
 
@@ -331,13 +359,26 @@ state to whoever must answer: `state:owner` for the owner's answer,
 outside reporter holds. A factory run asks for that state in its run result.
 Work without an issue uses no state label.
 
-An answered question returns the issue to `state:ready`, which resumes the
-same work and pull request on a current base, whether the pull request is open
-or closed unmerged; the factory never opens a replacement. An answer that
-changes the implementation contract first needs the edited revision's
-validator notice, independent review and renewed readiness under the
-contribution guide; an unchanged contract needs none. Skipped work resumes as
-Skipped work says.
+A person answers a stop by applying the issue's next state, or by closing the
+issue; the one-state rule replaces the stop. Each stop names the exact next
+state that answers it, one of these:
+
+- `state:ready` at the unchanged approved contract resumes the stopped work:
+  the same work and pull request on a current base, whether the pull request
+  is open or closed unmerged; the factory never opens a replacement. An answer
+  that changes the implementation contract first needs the edited revision's
+  validator notice, independent review and renewed readiness under the
+  contribution guide; an unchanged contract needs none. Skipped work resumes
+  as Skipped work says.
+- `state:triage` starts triage again.
+- `state:carried` holds the request, as State labels says.
+
+After the grill settles a `state:grill` request, an authorized person applies
+`state:triage` to return it to triage, or applies readiness through the normal
+exact-revision acceptance route for a published or revised contract. There is
+no separate grill-removal or comment trigger; a comment alone starts nothing.
+The reporter answers a `state:reporter` stop by replying on the issue, which
+still starts triage; an authorized person may apply `state:triage` instead.
 
 An agent that stops without a pull request and without a `state:` stop posts a
 stop note on the issue under the `comments` rules.

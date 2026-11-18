@@ -111,7 +111,8 @@
           "docs/usage/body-contracts.md",
           "docs/usage/factory-configuration.md",
           "docs/usage/host.md",
-          "docs/usage/sandbox-image.md"
+          "docs/usage/sandbox-image.md",
+          "docs/usage/terminal-results.md"
         ],
         "directories": []
       }

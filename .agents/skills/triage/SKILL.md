@@ -140,7 +140,7 @@ Once it holds, [accept it](#accept-a-brief-that-holds).
    node <this skill's directory>/ready.mjs <issue> <sha256:reviewed-revision> <model-label>
    ```
 
-   The command applies `state:ready`. Omit the model label when the installed rules ask for none. Additional companion labels, such as `factory:skip`, follow the revision; `--repo owner/name` selects another repository. Run it in the foreground with Node.js 24 or 26, bounded by your command timeout; it uses the current `gh` credential and needs no install. Exit zero confirms the validator approved that revision by your account; a nonzero exit explains the refusal or rejection. Review a changed revision again before retrying. For a parent it waits for the latest child link and reapplies readiness when needed.
+   The command applies `state:ready`. Omit the model label when the installed rules ask for none. Additional companion labels, such as `factory:skip`, follow the revision; `--repo owner/name` selects another repository. Run it in the foreground with Node.js 24 or 26, bounded by your command timeout; it uses the current `gh` credential and needs no install. Exit zero confirms the validator approved that revision by your account; a nonzero exit explains the refusal or rejection. Review a changed revision again before retrying. For a parent it waits for the latest child link and reapplies readiness when needed. When the validator already approved the revision without a companion you chose, run the same command: it adds the missing companions and records readiness again.
 
 5. **Record blockers.** Add a native blocker for each issue whose work must land first.
 6. **Tell the owner** what you accepted, with links to each brief, the labels you applied, the blockers you added, and every answer you inferred, so they can veto it.
@@ -151,7 +151,7 @@ When your credentials cannot apply readiness, or the destination's factory workf
 
 1. **Read the revision** in the validator's current notice; without one, stop as [Accept a brief that holds](#accept-a-brief-that-holds) step 1 says. If this session published it, refuse: post nothing, and report that another session must review it.
 2. **Review it** as the [code-bound path](#code-bound-path)'s step 2 says, or the [intent-bound path](#intent-bound-path)'s step 6 for a direct contract, running each read-only check of live facts the contract names.
-3. **Post one verdict comment**: `**Verdict:**` holds or does not hold, `**Revision:**` the exact `sha256:` reviewed, and `**Findings:**`, one bullet each with its evidence, live checks' results included. A failing verdict is the writer's correction list.
+3. **Post one verdict comment**: `**Verdict:**` holds or does not hold, `**Revision:**` the exact `sha256:` reviewed, and `**Findings:**`, one bullet each with its evidence, live checks' results included. Start it with the triage disclaimer, as `.repo-standards/rules/comments.md#disclaimers` says. A failing verdict is the writer's correction list.
 4. **Accept** a holding revision as [Accept a brief that holds](#accept-a-brief-that-holds) says.
 
 ## Factory triage run
@@ -160,11 +160,17 @@ The factory starts this run for one issue, read-only, and the installed factory 
 
 1. **Gather context** as [Triage a specific issue or PR](#triage-a-specific-issue-or-pr) step 1 says, and run its two checks first, yourself. Read the repository's ADRs, its glossary, and the issues the request links, with their decisions: the records the Triage run section lets you cite.
 2. **Sort** the request as [Sort by uncertainty](#sort-by-uncertainty) says. Answer each intent question the inference test lets you answer from those records, and list it with the record and its date under **Inferred intent** in the triage notes.
-3. **Choose the outcome** the Triage run section names, with the labels it lists, and write its body:
+3. **Choose the outcome** the Triage run section names, with the labels it lists, and write its body. A stop's body names the exact next state that answers it, as Questions and stops says:
    - `state:ready`: write the Agent Brief and its triage notes as [AGENT-BRIEF.md](AGENT-BRIEF.md) says, review them as the [code-bound path](#code-bound-path)'s step 2 says, and correct them until they hold. Choose the `model:` label under the installed Model selection rule, within the host capabilities the factory supplies, and record its reason in the triage notes.
    - `state:reporter`: the [reporter template](#reporter-template).
    - `state:owner`: the question and what you found.
    - `state:grill`: the facts gathered (current behavior, constraints, the records you read, the options and what each would cost) and the open questions, numbered.
+   - `state:carried`: the carrier the Triage run section names, linked, and how it settles the request.
+
+   A directly authored specification or implementation ticket, an issue-body contract with no category label, takes this branch instead: write no Agent Brief and ask for no `type:` label in any outcome. Read the revision in the validator's current notice; without one, stop in `state:owner` and say the notice is missing, as [Accept mode](#accept-mode)'s step 1 does, naming `state:triage` for when it arrives. Otherwise review that revision as Accept mode's step 2 says for a direct contract, and stop:
+   - **The body holds**: `state:owner`, naming `state:ready` at the exact `sha256:` revision you reviewed, with the companion labels readiness needs: one `model:` label you choose under the installed Model selection rule, with its reason, any `factory:skip` Skipped work requires, and a `priority:` label. Record your findings, one bullet each with its evidence.
+   - **The body needs correction**: `state:owner`, naming each correction, which a separate writer makes before the issue returns to `state:triage`, as the contribution guide's Owner questions section says.
+   - **An open intent question**: `state:grill`, as above.
 4. **Write the run result** to the path the factory gives, in the format its run-result interface defines: the state and labels you ask for, and the body, with no disclaimer, as `.repo-standards/rules/comments.md#disclaimers` says. When you cannot finish, write a failed result with the reason.
 5. **Write nothing else**, as the Triage run section says, even where a credential would allow it: a reproduction stays in your sandbox, and `ready.mjs` never runs.
 
@@ -184,7 +190,7 @@ Every question reaches you first, whoever raises it: a research run, a grill, or
 - **An answer you can give**, from code, logs, or a reproduction, or under the inference test: post it on the issue as `.repo-standards/rules/comments.md#disclaimers` says.
 - **A fact only an outside reporter holds**: ask them with the reporter template below, and move the issue to `state:reporter`.
 - **An owner-only question**: put it in your decision inbox with your recommendation, and move the issue to the state the guide names.
-- **An agent's question to the owner**, posted as `.repo-standards/rules/comments.md#owner-questions` says: read it first. When you can answer it, answer on the issue, and return the issue to the state the installed rules name for an answered question, such as `state:ready` through [Apply and confirm readiness](#accept-a-brief-that-holds). Otherwise put it in your decision inbox.
+- **An agent's question to the owner**, posted as `.repo-standards/rules/comments.md#owner-questions` says: read it first. When you can answer it, answer on the issue, and apply the next state the stop names, as the installed Questions and stops rule says, such as `state:ready` through [Apply and confirm readiness](#accept-a-brief-that-holds). Otherwise put it in your decision inbox.
 
 When an answer changes the implementation contract, follow the contribution guide's Owner questions section: a separate writer edits it.
 
