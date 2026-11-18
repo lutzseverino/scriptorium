@@ -8,7 +8,7 @@ export const terminalResultsUsage =
   "node src/main.ts results --author <trusted publishing account>";
 
 type Ports = {
-  read(): string;
+  read(): Promise<string>;
   print(line: string): void;
   error(line: string): void;
 };
@@ -16,7 +16,10 @@ type Ports = {
 const login = (value: string) =>
   value.toLowerCase().replace(/^app\/(.+)$/, "$1[bot]");
 
-export function terminalResults(args: string[], ports: Ports): number {
+export async function terminalResults(
+  args: string[],
+  ports: Ports,
+): Promise<number> {
   if (
     args.length !== 2 ||
     args[0] !== "--author" ||
@@ -30,7 +33,7 @@ export function terminalResults(args: string[], ports: Ports): number {
   try {
     let comments: unknown;
     try {
-      comments = JSON.parse(ports.read());
+      comments = JSON.parse(await ports.read());
     } catch {
       throw new Error(
         "Could not read a JSON comment array from standard input",

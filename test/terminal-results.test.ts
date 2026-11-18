@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import type { Comment, IssueTracker } from "@lutzseverino/postern";
 import { issueComments } from "../src/run-comment.ts";
@@ -181,6 +181,66 @@ test("trust comes from the supplied author, never result text or bot marking", (
   assert.deepEqual(JSON.parse(trusted.stdout).results, [
     { run: "first-run", outcome: "stop" },
   ]);
+});
+
+test("a piped observation larger than a pipe buffer arrives complete", () => {
+  const runs = Array.from(
+    { length: 2000 },
+    (_, index) => `run-${String(index).padStart(4, "0")}-${"a".repeat(200)}`,
+  );
+  const observed = command(
+    runs.map((id) => ({
+      author: { login: "factory[bot]" },
+      body: resultPost(
+        { outcome: "done", body: "Delivered." },
+        { ...facts, id },
+        configuration,
+      ).comment,
+    })),
+  );
+  assert.equal(observed.status, 0, observed.stderr);
+  assert.ok(observed.stdout.length > 65_536);
+  assert.deepEqual(
+    JSON.parse(observed.stdout).results.map(
+      (result: { run: string }) => result.run,
+    ),
+    runs,
+  );
+});
+
+test("a reader that writes comments later through a pipe is still observed", async () => {
+  const child = spawn(
+    process.execPath,
+    ["src/main.ts", "results", "--author", "factory[bot]"],
+    {
+      cwd: new URL("..", import.meta.url),
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+  const exited = new Promise<number | null>((resolve) =>
+    child.on("close", resolve),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  child.stdin.end(
+    JSON.stringify([
+      {
+        author: { login: "factory[bot]" },
+        body: resultPost(
+          { outcome: "done", body: "Delivered." },
+          facts,
+          configuration,
+        ).comment,
+      },
+    ]),
+  );
+  assert.equal(await exited, 0, stderr);
+  assert.deepEqual(JSON.parse(stdout), {
+    version: 1,
+    results: [{ run: "first-run", outcome: "done" }],
+  });
 });
 
 test("invalid input and conflicting outcomes fail without a successful observation", () => {

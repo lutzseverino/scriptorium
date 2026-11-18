@@ -5,7 +5,6 @@
 // operational observations without serving repositories. `results --author
 // <account>` reads terminal result facts from tracker comments on stdin.
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -21,14 +20,26 @@ import { status, statusUsage } from "./status-command.ts";
 import { terminalResults, terminalResultsUsage } from "./terminal-results.ts";
 import { buildSandboxImage, docker, stopSandboxes } from "./sandbox-image.ts";
 
-if (process.argv[2] === "results")
-  process.exit(
-    terminalResults(process.argv.slice(3), {
-      read: () => readFileSync(0, "utf8"),
-      print: (line) => console.log(line),
-      error: (line) => console.error(line),
-    }),
+// Comments may arrive later or exceed a pipe buffer, and exiting drops
+// unwritten pipe output, so read all input and flush the observation first.
+if (process.argv[2] === "results") {
+  let output = "";
+  const code = await terminalResults(process.argv.slice(3), {
+    async read() {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks).toString("utf8");
+    },
+    print: (line) => (output += `${line}\n`),
+    error: (line) => console.error(line),
+  });
+  await new Promise<void>((resolve, reject) =>
+    process.stdout.write(output, (error) =>
+      error ? reject(error) : resolve(),
+    ),
   );
+  process.exit(code);
+}
 
 if (process.argv[2] === "status")
   process.exit(
