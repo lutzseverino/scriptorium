@@ -5,8 +5,8 @@
 // arrive through Postern; the same reader serves publication and admission.
 // Repo Canon installs JavaScript without TypeScript declarations.
 // prettier-ignore
-// @ts-expect-error The installed reader owns v3 validation.
-import { issueContractResult, seamsResultFormat } from "../vendor/repo-canon/validate-issue-contract.mjs";
+// @ts-expect-error The installed reader owns v3 and v4 validation.
+import { issueContractResult, reviewResultFormat, seamsResultFormat } from "../vendor/repo-canon/validate-issue-contract.mjs";
 import type {
   Comment,
   LabelChange,
@@ -47,7 +47,7 @@ import { isFactoryComment } from "./run-comment.ts";
 import { silentWaitMilliseconds, silentWaitMinutes } from "./wait.ts";
 
 // The legacy result format; bodyResultFormat names the supported v2 wire.
-// V3 is validated by Canon, then read under its base format below.
+// V3 and v4 are validated by Canon, then read under their base format below.
 // Any other format, including a line without one, holds the issue.
 export const resultFormat = "repo-canon/issue-contract-state/v1";
 
@@ -435,7 +435,7 @@ export function contractResultHold(
     return unreadable;
   if (result.format !== resultFormat && result.format !== bodyResultFormat)
     return refuse(
-      `the latest contract result from ${author} has ${typeof result.format === "string" ? `format ${result.format}` : "no format version"}, and this factory reads only ${resultFormat}, ${bodyResultFormat} and ${seamsResultFormat}`,
+      `the latest contract result from ${author} has ${typeof result.format === "string" ? `format ${result.format}` : "no format version"}, and this factory reads only ${resultFormat}, ${bodyResultFormat}, ${seamsResultFormat} and ${reviewResultFormat}`,
       "update the factory or the repository's issue-contract validator so they share a result format",
     );
 
@@ -621,8 +621,9 @@ export function missingReadinessHold(
 // Whether the factory's triage run applied the ready label for the brief the
 // validator approved: the label's latest event is by the configured triage
 // result's author, and the validator's latest result names as its contract
-// source a comment by that author with exactly one line naming its run.
-// Approval and freshness stay `contractResultHold`'s.
+// source a comment by that author with exactly one line naming its run, or,
+// for a direct contract, names that author's review attestation of the
+// approved revision. Approval and freshness stay `contractResultHold`'s.
 export function triageBacked(
   facts: ContractFacts,
   configuration: PlatformConventions,
@@ -637,11 +638,30 @@ export function triageBacked(
   const posted = latestResult(facts.comments, configuration.contractResult);
   let source;
   let result;
+  let review;
   try {
     result = posted && readResult(posted, facts.comments);
     source = result?.source;
+    review = posted && postedReview(posted, facts.comments);
   } catch {
     return false;
+  }
+  // A direct contract's readiness, backed by the factory's review attestation
+  // of the approved revision, which the validator observed unedited.
+  if (review) {
+    if (contractResultHold(facts, configuration) !== null) return false;
+    const attestation = facts.comments.find(
+      (c) => String(c.id) === review.attestation.id,
+    );
+    return Boolean(
+      review.refusal === null &&
+      review.run &&
+      review.revision === result.revision &&
+      attestation &&
+      by(attestation.author?.login) &&
+      digest(attestation.body) === review.attestation.revision &&
+      markedRun(attestation.body, marker) === review.run,
+    );
   }
   if (result?.format === bodyResultFormat) {
     if (
@@ -728,23 +748,95 @@ function latestResult(
   return latest;
 }
 
-// Keep comment selection repository-owned. Only Canon validates the v3 wrapper;
-// its selected comment and state must be the ones our configuration selected.
-// Normalize the validated wrapper so every caller applies the existing base
-// checks to the top-level decision, never to the historical exemption.
+// Keep comment selection repository-owned. Only Canon validates the v3 and v4
+// wrappers; its selected comment and state must be the ones our configuration
+// selected. Normalize a validated wrapper so every caller applies the existing
+// base checks to the top-level decision, never to the historical exemption or
+// the review attestation, which `postedReview` reads.
 function readResult(
   posted: { comment: Comment; line: string },
   comments: Comment[],
 ) {
   const result = JSON.parse(posted.line);
-  if (result?.format !== seamsResultFormat) return result;
+  const state = wrappedState(posted, comments, result);
+  if (!state) return result;
+  const { baseFormat, seamsExemption: _, factoryReview: __, ...base } = state;
+  return { ...base, format: baseFormat };
+}
+
+// A v3 or v4 result as Canon's installed reader validates it, or null for any
+// other format.
+function wrappedState(
+  posted: { comment: Comment; line: string },
+  comments: Comment[],
+  result: { format?: unknown } | null,
+) {
+  if (![seamsResultFormat, reviewResultFormat].includes(result?.format))
+    return null;
   const { comment, state } = issueContractResult(comments);
   if (
     comment !== posted.comment ||
-    state?.format !== seamsResultFormat ||
+    state?.format !== result!.format ||
     !same(state, result)
   )
-    throw new Error("The configured v3 validator result is unreadable");
-  const { baseFormat, seamsExemption: _, ...base } = state;
-  return { ...base, format: baseFormat };
+    throw new Error(
+      `The configured ${result!.format} validator result is unreadable`,
+    );
+  return state;
+}
+
+// The factory review attestation a v4 result names, as Canon validated it.
+export type FactoryReview = {
+  run: string | null;
+  revision: string | null;
+  attestation: {
+    id: string;
+    revision: string;
+    edit: { id: string; editedAt: string | null } | null;
+  };
+  refusal: string | null;
+  publishedAt: string | null;
+};
+
+// The review attestation the posted result names, or null when it is not v4.
+function postedReview(
+  posted: { comment: Comment; line: string },
+  comments: Comment[],
+): FactoryReview | null {
+  const state = wrappedState(posted, comments, JSON.parse(posted.line));
+  return state?.format === reviewResultFormat ? state.factoryReview : null;
+}
+
+// The validator's latest notice, for accepting an existing revision: its
+// comment, its base decision and the review attestation it names. Null
+// without a notice; an unreadable or unknown one holds.
+export function acceptanceNotice(
+  comments: Comment[],
+  configuration: PlatformConventions,
+): {
+  comment: Comment;
+  result: Record<string, unknown>;
+  review: FactoryReview | null;
+} | null {
+  const posted = latestResult(comments, configuration.contractResult);
+  if (!posted) return null;
+  let result;
+  let review;
+  try {
+    result = readResult(posted, comments);
+    review = postedReview(posted, comments);
+  } catch {
+    return hold("The configured validator's notice is unreadable");
+  }
+  if (
+    !record(result) ||
+    !(
+      result.format === resultFormat ||
+      (result.format === bodyResultFormat && validBodyResult(result))
+    )
+  )
+    return hold(
+      `Acceptance reads only ${resultFormat}, ${bodyResultFormat}, ${seamsResultFormat} and ${reviewResultFormat} validator results; update the factory or the repository's issue-contract validator so they share a result format`,
+    );
+  return { comment: posted.comment, result, review };
 }

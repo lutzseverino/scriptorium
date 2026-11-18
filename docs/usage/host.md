@@ -698,11 +698,14 @@ from the issue's `Parent` and `Blocked by` sections, which the factory names.
   [configured](factory-configuration.md#contract-result) trusted author that
   carries a line `<!-- <marker> {…} -->` under the configured marker, and
   parses that line's JSON object. It reads formats
-  `repo-canon/issue-contract-state/v1`, `repo-canon/issue-contract-state/v2` and
-  `repo-canon/issue-contract-state/v3`. Repo Canon's installed reader validates
-  a v3 Seams exemption wrapper, then the factory applies every check of its
-  v1 or v2 base to the top-level decision. The historical exemption grants no
-  readiness. V2, including v3 with a v2 base, also requires the current body
+  `repo-canon/issue-contract-state/v1`, `repo-canon/issue-contract-state/v2`,
+  `repo-canon/issue-contract-state/v3` and `repo-canon/issue-contract-state/v4`.
+  Repo Canon's installed reader validates a v3 Seams exemption or v4 factory
+  review wrapper, then the factory applies every check of its v1 or v2 base to
+  the top-level decision. The historical exemption grants no readiness; a v4
+  review attestation backs only factory-triage readiness on a direct contract,
+  as [triage readiness](factory-configuration.md#triage-readiness) says. V2,
+  including a wrapper with a v2 base, also requires the current body
   mode/cutoff, exact observation, selected body edit or eligible legacy source,
   and verified factory association for factory-triage readiness; stale
   observations wait for reevaluation. V1 follows the result
@@ -869,13 +872,14 @@ and separate from the read-only token directory, and the factory reads the file
 when the agent exits, before it removes the directory. The run's prompt states
 the interface for its kind and repository. The object holds only these fields:
 
-| Field     | Meaning                                                                                                                                                                                                                                                                                                   |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `outcome` | `done`, `stop` or `failed`.                                                                                                                                                                                                                                                                               |
-| `state`   | For a triage run that is done, the ready label. For a stop, the label of whoever must answer: version 2's needs-input label, or a configured reporter, grill or owner state; or, for a triage run, the configured carried state, which asks nobody. No other result has one.                              |
-| `labels`  | Optional other labels to apply, each in a family [`runKinds.<kind>.resultLabels`](factory-configuration.md#run-results) lists. A label a role gives factory mechanics, such as running, failed, a stop, a gate or readiness, is refused; `skip` and the priority roles are not. A failed result has none. |
-| `body`    | Markdown the factory posts on the issue, without a disclaimer, at most 60,000 characters.                                                                                                                                                                                                                 |
-| `reason`  | One line of at most 300 characters on why the run ended; required when it failed.                                                                                                                                                                                                                         |
+| Field      | Meaning                                                                                                                                                                                                                                                                                                   |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outcome`  | `done`, `stop` or `failed`.                                                                                                                                                                                                                                                                               |
+| `state`    | For a triage run that is done, the ready label. For a stop, the label of whoever must answer: version 2's needs-input label, or a configured reporter, grill or owner state; or, for a triage run, the configured carried state, which asks nobody. No other result has one.                              |
+| `labels`   | Optional other labels to apply, each in a family [`runKinds.<kind>.resultLabels`](factory-configuration.md#run-results) lists. A label a role gives factory mechanics, such as running, failed, a stop, a gate or readiness, is refused; `skip` and the priority roles are not. A failed result has none. |
+| `body`     | Markdown the factory posts on the issue, without a disclaimer, at most 60,000 characters.                                                                                                                                                                                                                 |
+| `reason`   | One line of at most 300 characters on why the run ended; required when it failed.                                                                                                                                                                                                                         |
+| `revision` | For a triage run that is done, the exact `sha256:` revision of a directly authored specification or implementation ticket it reviewed and accepts, instead of a brief; its `body` is the review's notes. No other result has one.                                                                         |
 
 After the agent exits, the factory, not the agent, posts the body in its frame:
 the configured disclaimer (the triage variant for a triage run), the body, a
@@ -914,6 +918,12 @@ outcome and reason, or why it was invalid, when the agent exits. The run's
 [completion signal](#foreground-execution-and-incomplete-runs) remains separate
 loop control. The posted result's body also becomes the
 [run comment](#run-comments)'s latest result, and its phase's line links it.
+
+A done triage result with a `revision` accepts that existing contract revision
+through Repo Canon's factory review attestation, as
+[body-backed triage contracts](body-contracts.md#accepting-a-direct-contract)
+describes. When the repository's installed issue-contract module has no review
+attestation, the result is invalid with that reason, and nothing is posted.
 
 ## Run comments
 

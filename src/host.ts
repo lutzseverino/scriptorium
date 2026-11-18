@@ -787,10 +787,10 @@ export function createHost(
               } else if (error instanceof ContractPublicationStop) {
                 link = undefined;
                 // The retained done result ends as a stop in the triage state,
-                // which releases its claim without readiness.
+                // which releases its claim without readiness or acceptance.
                 const state = run.configuration.labels.triage!;
                 const reason = `Publication stopped: ${error.message}`;
-                const { labels: _, ...done } = run.result;
+                const { labels: _, revision: __, ...done } = run.result;
                 run.withdrawnResultId = terminalIdentity(run);
                 run.resultId = randomUUID();
                 run.result = { ...done, outcome: "stop", state, reason };

@@ -267,7 +267,7 @@ test("body factory authorization checks referenced facts even under a fresh obse
     [
       "unknown format",
       (s) => {
-        s.state.format = "repo-canon/issue-contract-state/v4";
+        s.state.format = "repo-canon/issue-contract-state/v5";
       },
     ],
     [
@@ -513,7 +513,7 @@ test("malformed v3 wrappers and invalid base fields refuse as unreadable", () =>
     [
       "unknown base",
       (s) => {
-        s.baseFormat = "repo-canon/issue-contract-state/v4";
+        s.baseFormat = "repo-canon/issue-contract-state/v5";
       },
     ],
     [

@@ -4,7 +4,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 
 // The package's boundary with Repo Canon and the hosting platform: it imports
-// Node.js, Sandcastle, Postern and Canon's installed result reader. The
+// Node.js, Sandcastle, Postern, Canon's installed result reader and its
+// installed review attestation. The
 // factory decides readiness without reading an issue's body or parsing Markdown.
 const source = resolve(import.meta.dirname, "../src");
 
@@ -20,6 +21,8 @@ test("the package's modules import only each other and their declared runtime bo
       const where = `${relative(source, file)} imports ${specifier}`;
       if (specifier === "../vendor/repo-canon/validate-issue-contract.mjs")
         assert.equal(relative(source, file), "contract-result.ts", where);
+      else if (specifier === "../scripts/issue-contract-sources.mjs")
+        assert.equal(relative(source, file), "review-attestation.ts", where);
       else if (specifier.startsWith("."))
         assert.ok(
           !relative(source, resolve(dirname(file), specifier)).startsWith(".."),

@@ -1,7 +1,8 @@
 # Body-backed triage contracts
 
 Scriptorium's bridge reads Repo Canon's public v1 and v2 contract decisions,
-including v3 Seams exemption wrappers under their base format's rules.
+including v3 Seams exemption and v4 factory review wrappers under their base
+format's rules.
 Installing the bridge does not activate body publication. The repository's
 trusted default-branch `.github/issue-contracts.json` and immutable cutoff
 receipt select publication mode; no label, app author, timestamp or body marker
@@ -61,6 +62,52 @@ A prepared result recovered after cutoff holds for fresh body triage and never
 posts a new legacy contract. Stop/failed results retain their framed comment
 and state behavior and never replace a contract body.
 
+## Accepting a direct contract
+
+A directly authored specification or implementation ticket carries its
+contract in the issue body, so triage writes no brief for it. A triage run that
+reviewed one and did not write it can accept the exact revision it reviewed: its
+[run result](host.md#run-results) is done, asks for the ready state and its
+companion labels, names that `sha256:` revision in `revision`, and carries the
+review's notes as its body. The route is the same in prepared and body mode.
+
+1. The host reads the validator's current notice. When it names another
+   revision, a source other than the issue body, or a body edit older than the
+   issue's last one, the body changed after the review: the run stops, as
+   below, and posts nothing.
+2. The host builds Repo Canon's factory review attestation with the function
+   the repository's installed issue-contract module exposes, from the
+   repository, the issue, the run, the revision and the notice's body source.
+   It restates no Canon format. It posts the attestation once, as
+   `triageResult.author`, inside the result's frame with its run marker, and
+   never edits it.
+3. It waits for a notice evaluated in a later second than the attestation.
+   An earlier notice keeps it waiting.
+4. When that notice names the attested revision and body source, with a review
+   attestation of that comment and no refusal, the host applies the requested
+   labels and then the ready state, in a later second than the notice first
+   naming the attestation, and the run settles. Admission then needs the
+   validator's v4 approval of that ready-label event, as
+   [triage readiness](factory-configuration.md#triage-readiness) says.
+
+When the notice evaluated after the attestation names another revision, or the
+body changed before it, the host applies no readiness. The done result becomes
+a stop that releases the claim and names the triage state (`labels.triage`),
+which the issue keeps or regains, so triage reviews the new revision. A notice
+for the attested revision whose status grants no review, that names no
+attestation of the posted comment, or that refuses it holds visibly with the
+notice linked; a later notice naming the attestation publishes the retained
+result. A deleted or edited attestation holds without posting a second one.
+
+The host reads only the published state line: its revision, source, status,
+evaluation time and review attestation. Checkpoints save the accepted revision
+and source before the attestation and the readiness request once it is written.
+A restart recovers the posted attestation by its saved identity and an applied
+ready event from the label's history, without a second attestation or readiness
+event. When
+the repository's installed module has no review attestation, the result is
+refused as invalid with that reason, and nothing is posted.
+
 ## Rollout and recovery
 
 Before rollout, satisfy the bridge binary's normal startup prerequisites:
@@ -97,10 +144,11 @@ keep publication frozen, install the bridge and reevaluate; do not bypass
 readiness or roll back the recorded cutoff. A bridge with an old/prepared v1
 validator retains legacy publication/pickup. A body-mode repository reporting
 v1 must repair its compatible validator before continuing. A v3 Seams exemption
-result follows its v1 or v2 base's publication, readiness, freshness and
-factory-proof rules. Repo Canon's installed
-reader validates the wrapper; its historical exemption never authorizes
-readiness. Unknown formats continue to hold.
+or v4 factory review result follows its v1 or v2 base's publication, readiness,
+freshness and factory-proof rules. Repo Canon's installed
+reader validates the wrapper; a historical exemption never authorizes
+readiness, and a review attestation backs only the factory's readiness on a
+direct contract. Unknown formats continue to hold.
 
 If a self-hosted delivery lane cannot operate in an intermediate state, keep
 its publication hold and arrange an authorized manual source/release delivery
