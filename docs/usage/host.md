@@ -2030,9 +2030,10 @@ health.overdueRuns               null while the observation is unavailable; othe
   never by the host's clone path.
 - **Last publication and settlement.** `lastPublication` is the last run result
   whose publication completed after its required report write succeeded,
-  including a triage brief's publication or publication stop. The host retains
-  `resultLink` once the standalone result comment and labels land, so a report
-  retry does not post them again. `lastSettlement` is the last run the host stopped holding,
+  including a triage brief's publication or publication stop. Once the
+  standalone result comment and labels land, the host keeps that comment's link
+  in its run record, so a report retry does not post them again.
+  `lastSettlement` is the last run the host stopped holding,
   including an attempt it retires to launch the next. The host keeps both, and
   `failingSince`, in the status file it writes, and takes them from there when
   it starts, so they survive a [restart](#restarts). A status file written by
