@@ -115,7 +115,7 @@ export function readinessExclusions(
               "whose readiness waits: its facts could not be read this pass",
             waiting: true,
           }
-        : parentHold(parent, repository.policy, issue.nativeParent);
+        : parentHold(parent, repository.policy, path);
     if (held)
       holds.push({
         ...held,
@@ -247,13 +247,19 @@ export function actorRefusal(
 
 // A parent's readiness releases its sub-issues while it counts, every link
 // since readiness is authorized, and no open blocker holds the parent. Without
-// complete link history, readiness must follow the latest link time.
+// complete link history, readiness must follow the latest link time. A
+// parent in another repository qualifies that repository's own numbers.
 function parentHold(
   parent: Issue,
   policy: Policy,
-  name = reference(parent.number),
+  repository?: string,
 ): (ReadinessHold & { blocked?: true }) | null {
   const { ready } = policy;
+  const qualified = (id: IssueId) =>
+    repository && typeof id === "number"
+      ? `${repository}#${id}`
+      : reference(id);
+  const name = qualified(parent.number);
   if (!parent.labels.includes(ready))
     return {
       reason: `which is not ready; apply ${ready} to ${name} once its tickets are published`,
@@ -275,7 +281,7 @@ function parentHold(
         addition.actor,
         policy,
         {
-          subject: `ticket${addition.ticket === null ? "" : ` ${reference(addition.ticket)}`}`,
+          subject: `ticket${addition.ticket === null ? "" : ` ${qualified(addition.ticket)}`}`,
           action: "linked",
         },
         ` on ${name}`,
@@ -285,7 +291,7 @@ function parentHold(
     }
   } else if (link && Date.parse(parent.ready!.at) <= Date.parse(link.at))
     return {
-      reason: `whose readiness predates its latest ticket${link.ticket === null ? "" : ` ${reference(link.ticket)}`}; remove and re-apply ${ready} on ${name} once its tickets are published`,
+      reason: `whose readiness predates its latest ticket${link.ticket === null ? "" : ` ${qualified(link.ticket)}`}; remove and re-apply ${ready} on ${name} once its tickets are published`,
       waiting: false,
     };
   const blockers = parent.blockedBy.filter(
@@ -293,7 +299,7 @@ function parentHold(
   );
   if (blockers.length > 0)
     return {
-      reason: `which is blocked by ${references(blockers)}; it waits until ${name}'s blockers close`,
+      reason: `which is blocked by ${blockers.map(({ number }) => qualified(number)).join(", ")}; it waits until ${name}'s blockers close`,
       waiting: false,
       blocked: true,
     };

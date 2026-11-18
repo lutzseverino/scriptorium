@@ -991,6 +991,16 @@ test("cross-repository parent refusals use its repository's authorization, valid
       false,
     ],
     [
+      { linkAdditions: [{ ticket: 8, at: released, actor: owner }] },
+      /ticket acme\/gadgets#8 was linked.*on acme\/gadgets#3/,
+      false,
+    ],
+    [
+      { latestLink: { ticket: 8, at: released } },
+      /predates its latest ticket acme\/gadgets#8; .* on acme\/gadgets#3/,
+      false,
+    ],
+    [
       {
         ready: { at: released, actor: { kind: "unreadable", login: "owner" } },
       },
@@ -999,7 +1009,7 @@ test("cross-repository parent refusals use its repository's authorization, valid
     ],
     [
       { blockedBy: [{ number: 9, state: "open" }] },
-      /blocked by #9; it waits until acme\/gadgets#3's blockers close/,
+      /blocked by acme\/gadgets#9; it waits until acme\/gadgets#3's blockers close/,
       false,
     ],
   ];
