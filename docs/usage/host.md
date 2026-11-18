@@ -895,6 +895,17 @@ cannot open an HTML comment and forge the factory's or the validator's marker.
 Pull request comments and review-thread replies during a run stay the agent's
 own.
 
+A multi-line or over-long string reason is normalized instead of rejecting the
+result: each line break becomes one space (CRLF counts as one), surrounding
+whitespace is trimmed, and text over 300 characters is cut with a trailing `…`
+within that limit, without splitting a UTF-16 surrogate pair. Trailing periods
+are then removed and HTML comments contained as usual. A non-text or blank
+reason, or a failed result without a reason, still fails validation, as do all
+other result defects. When a reason needs normalization, the process log keeps
+the full original beside the kept reason, with line breaks escaped to keep the
+entry on one line. Only the normalized reason is used in posted comments and
+other run records.
+
 A missing or invalid result fails a run that exited by itself, with the reason,
 whatever its pull request shows, and the factory posts and applies nothing it
 asked for. A failed result fails the run with its own reason. Either retries as

@@ -49,8 +49,10 @@ export function parseTerminalResult(value: unknown): TerminalResult {
   return { run: result.run, outcome: result.outcome };
 }
 
-// A result the host could not accept, which fails a normally exited run.
-export type ReadResult = RunResult | { invalid: string };
+// The reader gives the host an original reason for its process log only;
+// an invalid result fails a normally exited run.
+export type ReadResult =
+  (RunResult & { originalReason?: string }) | { invalid: string };
 
 // Where the agent writes its result: a writable directory the host mounts
 // into the sandbox, beside the read-only token directory.
@@ -176,16 +178,20 @@ export function parseRunResult(
   if (cleanedBody.trim() === "") return invalid("has no body");
   if (cleanedBody.length > bodyLimit)
     return invalid(`has a body over ${bodyLimit} characters`);
-  if (
-    reason !== undefined &&
-    (typeof reason !== "string" ||
-      reason.trim() === "" ||
-      /[\r\n]/.test(reason) ||
-      reason.length > reasonLimit)
-  )
-    return invalid(
-      `has a reason that is not one line of at most ${reasonLimit} characters`,
-    );
+  if (reason !== undefined && typeof reason !== "string")
+    return invalid("has a reason that is not text");
+  let keptReason = reason?.replace(/\r\n|[\r\n]/g, " ").trim();
+  if (keptReason === "") return invalid("has an empty reason");
+  if (keptReason !== undefined && keptReason.length > reasonLimit) {
+    let end = reasonLimit - 1;
+    // Leave the ellipsis within the limit without bisecting a surrogate pair.
+    if (
+      /[\uD800-\uDBFF]/.test(keptReason[end - 1]) &&
+      /[\uDC00-\uDFFF]/.test(keptReason[end])
+    )
+      end--;
+    keptReason = keptReason.slice(0, end) + "…";
+  }
   if (outcome === "failed" && reason === undefined)
     return invalid("fails without a reason");
   const states =
@@ -235,9 +241,14 @@ export function parseRunResult(
     ...(state !== undefined && { state }),
     ...(labels.length && { labels }),
     body: cleanedBody,
-    ...(reason !== undefined && {
-      reason: contain(reason.trim().replace(/\.+$/, "")),
+    ...(keptReason !== undefined && {
+      reason: contain(keptReason.replace(/\.+$/, "")),
     }),
+    // Reader metadata for the process log only, never an agent-written field.
+    ...(reason !== undefined &&
+      (/[\r\n]/.test(reason) || reason.length > reasonLimit) && {
+        originalReason: reason,
+      }),
   };
 }
 
@@ -397,7 +408,7 @@ export function resultGuidance(
       ? `"labels" lists any other labels to apply, each starting with ${families.join(", ")}.`
       : `Ask for no other labels.`,
     `"body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: ${kind === "triage" ? "the complete Agent Brief with its seven required fields, applicable Seams and triage notes, or the question that stops it. Do not include Original request: the host preserves the authenticated original separately" : "what the run delivered, or the question or stop note"}.`,
-    `"reason" is one line on why the run ended, required when it failed.`,
+    `"reason" is one line of at most ${reasonLimit} characters on why the run ended, required when it failed.`,
     "The factory posts the body and applies those labels; do not post that comment or apply those labels yourself. Comments on pull requests and review-thread replies stay yours to post.",
   ].join(" ");
 }

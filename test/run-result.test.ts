@@ -308,6 +308,79 @@ test("citation-only bodies are empty and the body limit measures the cleaned, co
   );
 });
 
+test("long and multiline reasons keep a publishable result and give the host the original", () => {
+  const result = {
+    outcome: "stop",
+    state: "state:owner",
+    labels: ["type:bug"],
+    body: "Which recovery?",
+  };
+  for (const [reason, kept] of [
+    ["x".repeat(301), "x".repeat(299) + "…"],
+    ["two\nlines", "two lines"],
+    ["a\r\nb", "a b"],
+    ["a\rb", "a b"],
+    [" \r\na\nb. \t", "a b"],
+    ["x".repeat(298) + "😀x", "x".repeat(298) + "…"],
+    ["x".repeat(297) + "😀xx", "x".repeat(297) + "😀…"],
+    ["a\n<!-- marker.", "a &lt;!-- marker"],
+  ]) {
+    const accepted = parse({ ...result, reason });
+    assert.deepEqual(accepted, {
+      ...result,
+      reason: kept,
+      originalReason: reason,
+    });
+    assert.ok(kept.isWellFormed());
+  }
+  const reason = "x".repeat(300);
+  assert.deepEqual(parse({ ...result, reason }), { ...result, reason });
+});
+
+test("reason normalization applies to every outcome and kind while other defects still fail", () => {
+  const reason = "two\n" + "x".repeat(301);
+  const kept = "two " + "x".repeat(295) + "…";
+  for (const kind of ["triage", "implement", "review"] as const) {
+    for (const outcome of ["done", "stop", "failed"] as const) {
+      const result = {
+        outcome,
+        ...(outcome === "stop"
+          ? { state: "state:owner" }
+          : outcome === "done" && kind === "triage"
+            ? { state: "state:ready" }
+            : {}),
+        body: "Result.",
+        reason,
+      };
+      assert.deepEqual(parseRunResult(JSON.stringify(result), v3, kind), {
+        ...result,
+        reason: kept,
+        originalReason: reason,
+      });
+    }
+  }
+  const failed = { outcome: "failed", body: "Failure." };
+  for (const reason of [null, 1, false, [], {}])
+    assert.equal(
+      invalid({ ...failed, reason }),
+      "its run result has a reason that is not text",
+    );
+  for (const reason of ["", " \t", "\r\n\r\n"])
+    assert.equal(
+      invalid({ ...failed, reason }),
+      "its run result has an empty reason",
+    );
+  assert.equal(invalid(failed), "its run result fails without a reason");
+  assert.equal(
+    invalid({ ...failed, reason, body: "x".repeat(60_001) }),
+    "its run result has a body over 60000 characters",
+  );
+  assert.equal(
+    invalid({ ...failed, reason, originalReason: "forged" }),
+    "its run result has a field the run-result interface does not name",
+  );
+});
+
 test("model text is contained so it can open no HTML comment and forge no marker", () => {
   const result = parse({
     outcome: "stop",
@@ -336,10 +409,6 @@ test("model text is contained so it can open no HTML comment and forge no marker
       body: "<!--".repeat(15_000),
     }),
     "its run result has a body over 60000 characters",
-  );
-  assert.equal(
-    invalid({ outcome: "failed", reason: "two\nlines", body: "x" }),
-    "its run result has a reason that is not one line of at most 300 characters",
   );
 });
 
@@ -437,7 +506,7 @@ test("result comments and published triage briefs use the reader's cleaned body 
 test("the prompt states the interface each kind's configuration allows", () => {
   assert.equal(
     resultGuidance(v2, "implement"),
-    'Run result: before you end, write your run result to /run/factory/result/result.json as one JSON object. "outcome" is "done", "stop" or "failed". A stop asks for "state", the label of whoever must answer: "factory:needs-input". Ask for no other labels. "body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: what the run delivered, or the question or stop note. "reason" is one line on why the run ended, required when it failed. The factory posts the body and applies those labels; do not post that comment or apply those labels yourself. Comments on pull requests and review-thread replies stay yours to post.',
+    'Run result: before you end, write your run result to /run/factory/result/result.json as one JSON object. "outcome" is "done", "stop" or "failed". A stop asks for "state", the label of whoever must answer: "factory:needs-input". Ask for no other labels. "body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: what the run delivered, or the question or stop note. "reason" is one line of at most 300 characters on why the run ended, required when it failed. The factory posts the body and applies those labels; do not post that comment or apply those labels yourself. Comments on pull requests and review-thread replies stay yours to post.',
   );
   assert.match(
     resultGuidance(v3, "triage"),

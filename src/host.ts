@@ -1499,13 +1499,21 @@ export function createHost(
         // says.
         if (run.pausing) run.ended = { paused: run.pausing };
         else {
-          run.result = readRunResult(
+          const readResult = readRunResult(
             join(sandbox, "result", resultFile),
             run.configuration,
             kind,
           );
+          let originalReason: string | undefined;
+          if ("invalid" in readResult) run.result = readResult;
+          else {
+            // Keep the raw reason out of run records and every public reader.
+            const { originalReason: original, ...result } = readResult;
+            originalReason = original;
+            run.result = result;
+          }
           report(
-            `${repository}#${issue} ${"invalid" in run.result ? `ended without a valid run result: ${run.result.invalid}` : `ended with its run result, ${run.result.outcome}${run.result.reason ? `: ${run.result.reason}` : ""}`}`,
+            `${repository}#${issue} ${"invalid" in run.result ? `ended without a valid run result: ${run.result.invalid}` : `ended with its run result, ${run.result.outcome}${run.result.reason ? `: ${run.result.reason}` : ""}`}${originalReason !== undefined ? `; original reason: ${JSON.stringify(originalReason)}` : ""}`,
           );
           try {
             const limit = registry.providers
