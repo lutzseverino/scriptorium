@@ -33,12 +33,16 @@ if (process.argv[2] === "results") {
     print: (line) => (output += `${line}\n`),
     error: (line) => console.error(line),
   });
-  await new Promise<void>((resolve, reject) =>
-    process.stdout.write(output, (error) =>
-      error ? reject(error) : resolve(),
-    ),
+  // A failed write is reported once here, not as an unhandled stream error.
+  process.stdout.on("error", () => {});
+  const written = await new Promise<boolean>((resolve) =>
+    process.stdout.write(output, (error) => {
+      if (error)
+        console.error(`Could not write the observation: ${error.message}`);
+      resolve(!error);
+    }),
   );
-  process.exit(code);
+  process.exit(written ? code : 1);
 }
 
 if (process.argv[2] === "status")

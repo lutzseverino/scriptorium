@@ -62,7 +62,8 @@ its publication will finish.
 
 Exit status `0` means observation succeeded, including an empty result set;
 `2` means invalid command arguments; `1` means unreadable or invalid input,
-unsupported result data, or conflicting observations. Failures write a
+unsupported result data, conflicting observations or output that could not be
+written. Failures write a
 diagnostic to standard error and no successful JSON. An empty set does not
 prove completion or the absence of a question. In particular, an interrupted
 run or one without an accepted result need not publish a terminal result.

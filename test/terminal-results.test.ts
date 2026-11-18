@@ -214,6 +214,7 @@ test("a reader that writes comments later through a pipe is still observed", asy
     ["src/main.ts", "results", "--author", "factory[bot]"],
     {
       cwd: new URL("..", import.meta.url),
+      timeout: 10_000,
     },
   );
   let stdout = "";
