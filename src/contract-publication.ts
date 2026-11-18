@@ -16,6 +16,7 @@ import {
   commentDeletionIdentity,
   ContractPublicationStop,
   digest,
+  ContractPublicationHold,
   hold,
   ledgerBranch,
   readAttestation,
@@ -32,10 +33,15 @@ import {
   type WriterProof,
 } from "./contract-protocol.ts";
 import {
+  acceptanceNotice,
   currentBodyDecision,
   preparedContractNotice,
   requirePreparedProtocol,
 } from "./contract-result.ts";
+import {
+  reviewAttestation,
+  type ReviewAttestationFacts,
+} from "./review-attestation.ts";
 
 export type Publication = {
   mode: "prepared" | "body";
@@ -51,6 +57,9 @@ export type Publication = {
     url: string;
   };
   evidenceIntent?: { body: string; after: number; deletion: string | null };
+  // The revision and body source an acceptance attests, saved before its
+  // attestation is posted as the evidence.
+  accepted?: Pick<ReviewAttestationFacts, "revision" | "source">;
   readyRequested?: true;
 };
 export type PublicationProgress = {
@@ -90,6 +99,12 @@ export async function publishContract(
     };
     save();
   }
+  if (post.triage.revision !== undefined)
+    return acceptContract(connection, configuration, number, post, {
+      state,
+      save,
+      progress,
+    });
   if (mode.mode === "prepared") {
     const tracker = connection.issueTracker;
     requirePreparedProtocol(await tracker.comments(number), configuration);
@@ -515,6 +530,166 @@ export async function publishContract(
     if ((await tracker.issue(number)).labels.includes(label))
       await tracker.removeLabel(number, label);
   }
+  return state.evidence!.url;
+}
+
+// Accepts the existing revision a triage result reviewed: posts Repo Canon's
+// review attestation of it in the result's frame, waits for the validator's
+// notice evaluated after it, and applies readiness once that notice names
+// the attested revision. A body changed before the attestation, or a notice
+// naming another revision, stops without readiness in the triage state.
+async function acceptContract(
+  connection: ConnectionWithLinkAdditions,
+  configuration: PlatformConventions,
+  number: number,
+  post: ResultPost,
+  {
+    state,
+    save,
+    progress,
+  }: { state: Publication; save: () => void; progress: PublicationProgress },
+): Promise<string | null> {
+  const tracker = connection.issueTracker;
+  const triage = configuration.triageResult;
+  const requested = post.triage!.revision!;
+  const attestation = reviewAttestation();
+  if (!attestation)
+    return hold(
+      "The repository's installed issue-contract module has no review attestation",
+    );
+  if (!triage || !configuration.runKinds?.triage)
+    return hold(
+      "Acceptance requires the configured triage author and run kind",
+    );
+  const stop = async (reason: string): Promise<never> => {
+    // The stop names the triage state, which the issue keeps or regains.
+    const label = configuration.labels.triage;
+    if (label && !(await tracker.issue(number)).labels.includes(label))
+      await tracker.addLabels(number, [label]);
+    throw new ContractPublicationStop(reason);
+  };
+  // The body source a notice names, as an attestation names it.
+  const bodySource = (result: Record<string, unknown>) => {
+    const source = result.source as { type?: unknown; editedAt?: unknown };
+    return source?.type === "issue-body" &&
+      (source.editedAt === null || typeof source.editedAt === "string")
+      ? { type: "issue-body" as const, editedAt: source.editedAt }
+      : null;
+  };
+  if (!state.evidence) {
+    const issue = await tracker.issue(number);
+    const notice = acceptanceNotice(
+      await tracker.comments(number),
+      configuration,
+    );
+    if (!notice) return null;
+    const source = bodySource(notice.result);
+    const editedAt = source?.editedAt ?? null;
+    if (
+      notice.result.revision !== requested ||
+      !source ||
+      (editedAt === null || issue.bodyEditTime === null
+        ? editedAt !== issue.bodyEditTime
+        : Date.parse(editedAt) !== Date.parse(issue.bodyEditTime)) ||
+      (state.accepted && !same(source, state.accepted.source))
+    )
+      return stop(
+        `the body changed after its review: [the configured validator's notice](${notice.comment.url}) or the issue's last edit names another revision than the reviewed ${requested}; publication posts no attestation and requests no readiness`,
+      );
+    if (!state.accepted) {
+      state.accepted = { revision: requested, source };
+      save();
+    }
+    if (!issue.nodeId)
+      return hold("The issue's node ID is unavailable for its attestation");
+    const line = attestation({
+      repository: connection.repository.path,
+      issue: issue.nodeId,
+      run: post.triage!.run,
+      ...state.accepted,
+    });
+    await evidenceComment(
+      connection,
+      number,
+      state,
+      save,
+      `${post.comment.slice(0, -post.marker.length)}${line}\n${post.marker}`,
+      post.marker,
+      triage.author,
+      configuration.contractResult,
+    );
+  }
+  const comments = await tracker.comments(number);
+  const evidence = comments.find((c) => c.id === state.evidence!.id);
+  if (
+    !evidence ||
+    evidence.body !== state.evidence!.body ||
+    !sameLogin(evidence.author?.login, triage.author) ||
+    !same(
+      (await sourceEdits(connection, [evidence.nodeId]))[evidence.nodeId!],
+      state.evidence!.edit,
+    )
+  )
+    return hold(
+      "The review attestation was deleted or edited before readiness; post no second one",
+    );
+  // Only a notice evaluated in a later second than the attestation decides.
+  const notice = acceptanceNotice(comments, configuration);
+  const second = (time: unknown) =>
+    typeof time === "string" ? Math.floor(Date.parse(time) / 1000) : NaN;
+  if (
+    !notice ||
+    !(second(notice.result.evaluatedAt) > second(evidence.createdAt))
+  )
+    return null;
+  const link = `[the configured validator's notice](${notice.comment.url})`;
+  if (
+    notice.result.revision !== state.accepted!.revision ||
+    !same(bodySource(notice.result), state.accepted!.source)
+  )
+    return stop(
+      `${link}, evaluated after the review attestation, names another revision than the attested ${state.accepted!.revision}; publication requests no readiness`,
+    );
+  const status = String(notice.result.status);
+  if (!["awaiting-review", "approved"].includes(status))
+    throw new ContractPublicationHold(
+      `${link} for the attested revision is ${status} and permits no readiness request; a later notice naming the attestation publishes the retained result`,
+    );
+  const review = notice.review;
+  if (review?.attestation.id !== String(evidence.id))
+    throw new ContractPublicationHold(
+      `${link}, evaluated after the review attestation, names no review attestation of it`,
+    );
+  if (review.refusal !== null)
+    throw new ContractPublicationHold(
+      `${link} refuses the review attestation: ${review.refusal}`,
+    );
+  const ready = configuration.labels.ready;
+  if (!state.readyRequested) {
+    // The first notice naming the attestation was published when its comment
+    // was last written; later notices carry that time.
+    const noticedAt = Date.parse(
+      review.publishedAt ?? notice.comment.updatedAt,
+    );
+    if ((await tracker.issue(number)).labels.includes(ready))
+      recoverReadiness(
+        (await tracker.labelChanges(number)).findLast((c) => c.label === ready),
+        triage.author,
+        noticedAt,
+        "review attestation",
+      );
+    else {
+      if (!afterNoticeSecond(progress, noticedAt)) return null;
+      const ordinary = post.add.filter((label) => label !== ready);
+      if (ordinary.length) await tracker.addLabels(number, ordinary);
+      if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
+    }
+    state.readyRequested = true;
+    save();
+  }
+  for (const label of post.remove)
+    if ((await tracker.issue(number)).labels.includes(label))
+      await tracker.removeLabel(number, label);
   return state.evidence!.url;
 }
 

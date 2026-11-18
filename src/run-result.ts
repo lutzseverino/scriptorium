@@ -13,6 +13,10 @@ import { configured, stopLabels } from "./label-roles.ts";
 import { sameLogin } from "./contract-protocol.ts";
 import { lastCommentLine } from "./comment-template.ts";
 import { object } from "./status.ts";
+import {
+  reviewAttestation,
+  type ReviewAttestation,
+} from "./review-attestation.ts";
 
 export type RunResult = {
   outcome: "done" | "stop" | "failed";
@@ -25,6 +29,10 @@ export type RunResult = {
   body: string;
   // One line on why the run ended; a failed result always has one.
   reason?: string;
+  // The exact `sha256:` revision of a directly authored contract a done
+  // triage result accepts instead of carrying a brief; its body is the
+  // review's notes.
+  revision?: string;
 };
 
 // Stable identity and outcome of a published, accepted run result.
@@ -132,11 +140,13 @@ export function readRunResult(
   return parseRunResult(text, configuration, kind);
 }
 
-// Validates a result's text for its kind, containing its model text.
+// Validates a result's text for its kind, containing its model text. An
+// acceptance needs the installed issue-contract module's review attestation.
 export function parseRunResult(
   text: string,
   configuration: FactoryConfiguration,
   kind: RunKindName,
+  attestation: ReviewAttestation | null = reviewAttestation(),
 ): ReadResult {
   const invalid = (problem: string) => ({
     invalid: `its run result ${problem}`,
@@ -152,11 +162,13 @@ export function parseRunResult(
   if (
     Object.keys(value).some(
       (name) =>
-        !["outcome", "state", "labels", "body", "reason"].includes(name),
+        !["outcome", "state", "labels", "body", "reason", "revision"].includes(
+          name,
+        ),
     )
   )
     return invalid("has a field the run-result interface does not name");
-  const { outcome, state, labels = [], body, reason } = value;
+  const { outcome, state, labels = [], body, reason, revision } = value;
   if (!isOutcome(outcome))
     return invalid("has no outcome of done, stop or failed");
   if (typeof body !== "string") return invalid("has no body");
@@ -194,6 +206,18 @@ export function parseRunResult(
   }
   if (outcome === "failed" && reason === undefined)
     return invalid("fails without a reason");
+  if (revision !== undefined) {
+    if (kind !== "triage" || outcome !== "done")
+      return invalid(
+        `accepts a revision, which a ${outcome} ${kind} result has none of`,
+      );
+    if (typeof revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(revision))
+      return invalid("accepts a revision that is not a sha256: revision");
+    if (!attestation)
+      return invalid(
+        "accepts a revision, but the repository's installed issue-contract module has no review attestation",
+      );
+  }
   const states =
     outcome === "stop"
       ? stopStates(configuration, kind)
@@ -244,6 +268,7 @@ export function parseRunResult(
     ...(keptReason !== undefined && {
       reason: contain(keptReason.replace(/\.+$/, "")),
     }),
+    ...(revision !== undefined && { revision }),
     // Reader metadata for the process log only, never an agent-written field.
     ...(reason !== undefined &&
       (/[\r\n]/.test(reason) || reason.length > reasonLimit) && {
@@ -270,7 +295,14 @@ export type ResultPost = {
   marker: string;
   add: string[];
   remove: string[];
-  triage?: { run: string; brief: string; disclaimer: string; author: string };
+  triage?: {
+    run: string;
+    brief: string;
+    disclaimer: string;
+    author: string;
+    // The revision an acceptance attests instead of publishing the brief.
+    revision?: string;
+  };
 };
 
 // The factory's frame: the configured disclaimer, the body, the run's facts
@@ -326,6 +358,7 @@ export function resultPost(
             configuration.version === 3
               ? (configuration.triageResult?.author ?? "")
               : "",
+          ...(result.revision !== undefined && { revision: result.revision }),
         },
       }),
   };
@@ -378,7 +411,7 @@ export function resultGuidance(
   configuration: FactoryConfiguration,
   kind: RunKindName,
 ): string {
-  const { carried } = configuration.labels;
+  const { carried, triage } = configuration.labels;
   const stops = stopStates(configuration, kind);
   const answered = stops
     .filter((label) => label !== carried)
@@ -392,6 +425,7 @@ export function resultGuidance(
     ...(kind === "triage"
       ? [
           `A done result asks for "state" ${JSON.stringify(configuration.labels.ready)}, the readiness the brief carries.`,
+          `A done result that accepts a directly authored specification or implementation ticket you reviewed and did not write names, in "revision", the exact "sha256:" revision you reviewed, which the validator's notice named, and carries no brief: its "body" is the review's notes. The factory posts its review attestation for that revision and applies the readiness and labels you ask for once the validator's notice names it; if the body changed, it applies no readiness and the issue returns to ${triage ? JSON.stringify(triage) : "triage"}.`,
         ]
       : []),
     ...(answered.length
@@ -407,7 +441,7 @@ export function resultGuidance(
     families.length
       ? `"labels" lists any other labels to apply, each starting with ${families.join(", ")}.`
       : `Ask for no other labels.`,
-    `"body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: ${kind === "triage" ? "the complete Agent Brief with its seven required fields, applicable Seams and triage notes, or the question that stops it. Do not include Original request: the host preserves the authenticated original separately" : "what the run delivered, or the question or stop note"}.`,
+    `"body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: ${kind === "triage" ? "the complete Agent Brief with its seven required fields, applicable Seams and triage notes, the review's notes of an accepted revision, or the question that stops it. Do not include Original request: the host preserves the authenticated original separately" : "what the run delivered, or the question or stop note"}.`,
     `"reason" is one line of at most ${reasonLimit} characters on why the run ended, required when it failed.`,
     "The factory posts the body and applies those labels; do not post that comment or apply those labels yourself. Comments on pull requests and review-thread replies stay yours to post.",
   ].join(" ");

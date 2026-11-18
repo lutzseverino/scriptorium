@@ -227,9 +227,15 @@ authenticated `access.request` fallback. `src/contract-result.ts` reads the
 `repo-canon/issue-contract-state/v1` format that
 [Repo Canon v0.21.0 publishes](https://github.com/lutzseverino/repo-canon/blob/v0.21.0/docs/development/issue-contract-validation.md#published-result)
 and the [public v2 protocol](https://github.com/lutzseverino/repo-canon/blob/94484bebc2b40b45759fa1d031bc289151520138/docs/development/issue-contract-v2.md);
-v3 Seams exemption wrappers are validated through Repo Canon's installed
-`issueContractResult` reader and `seamsResultFormat` constant, then read under
-their v1 or v2 base's unchanged checks. Exemption history grants no readiness.
+v3 Seams exemption and v4 factory review wrappers are validated through Repo
+Canon's installed `issueContractResult` reader and its `seamsResultFormat` and
+`reviewResultFormat` constants, then read under their v1 or v2 base's unchanged
+checks. Exemption history grants no readiness. `src/review-attestation.ts`
+alone imports Repo Canon's installed `scripts/issue-contract-sources.mjs` to
+build the factory review attestation. The contract fixture's `direct` control
+evaluates a direct ticket with Repo Canon's installed validator on each write,
+so the acceptance tests in `test/contract-publication.test.ts` read its actual
+v4 notices, and an injected module without the attestation covers the refusal.
 `test/contract-result-fixture.ts` copies literal public v1 and v3 state lines
 and derives approvals from them. The literal v2 fixtures from Repo Canon commit `94484be` and the publication
 fixtures exercise body/edit identity, preserved intake, evidence/notice/readiness
@@ -237,7 +243,7 @@ ordering, interrupted writes and report/evidence separation. A new result format
 is a new version the factory accepts or refuses explicitly. The platform tests fail each state transition part
 way. `test/boundary.test.ts` checks that the package declares only Node.js,
 Sandcastle and Postern runtime dependencies and imports no other external
-module except Repo Canon's installed result reader. It also verifies that the
+module except Repo Canon's installed result reader and review attestation. It also verifies that the
 platform projection and decision modules read no issue body. The factory
 parses no contract Markdown. The validator's result is comment content, read through
 Postern; readiness authorization stays in the factory and contract decisions

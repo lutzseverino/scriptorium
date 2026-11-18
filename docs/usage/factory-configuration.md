@@ -189,8 +189,9 @@ checks:
   as for readiness. A bot's label, including the validator's fallback, grants
   no trust; a trusted author remains an independent trigger. Other state labels
   keep an opening from overriding an existing handoff or stop. Its
-  [run result](#run-results) asks for readiness with its brief, or a stop with
-  its question; without a result, a run that timed out or was orphaned ends
+  [run result](#run-results) asks for readiness with its brief, for readiness
+  of a direct contract's exact revision it reviewed, or for a stop with its
+  question; without a result, a run that timed out or was orphaned ends
   once the issue leaves the triage state, and fails when it never did.
 - **Reporter replies**: on `labels.reporter`, a new comment by the issue's
   author re-triggers triage after a trusted reporter-state application or a
@@ -339,7 +340,11 @@ approves that event and verifies its factory proof. In legacy mode, the selected
 comment by that account names the triage run on exactly one
 `triageResult.marker` line. In body mode, the validator binds the exact body
 revision to a separate configured-author attestation and preserved independent
-intake provenance; the host checks those referenced platform facts.
+intake provenance; the host checks those referenced platform facts. On a
+directly authored specification or implementation ticket, the validator's
+current v4 result names the configured author's unedited review attestation of
+the approved body revision, and that comment names the attested run on one
+`triageResult.marker` line.
 See [body-backed triage contracts](body-contracts.md). A result by another
 account, another marker, a line naming no run or two, or a result made stale
 by a later change grants no readiness. The contract result's other checks
@@ -489,11 +494,13 @@ no default. A Repo Canon adopter uses its validator's values:
 
 The result is the latest comment by `author`, ignoring case, with a line
 `<!-- <marker> {…} -->` whose JSON object is in format
-`repo-canon/issue-contract-state/v1`, `repo-canon/issue-contract-state/v2` or
-`repo-canon/issue-contract-state/v3`. V3 is a Seams exemption wrapper validated
-by Repo Canon's installed result reader and follows its v1 or v2 base's rules.
-The exemption is historical evidence, never authorization for readiness.
-A v3 result counts only when that reader selects the same comment, which needs
+`repo-canon/issue-contract-state/v1`, `repo-canon/issue-contract-state/v2`,
+`repo-canon/issue-contract-state/v3` or `repo-canon/issue-contract-state/v4`.
+V3 is a Seams exemption wrapper and v4 a factory review wrapper, each validated
+by Repo Canon's installed result reader and following its v1 or v2 base's rules.
+The exemption is historical evidence, never authorization for readiness; the
+review attestation backs only factory-triage readiness on a direct contract.
+A v3 or v4 result counts only when that reader selects the same comment, which needs
 the Repo Canon values above; otherwise the factory refuses it as unreadable.
 The factory reads readiness, selected source and current-event approval. V2
 also binds the repository's explicit cutoff, exact observation and verified

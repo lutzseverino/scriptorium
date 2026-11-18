@@ -3,6 +3,9 @@
 // supplies automatic evaluation timing, not an alternative policy interpreter.
 import { readFileSync } from "node:fs";
 import { seamsState } from "./contract-result-fixture.ts";
+// prettier-ignore
+// @ts-expect-error Repo Canon installs JavaScript without declarations.
+import { decideIssueContract } from "../vendor/repo-canon/validate-issue-contract.mjs";
 import {
   PlatformError,
   type ConnectionWithLinkAdditions,
@@ -60,6 +63,13 @@ export const contractConfiguration: Extract<
 export const brief = canonical.cases[2].snapshot.issue.body
   .split("\n\n## Original request")[0]
   .replace(/^>.*\n\n/, "");
+// A directly authored implementation ticket's body, a contract on its own.
+export const directTicket = [
+  "## Parent\n\nNone",
+  "## What to build\n\nMake search answer within a second.\n\nSupersedes: none\nAdds: none\nDeletes: none",
+  "## Acceptance criteria\n\n- [ ] Search answers within a second.",
+  "## Blocked by\n\nNone - can start immediately\n",
+].join("\n\n");
 export function contractFixture(number = 4, repository = "acme/widgets") {
   const author = { login: "factory[bot]", bot: true };
   const issue: Issue = {
@@ -110,8 +120,14 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
     version = 0,
     clock = 0;
   let state: Record<string, any> | null = null;
+  // The installed validator's own notice in direct mode.
+  let notice: { body: string; createdAt: string; updatedAt: string } | null =
+    null;
   const controls = {
     evaluation: true,
+    // Evaluate a direct contract with Repo Canon's installed validator, on
+    // writes only, as its workflow runs on issue events.
+    direct: false,
     seams: false,
     format: undefined as string | undefined,
     mode: "body",
@@ -142,9 +158,74 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
       createdAt: "2026-10-08T01:00:00Z",
       updatedAt: "2026-10-08T02:00:00Z",
       url: "https://github.com/feedback",
+      ...notice,
     } satisfies Comment);
-  const evaluate = () => {
+  // The installed validator's decision on the issue as the platform reports it.
+  const decide = (event: Record<string, unknown>) => {
+    const time = at();
+    // Only the validator's own notice is its previous result.
+    const f = notice && feedback();
+    const decision = decideIssueContract({
+      repository,
+      event,
+      issue: {
+        number,
+        node_id: issue.nodeId,
+        state: "open",
+        title: issue.title,
+        body: issue.body,
+        labels: issue.labels.map((name) => ({ name })),
+        user: { login: issue.author!.login },
+        created_at: issue.createdAt,
+      },
+      comments: [...comments, ...(f ? [f] : [])].map((c) => ({
+        id: c.id,
+        node_id: c.nodeId,
+        user: { login: c.author?.login },
+        body: c.body,
+        created_at: c.createdAt,
+        updated_at: c.updatedAt,
+      })),
+      issueEvents: changes.map((c) => ({
+        id: c.id,
+        event: c.action === "added" ? "labeled" : "unlabeled",
+        label: { name: c.label },
+        actor: { login: c.actor?.login },
+        created_at: c.time,
+      })),
+      repositoryLabels: [
+        ...new Set([...changes.map((c) => c.label), ...issue.labels]),
+      ],
+      permissions: { owner: { role: "admin" } },
+      bodyRevision: { id: issue.nodeId, lastEditedAt: issue.bodyEditTime },
+      evaluatedAt: time,
+      triageResult: contractConfiguration.triageResult,
+      sourceEdits: Object.fromEntries(
+        comments.map((c) => [c.nodeId!, edits[c.nodeId!]]),
+      ),
+      blockedBy: [],
+      parent: null,
+    });
+    if (!decision.feedback) return;
+    notice = {
+      body: decision.feedback.body,
+      createdAt: notice?.createdAt ?? time,
+      updatedAt: time,
+    };
+    const prefix = "<!-- repo-canon:issue-contract-state ";
+    const line = notice.body
+      .split("\n")
+      .find((line: string) => line.startsWith(prefix))!;
+    state = JSON.parse(line.slice(prefix.length, -4));
+  };
+  const evaluate = (
+    event: Record<string, unknown> = {
+      kind: "commentCreated",
+      actor: { login: author.login },
+    },
+  ) => {
     if (!controls.evaluation) return;
+    if (controls.direct) return decide(event);
     if (controls.mode === "prepared") {
       const evidence = comments.find(
         (c) =>
@@ -284,7 +365,7 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
           : [structuredClone(issue)];
       },
       async comments() {
-        evaluate();
+        if (!controls.direct) evaluate();
         const f = feedback();
         return structuredClone([...comments, ...(f ? [f] : [])]);
       },
@@ -304,8 +385,14 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
             actor: author,
             time: at(),
           });
+          if (controls.direct)
+            evaluate({
+              kind: "labeled",
+              actor: { login: author.login },
+              label,
+            });
         }
-        evaluate();
+        if (!controls.direct) evaluate();
       },
       async removeLabel(_number, label) {
         if (issue.labels.includes(label)) {

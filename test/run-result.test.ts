@@ -510,6 +510,68 @@ test("the prompt states the interface each kind's configuration allows", () => {
   );
   assert.match(
     resultGuidance(v3, "triage"),
-    /A done result asks for "state" "state:ready", the readiness the brief carries\. A stop asks for "state", the label of whoever must answer: "state:reporter", "state:owner"\. "labels" lists any other labels to apply, each starting with "model:", "priority:", "factory:", "type:"\./,
+    /A done result asks for "state" "state:ready", the readiness the brief carries\. A done result that accepts a directly authored specification or implementation ticket you reviewed and did not write names, in "revision", the exact "sha256:" revision you reviewed, which the validator's notice named, and carries no brief: its "body" is the review's notes\. .* the issue returns to "state:triage"\. A stop asks for "state", the label of whoever must answer: "state:reporter", "state:owner"\. "labels" lists any other labels to apply, each starting with "model:", "priority:", "factory:", "type:"\./,
   );
+  assert.doesNotMatch(resultGuidance(v3, "implement"), /revision/);
+});
+
+test("only a done triage result accepts an exact revision, which its post carries for acceptance", () => {
+  const revision = `sha256:${"a".repeat(64)}`;
+  const accepted = parse({
+    outcome: "done",
+    state: "state:ready",
+    labels: ["model:claude-opus-5-5", "priority:normal"],
+    body: "**Verdict:** holds.",
+    revision,
+  });
+  assert.deepEqual(accepted, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["model:claude-opus-5-5", "priority:normal"],
+    body: "**Verdict:** holds.",
+    revision,
+  });
+  const run = {
+    id: "triage-1",
+    kind: "triage" as const,
+    provider: "claude-code",
+    model: "claude-opus-5-5",
+    effort: "high",
+    attempt: 1,
+  };
+  const post = resultPost(accepted as RunResult, run, v3);
+  assert.equal(post.triage?.revision, revision);
+  assert.deepEqual(post.add, [
+    "model:claude-opus-5-5",
+    "priority:normal",
+    "state:ready",
+  ]);
+  assert.equal(
+    resultPost({ ...(accepted as RunResult), revision: undefined }, run, v3)
+      .triage?.revision,
+    undefined,
+  );
+  for (const [value, kind, problem] of [
+    [
+      { outcome: "stop", state: "state:owner", body: "Q", revision },
+      "triage",
+      "its run result accepts a revision, which a stop triage result has none of",
+    ],
+    [
+      { outcome: "done", body: "Done", revision },
+      "implement",
+      "its run result accepts a revision, which a done implement result has none of",
+    ],
+    [
+      { outcome: "done", state: "state:ready", body: "B", revision: "abc" },
+      "triage",
+      "its run result accepts a revision that is not a sha256: revision",
+    ],
+    [
+      { outcome: "done", state: "state:ready", body: "B", revision: 1 },
+      "triage",
+      "its run result accepts a revision that is not a sha256: revision",
+    ],
+  ] as const)
+    assert.equal(invalid(value, kind), problem);
 });
