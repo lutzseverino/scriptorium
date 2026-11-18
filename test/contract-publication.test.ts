@@ -6,6 +6,7 @@ import { resultPost } from "../src/run-result.ts";
 import {
   readContractMode,
   ContractPublicationHold,
+  ContractPublicationStop,
   digest,
 } from "../src/contract-protocol.ts";
 import type {
@@ -654,25 +655,17 @@ test("prepared evidence with unavailable creation history is held instead of ado
   assert.equal(s.fixture.comments.length, 1);
 });
 
-for (const mismatch of ["source", "revision", "status"] as const)
-  test(`prepared publication grants no readiness when a supported notice has another ${mismatch}`, async () => {
+for (const mismatch of ["revision", "status"] as const)
+  test(`prepared publication grants no readiness when a notice selecting the brief has another ${mismatch}`, async () => {
     const s = setup();
     s.fixture.controls.mode = "prepared";
     s.fixture.controls.missingResult = true;
     assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
     s.fixture.controls.missingResult = false;
     s.fixture.controls.result =
-      mismatch === "source"
-        ? {
-            source: {
-              type: "comment",
-              id: "98765",
-              editedAt: s.fixture.comments[0].updatedAt,
-            },
-          }
-        : mismatch === "revision"
-          ? { revision: `sha256:${"0".repeat(64)}` }
-          : { status: "needs-attention" };
+      mismatch === "revision"
+        ? { revision: `sha256:${"0".repeat(64)}` }
+        : { status: "needs-attention" };
     if (mismatch === "status")
       // A completed evaluation of this brief is not a wait for one.
       await assert.rejects(
@@ -692,6 +685,149 @@ for (const mismatch of ["source", "revision", "status"] as const)
       1,
     );
   });
+
+// A published brief, then the validator's notice with `result` evaluated
+// after it unless the result names its own evaluation time.
+async function noticed(
+  result: (brief: { id: number; createdAt: string }) => Record<string, unknown>,
+  seams = false,
+) {
+  const s = setup();
+  s.fixture.controls.mode = "prepared";
+  s.fixture.controls.missingResult = true;
+  assert.equal(await s.platform().postResult(4, post(), s.resume()), null);
+  s.fixture.controls.missingResult = false;
+  s.fixture.controls.seams = seams;
+  s.fixture.controls.result = result(s.fixture.comments[0]);
+  return s;
+}
+const issueBody = {
+  revision: `sha256:${"1".repeat(64)}`,
+  source: { type: "issue-body", editedAt: "2026-10-08T00:30:00Z" },
+};
+const noSource = { revision: null, source: null };
+const unrequested = (s: Awaited<ReturnType<typeof noticed>>) => {
+  assert.equal(s.fixture.issue.labels.includes("state:ready"), false);
+  assert.equal(
+    s.fixture.changes.filter((c) => c.label === "state:ready").length,
+    0,
+  );
+  assert.equal(s.fixture.comments.length, 1);
+};
+
+for (const status of [
+  "awaiting-review",
+  "approved",
+  "needs-attention",
+  "needs-attention (v3)",
+  "no-contract",
+])
+  test(`a notice after the brief selecting another source stops publication whatever its ${status} status`, async () => {
+    const s = await noticed(
+      () => ({ ...issueBody, status: status.split(" ")[0] }),
+      status.endsWith("(v3)"),
+    );
+    await assert.rejects(
+      s.platform().postResult(4, post(), s.resume()),
+      (error) =>
+        error instanceof ContractPublicationStop &&
+        error.message.includes(
+          `[the configured validator's notice](https://github.com/feedback), evaluated after the published brief, is ${status.split(" ")[0]} and selects another contract source`,
+        ),
+    );
+    if (status.endsWith("(v3)"))
+      assert.equal(
+        s.fixture.result!.format,
+        "repo-canon/issue-contract-state/v3",
+      );
+    unrequested(s);
+    assert.ok(s.fixture.issue.labels.includes("state:triage"));
+    assert.ok(s.fixture.issue.labels.includes("type:enhancement"));
+  });
+
+test("a stop after the brief restores the triage state a person removed", async () => {
+  const s = await noticed(() => ({ ...issueBody, status: "awaiting-review" }));
+  s.fixture.issue.labels = s.fixture.issue.labels.filter(
+    (label) => label !== "state:triage",
+  );
+  await assert.rejects(
+    s.platform().postResult(4, post(), s.resume()),
+    ContractPublicationStop,
+  );
+  assert.ok(s.fixture.issue.labels.includes("state:triage"));
+});
+
+for (const hold of [
+  {
+    case: "no source, no-contract",
+    result: { ...noSource, status: "no-contract" },
+  },
+  {
+    case: "no source, needs-attention",
+    result: { ...noSource, status: "needs-attention" },
+  },
+  { case: "the brief, needs-attention", result: { status: "needs-attention" } },
+])
+  test(`a notice after the brief selecting ${hold.case} holds visibly until a notice selecting the brief publishes`, async () => {
+    const s = await noticed(() => hold.result);
+    const status = hold.result.status;
+    for (let pass = 0; pass < 2; pass++)
+      await assert.rejects(
+        s.platform().postResult(4, post(), s.resume()),
+        (error) =>
+          error instanceof ContractPublicationHold &&
+          error.message.includes(
+            "[the configured validator's notice](https://github.com/feedback)",
+          ) &&
+          error.message.includes(` is ${status} `) &&
+          error.message.includes("make the repair the linked notice lists") ===
+            (status === "needs-attention") &&
+          !/fresh triage|restore automatic/.test(error.message),
+      );
+    unrequested(s);
+    assert.ok(s.fixture.issue.labels.includes("state:triage"));
+    s.fixture.controls.result = {};
+    assert.ok(await s.platform().postResult(4, post(), s.resume()));
+    assert.equal(
+      s.fixture.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+    assert.equal(s.fixture.issue.labels.includes("state:triage"), false);
+    assert.equal(s.fixture.comments.length, 1);
+  });
+
+for (const timing of ["unevaluated", "before the brief", "the brief's second"])
+  for (const [selected, fields] of [
+    ["another source", issueBody],
+    ["no source", noSource],
+    ["the brief", {}],
+  ] as const)
+    for (const status of [
+      "awaiting-review",
+      "approved",
+      "needs-attention",
+      "no-contract",
+    ])
+      test(`a ${status} notice selecting ${selected}, evaluated ${timing}, keeps the wait`, async () => {
+        const s = await noticed((brief) => ({
+          ...fields,
+          status,
+          evaluatedAt:
+            timing === "unevaluated"
+              ? null
+              : timing === "before the brief"
+                ? new Date(Date.parse(brief.createdAt) - 1000)
+                    .toISOString()
+                    .replace(".000Z", "Z")
+                : brief.createdAt,
+        }));
+        assert.equal(
+          await s.platform().postResult(4, post(), s.resume()),
+          null,
+        );
+        unrequested(s);
+        assert.ok(s.fixture.issue.labels.includes("state:triage"));
+      });
 
 test("a present unreadable prepared result holds before any publication write", async () => {
   const s = setup();
@@ -804,6 +940,7 @@ test("the real validator's first prepared notice permits readiness in a later se
     issueEvents: [],
     permissions: {},
     event: { kind: "commentCreated", actor: { login: "factory[bot]" } },
+    evaluatedAt: "2026-10-08T03:00:00Z",
     seamsBoundary: {
       tag: "v0.26.0",
       commit: "a".repeat(40),

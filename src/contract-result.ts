@@ -16,6 +16,8 @@ import type {
 import {
   bodyResultFormat,
   bodyRevision,
+  ContractPublicationHold,
+  ContractPublicationStop,
   hold,
   contractObservation,
   digest,
@@ -127,7 +129,10 @@ export function requirePreparedProtocol(
 }
 
 // Authenticate the validator's selected revision against the immutable comment,
-// without selecting a contract or interpreting its Markdown.
+// without selecting a contract or interpreting its Markdown. Only a notice
+// evaluated in a later second than the brief decides, by its source first and
+// then its status: another source stops publication, no source or a status
+// that grants no review holds it visibly, and anything earlier still waits.
 export function preparedContractNotice(
   comments: Comment[],
   configuration: PlatformConventions,
@@ -136,6 +141,24 @@ export function preparedContractNotice(
   const posted = requirePreparedProtocol(comments, configuration);
   if (!posted) return null;
   const { result } = posted;
+  const second = (time: unknown) =>
+    typeof time === "string" ? Math.floor(Date.parse(time) / 1000) : NaN;
+  if (!(second(result.evaluatedAt) > second(evidence.createdAt))) return null;
+  const status = String(result.status);
+  const notice = `[the configured validator's notice](${posted.comment.url})`;
+  if (result.source === null)
+    throw new ContractPublicationHold(
+      `${notice}, evaluated after the published brief, is ${status} and selects no contract source${repair(status)}`,
+    );
+  if (!record(result.source))
+    return hold("The configured validator's notice names an unreadable source");
+  if (
+    result.source.type !== "comment" ||
+    result.source.id !== String(evidence.id)
+  )
+    throw new ContractPublicationStop(
+      `${notice}, evaluated after the published brief, is ${status} and selects another contract source; publication requests no readiness`,
+    );
   // Canon cannot know its first notice's own write time in advance.
   const publishedAt = result.publishedAt ?? posted.comment.updatedAt;
   if (
@@ -148,11 +171,11 @@ export function preparedContractNotice(
     result.revision !== commentRevision(evidence, result.kind)
   )
     return null;
-  // A completed evaluation of this exact brief that grants no review is not a
-  // wait: the immutable brief cannot be corrected in place.
-  if (!["awaiting-review", "approved"].includes(String(result.status)))
-    return hold(
-      `The configured validator's notice for the published brief is ${String(result.status)} and permits no readiness request`,
+  // A completed evaluation of this exact brief that grants no review holds
+  // until a later notice selecting the brief permits readiness.
+  if (!["awaiting-review", "approved"].includes(status))
+    throw new ContractPublicationHold(
+      `${notice} for the published brief is ${status} and permits no readiness request${repair(status)}`,
     );
   if (
     typeof publishedAt !== "string" ||
@@ -161,6 +184,12 @@ export function preparedContractNotice(
     return null;
   return { ...posted, publishedAt };
 }
+
+// What a person does about a held notice; the factory never reads its repair.
+const repair = (status: string) =>
+  status === "needs-attention"
+    ? "; make the repair the linked notice lists, and a later notice selecting the brief publishes the retained result"
+    : "; a later notice selecting the brief publishes the retained result";
 
 function commentRevision(comment: Comment, kind: unknown): string {
   return digest(

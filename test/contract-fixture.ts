@@ -189,6 +189,8 @@ export function contractFixture(number = 4, repository = "acme/widgets") {
             )
           : null,
         publishedAt: evidence?.createdAt ?? null,
+        // Automatic evaluation decides in a later second than the brief.
+        evaluatedAt: evidence ? "2026-10-08T02:00:00Z" : null,
         label: ready?.action === "added" ? "state:ready" : null,
         reviewEventId: ready ? String(ready.id) : null,
         factoryTriage: null,

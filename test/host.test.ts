@@ -311,6 +311,10 @@ function fakePlatform(
           }),
         ),
         publishedAt: null,
+        // Automatic evaluation decides in a later second than the brief.
+        evaluatedAt: new Date(Date.parse(at) + 1000)
+          .toISOString()
+          .replace(".000Z", "Z"),
       }),
     };
     return {
@@ -11134,6 +11138,163 @@ test("prepared publication requests readiness before admission waits for exact c
   );
 });
 
+// A prepared triage run that exited with a done result, whose retained
+// publication meets the validator's notice `result`.
+async function preparedNotice(
+  t: TestContext,
+  result: Record<string, unknown>,
+  seams = false,
+) {
+  const protocol = contractFixture();
+  protocol.controls.mode = "prepared";
+  protocol.controls.seams = seams;
+  protocol.controls.result = result;
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+      }),
+    },
+    wrapConnection: protocol.wrap,
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "done",
+    state: "state:ready",
+    labels: ["type:enhancement", "model:claude-sonnet-5-5"],
+    body: bodyBrief,
+  });
+  await run.drain();
+  return { protocol, run };
+}
+const publicationComment = (protocol: ReturnType<typeof contractFixture>) =>
+  protocol.comments.find((c) => c.body.includes('"phases":'))!.body;
+const otherSource = {
+  revision: `sha256:${"1".repeat(64)}`,
+  source: { type: "issue-body", editedAt: "2026-10-08T00:30:00Z" },
+};
+
+for (const status of [
+  "awaiting-review",
+  "approved",
+  "needs-attention",
+  "needs-attention (v3)",
+  "no-contract",
+])
+  test(`a ${status} notice selecting another source after the brief stops the retained result in the triage state`, async (t) => {
+    const { protocol, run } = await preparedNotice(
+      t,
+      { ...otherSource, status: status.split(" ")[0] },
+      status.endsWith("(v3)"),
+    );
+    await run.tick();
+    await run.tick();
+    assert.equal(
+      protocol.result!.format,
+      `repo-canon/issue-contract-state/${status.endsWith("(v3)") ? "v3" : "v1"}`,
+    );
+    assert.ok(protocol.issue.labels.includes("state:triage"));
+    assert.ok(!protocol.issue.labels.includes("factory:running"));
+    assert.ok(!protocol.issue.labels.includes("state:ready"));
+    assert.equal(
+      protocol.changes.filter((c) => c.label === "state:ready").length,
+      0,
+    );
+    const actions = protocol.comments.filter((c) =>
+      c.body.includes("<!-- scriptorium:action "),
+    );
+    assert.equal(actions.length, 1);
+    assert.match(
+      actions[0].body,
+      /The factory waits in `state:triage` for an answer\./,
+    );
+    assert.match(
+      publicationComment(protocol),
+      /Publication stopped: \[the configured validator's notice\]\(https:\/\/github\.com\/feedback\), evaluated after the published brief, is [a-z-]+ and selects another contract source/,
+    );
+    const record = recordOf(run.state, 4, 1);
+    assert.equal(record.settled, true);
+    assert.equal(record.result.outcome, "stop");
+    assert.equal(record.result.state, "state:triage");
+    // The consumed trigger starts no new triage, and the action is told once.
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    assert.equal(
+      protocol.comments.filter((c) =>
+        c.body.includes("<!-- scriptorium:action "),
+      ).length,
+      1,
+    );
+  });
+
+for (const [held, result] of [
+  [
+    "no source, no-contract",
+    { revision: null, source: null, status: "no-contract" },
+  ],
+  [
+    "no source, needs-attention",
+    { revision: null, source: null, status: "needs-attention" },
+  ],
+  ["the brief, needs-attention", { status: "needs-attention" }],
+] as const)
+  test(`a notice after the brief selecting ${held} holds its claim visibly until a later notice selects the brief`, async (t) => {
+    const { protocol, run } = await preparedNotice(t, result);
+    for (let pass = 0; pass < 2; pass++) await run.tick();
+    assert.ok(protocol.issue.labels.includes("factory:running"));
+    assert.ok(!protocol.issue.labels.includes("state:ready"));
+    const comment = publicationComment(protocol);
+    assert.ok(
+      comment.includes(
+        "Publication held: [the configured validator's notice](https://github.com/feedback)",
+      ),
+      comment,
+    );
+    assert.ok(comment.includes(` is ${result.status} `), comment);
+    assert.equal(
+      comment.includes("make the repair the linked notice lists"),
+      result.status === "needs-attention",
+    );
+    assert.doesNotMatch(comment, /fresh triage|restore automatic/);
+    assert.ok(
+      run.reports.some((line) =>
+        line.includes(`acme/widgets#4 Publication held:`),
+      ),
+    );
+    assert.equal(recordOf(run.state, 4, 1).settled, false);
+    protocol.controls.result = {};
+    await run.tick();
+    assert.ok(protocol.issue.labels.includes("state:ready"));
+    assert.equal(
+      protocol.changes.filter((c) => c.label === "state:ready").length,
+      1,
+    );
+    assert.equal(run.launched.length, 1);
+  });
+
+test("an unevaluated notice selecting another source keeps the publication wait", async (t) => {
+  const { protocol, run } = await preparedNotice(t, {
+    ...otherSource,
+    status: "needs-attention",
+    evaluatedAt: null,
+  });
+  await run.tick();
+  assert.ok(protocol.issue.labels.includes("factory:running"));
+  assert.ok(!protocol.issue.labels.includes("state:ready"));
+  assert.ok(
+    publicationComment(protocol).includes(
+      "Publication waits for the configured validator's matching notice; restore automatic evaluation and retry the retained result",
+    ),
+  );
+  assert.equal(
+    protocol.comments.filter((c) => c.body.includes("<!-- scriptorium:action "))
+      .length,
+    0,
+  );
+});
+
 for (const restart of [false, true])
   test(`a publication wait report preserves interrupted evidence recovery, restart: ${restart}`, async (t) => {
     const protocol = contractFixture();
@@ -11213,7 +11374,9 @@ for (const restart of [false, true])
     assert.equal(run.launched.length, 1);
   });
 
-for (const wait of ["protocol", "notice"] as const)
+// The attention case is a regression guard: a run held on a needs-attention
+// notice already takes no provider slot after exit.
+for (const wait of ["protocol", "notice", "attention"] as const)
   test(`three exited triage runs free a full provider cap during a ${wait} wait`, async (t) => {
     const protocols = [4, 5, 6].map((number) => contractFixture(number));
     for (const p of protocols) p.controls.mode = "prepared";
@@ -11238,6 +11401,12 @@ for (const wait of ["protocol", "notice"] as const)
       p.controls.format =
         wait === "protocol" ? "repo-canon/issue-contract-state/v4" : undefined;
       p.controls.missingResult = wait === "notice";
+      if (wait === "attention")
+        p.controls.result = {
+          revision: null,
+          source: null,
+          status: "needs-attention",
+        };
     }
     for (const launch of run.launched)
       launch.finish(undefined, undefined, {

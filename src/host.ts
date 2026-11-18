@@ -4,7 +4,10 @@
 // the providers' sandboxes.
 import { randomUUID } from "node:crypto";
 import type { Publication } from "./contract-publication.ts";
-import { ContractPublicationHold } from "./contract-protocol.ts";
+import {
+  ContractPublicationHold,
+  ContractPublicationStop,
+} from "./contract-protocol.ts";
 import { trustedFinding, type Provenance } from "./triggers.ts";
 import {
   existsSync,
@@ -750,7 +753,8 @@ export function createHost(
             },
             run.configuration,
           );
-          let link: string | null;
+          // Undefined once publication stopped the result.
+          let link: string | null | undefined;
           let waiting =
             "Publication waits for the configured validator's matching notice; restore automatic evaluation and retry the retained result";
           try {
@@ -763,9 +767,29 @@ export function createHost(
               },
             });
           } catch (error) {
-            if (!(error instanceof ContractPublicationHold)) throw error;
-            link = null;
-            waiting = `Publication held: ${error.message}`;
+            if (error instanceof ContractPublicationHold) {
+              link = null;
+              waiting = `Publication held: ${error.message}`;
+            } else if (error instanceof ContractPublicationStop) {
+              // The retained done result ends as a stop in the triage state,
+              // which releases its claim without readiness.
+              const state = run.configuration.labels.triage!;
+              const reason = `Publication stopped: ${error.message}`;
+              const { labels: _, ...done } = run.result;
+              run.result = { ...done, outcome: "stop", state, reason };
+              issue.labels = [...new Set([...issue.labels, state])];
+              run.resultPosted = true;
+              record(run);
+              report(`${name}#${run.issue} ${reason}`);
+              await tell(pass, issue, {
+                phase: phaseOf(run),
+                facts: {
+                  state: "stopped",
+                  reason,
+                  link: run.publication?.evidence?.url,
+                },
+              });
+            } else throw error;
           }
           if (link === null) {
             record(run);
@@ -776,19 +800,21 @@ export function createHost(
             });
             continue;
           }
-          issue.labels = postedLabels(issue.labels, post);
-          run.resultPosted = true;
-          record(run);
-          mark(run, "lastPublication");
-          await tell(pass, issue, {
-            phase: phaseOf(run),
-            facts: {
-              state: outcomeStates[run.result.outcome],
-              reason: run.result.reason,
-              link,
-            },
-            result: run.result,
-          });
+          if (link !== undefined) {
+            issue.labels = postedLabels(issue.labels, post);
+            run.resultPosted = true;
+            record(run);
+            mark(run, "lastPublication");
+            await tell(pass, issue, {
+              phase: phaseOf(run),
+              facts: {
+                state: outcomeStates[run.result.outcome],
+                reason: run.result.reason,
+                link,
+              },
+              result: run.result,
+            });
+          }
         }
         const ending = await observeEnding(reads, issue, ended);
         run.ownedPullRequests = ending.ownedPullRequests;
@@ -1689,9 +1715,19 @@ export function createHost(
             ready && (reached.length || pass.gated?.includes(ready.number))
               ? (reached.length ? reached : gates).join(", ")
               : undefined;
-          const asked = askLabels(labels).find((label) =>
-            issue.labels.includes(label),
-          );
+          // A publication stop names the triage state, which asks no role.
+          const published =
+            previous?.resultPosted &&
+            previous.result &&
+            "outcome" in previous.result &&
+            previous.result.outcome === "stop" &&
+            previous.result.state === labels.triage &&
+            stop === labels.triage
+              ? previous.result.reason
+              : undefined;
+          const asked =
+            askLabels(labels).find((label) => issue.labels.includes(label)) ??
+            (published ? stop : undefined);
           const action: Action | undefined =
             !previous && issue.continuation
               ? undefined
@@ -1715,7 +1751,7 @@ export function createHost(
                 phase: previous ? phaseOf(previous) : "implement",
                 facts: {
                   state: stop === labels.carried ? "carried" : "stopped",
-                  reason: `waits in \`${stop}\``,
+                  reason: `${published ? `${published}; ` : ""}waits in \`${stop}\``,
                 },
                 resume: {
                   ...(since && { since }),

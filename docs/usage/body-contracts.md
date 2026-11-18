@@ -134,12 +134,29 @@ access before expecting settlement or pickup to resume.
 
 Distinguish these recovery actions:
 
-- For a published brief awaiting its matching notice, restore automatic
-  issue-contract evaluation and its runners; normal passes retry the retained
-  result. Publication is not validator approval or implementation admission.
-- When the matching notice evaluates the published brief but grants no review,
-  such as `needs-attention`, the result holds with that status. The immutable
-  brief cannot be corrected in place; obtain fresh triage.
+- While no notice evaluated after the published brief has arrived, restore
+  automatic issue-contract evaluation and its runners; normal passes retry the
+  retained result. That covers no notice, a notice evaluated before the brief
+  or in the brief comment's second, and a notice with `evaluatedAt: null`.
+  Publication is not validator approval or implementation admission.
+- A notice evaluated after the brief decides by its `source` first, then by
+  its `status`. Only the published state line's `status`, `source`, `revision`
+  and evaluation time are read, against the brief comment.
+  - When it selects another source, such as the issue body of a direct ticket,
+    publication stops whatever its status. The stop releases the claim and its
+    running label, requests no readiness and names the triage state
+    (`labels.triage`, such as `state:triage`) in its action comment; the issue
+    waits on whoever must answer.
+  - When it selects no source, such as `no-contract` or `needs-attention`, the
+    result holds visibly and keeps its claim. Its run comment and hold reason
+    name the notice's status and link the notice.
+  - When it selects the brief but grants no review, such as `needs-attention`,
+    the result holds the same way.
+  - For a `needs-attention` hold, make the repair that the linked notice lists
+    and retry the retained result; the factory neither copies nor parses the
+    repair text. A later notice selecting the brief publishes the retained
+    result, so a label repair resumes the run without fresh triage or a
+    restart.
 - For an unknown, unsupported or conflicting validator result, restore the
   compatible configured validator and evaluate the actual source. For missing,
   edited, deleted or authentication-conflicting evidence, recover authenticated
