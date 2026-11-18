@@ -10516,6 +10516,106 @@ test("terminal result observation retries an unavailable report and survives a h
   );
 });
 
+for (const outcome of ["stop", "failed"] as const)
+  test(`a published ${outcome} result survives a rate-limited report write and restart`, async (t) => {
+    let failReport = false;
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      wrapConnection(connection) {
+        return {
+          ...connection,
+          issueTracker: {
+            ...connection.issueTracker,
+            async updateComment(id, body) {
+              if (failReport) {
+                run.github.quotas["acme/widgets"] = {
+                  remaining: 0,
+                  reset: 1791547500,
+                };
+                throw new PlatformError(
+                  "rateLimited",
+                  "API rate limit exceeded",
+                );
+              }
+              return connection.issueTracker.updateComment(id, body);
+            },
+          },
+        };
+      },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const observe = (bodies: string[]) =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          ["src/main.ts", "results", "--author", "factory[bot]"],
+          {
+            cwd: new URL("..", import.meta.url),
+            input: JSON.stringify(
+              bodies.map((body) => ({
+                body,
+                author: { login: "factory[bot]" },
+              })),
+            ),
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        ),
+      ).results;
+    run.launched[0].finish(undefined, undefined, {
+      outcome,
+      body: "The tests need a database.",
+      ...(outcome === "stop"
+        ? { state: "factory:needs-input" }
+        : { reason: "No test database was available" }),
+    });
+    await run.drain();
+    failReport = true;
+    await run.tick();
+    const published = observe(issue.comments);
+    assert.equal(published.length, 1);
+    assert.equal(published[0].outcome, outcome);
+    assert.deepEqual(observe(runComments(issue)), []);
+    assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+    assert.equal(healthOf(run).repositories[0].pass.lastPublication, null);
+
+    // Exhaustion after publication cannot turn this result into a same-attempt
+    // quota relaunch, either on the next tick or after recovery.
+    await run.tick();
+    assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+    assert.equal(
+      recordOf(run.state, 4, 1).continuation.quotaRelaunches,
+      undefined,
+    );
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+    assert.equal(
+      recordOf(run.state, 4, 1).continuation.quotaRelaunches,
+      undefined,
+    );
+    assert.equal(run.launched.length, 1);
+
+    failReport = false;
+    run.github.quotas["acme/widgets"] = { remaining: 5000 };
+    run.clock.now = new Date("2026-10-09T12:05:00Z");
+    await restarted.tick();
+    assert.deepEqual(observe(runComments(issue)), published);
+    assert.deepEqual(observe(issue.comments), published);
+    assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+    assert.deepEqual(healthOf(run).repositories[0].pass.lastPublication, {
+      at: "2026-10-09T12:05:00.000Z",
+      issue: 4,
+      runKind: "implement",
+    });
+    assert.equal(run.launched.length, outcome === "failed" ? 2 : 1);
+    if (outcome === "failed")
+      assert.equal(recordOf(run.state, 4, 2).continuation.attempt, 2);
+    else assert.ok(issue.labels.includes("factory:needs-input"));
+  });
+
 test("a failed result fails with its reason, and a run without a valid result fails with why", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },

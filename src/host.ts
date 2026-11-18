@@ -173,7 +173,10 @@ type HostRun = Run & {
   // A launch's result identity is independent of the provenance a relaunch
   // retains for filing attribution. Persist it before publication can retry.
   resultId?: string;
-  // Its run result's comment and labels are on the issue.
+  // Its run result's comment and labels landed; retain the link while the
+  // run report retries, including across a restart.
+  resultLink?: string;
+  // Its run result and report are published completely.
   resultPosted?: true;
   // The quota pause's label and cached run notice were written successfully.
   quotaNotified?: true;
@@ -334,6 +337,7 @@ export function createHost(
     if (
       !hold ||
       pausedEnding(run)?.paused.cause === "GitHub rate limit" ||
+      run.resultLink !== undefined ||
       run.resultPosted
     )
       return;
@@ -757,43 +761,44 @@ export function createHost(
             run.configuration,
           );
           // Undefined once publication stopped the result.
-          let link: string | null | undefined;
+          let link: string | null | undefined = run.resultLink ?? null;
           let waiting =
             "Publication waits for the configured validator's matching notice; restore automatic evaluation and retry the retained result";
-          try {
-            link = await platform.postResult(run.issue, post, {
-              state: run.publication,
-              now: ports.now,
-              save(publication) {
-                run.publication = publication;
-                record(run);
-              },
-            });
-          } catch (error) {
-            if (error instanceof ContractPublicationHold) {
-              link = null;
-              waiting = `Publication held: ${error.message}`;
-            } else if (error instanceof ContractPublicationStop) {
-              // The retained done result ends as a stop in the triage state,
-              // which releases its claim without readiness.
-              const state = run.configuration.labels.triage!;
-              const reason = `Publication stopped: ${error.message}`;
-              const { labels: _, ...done } = run.result;
-              run.result = { ...done, outcome: "stop", state, reason };
-              issue.labels = [...new Set([...issue.labels, state])];
-              run.resultPosted = true;
-              record(run);
-              report(`${name}#${run.issue} ${reason}`);
-              await tell(pass, issue, {
-                phase: phaseOf(run),
-                facts: {
-                  state: "stopped",
-                  reason,
-                  link: run.publication?.evidence?.url,
+          if (link === null)
+            try {
+              link = await platform.postResult(run.issue, post, {
+                state: run.publication,
+                now: ports.now,
+                save(publication) {
+                  run.publication = publication;
+                  record(run);
                 },
               });
-            } else throw error;
-          }
+            } catch (error) {
+              if (error instanceof ContractPublicationHold) {
+                link = null;
+                waiting = `Publication held: ${error.message}`;
+              } else if (error instanceof ContractPublicationStop) {
+                // The retained done result ends as a stop in the triage state,
+                // which releases its claim without readiness.
+                const state = run.configuration.labels.triage!;
+                const reason = `Publication stopped: ${error.message}`;
+                const { labels: _, ...done } = run.result;
+                run.result = { ...done, outcome: "stop", state, reason };
+                issue.labels = [...new Set([...issue.labels, state])];
+                run.resultPosted = true;
+                record(run);
+                report(`${name}#${run.issue} ${reason}`);
+                await tell(pass, issue, {
+                  phase: phaseOf(run),
+                  facts: {
+                    state: "stopped",
+                    reason,
+                    link: run.publication?.evidence?.url,
+                  },
+                });
+              } else throw error;
+            }
           if (link === null) {
             record(run);
             report(`${name}#${run.issue} ${waiting}`);
@@ -804,6 +809,8 @@ export function createHost(
             continue;
           }
           if (link !== undefined) {
+            run.resultLink = link;
+            record(run);
             issue.labels = postedLabels(issue.labels, post);
             await tell(pass, issue, {
               phase: phaseOf(run),
@@ -1145,7 +1152,8 @@ export function createHost(
           exited: true,
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
           ended:
-            recorded.publication && !recorded.resultPosted
+            (recorded.publication || recorded.resultLink) &&
+            !recorded.resultPosted
               ? null
               : recorded.interrupted
                 ? { interrupted: true }
@@ -2068,7 +2076,7 @@ export function createHost(
   return { tick, interrupt, drain, refreshTokens, report };
 }
 
-// Whether the run's result comment and labels have yet to land. An
+// Whether the run's result and report have yet to finish publication. An
 // interrupted or paused run launches again rather than posting.
 function publicationPending(run: HostRun): boolean {
   return (

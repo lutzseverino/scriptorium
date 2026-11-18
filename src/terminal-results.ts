@@ -2,6 +2,7 @@
 // Scriptorium. Callers transport tracker facts and compare opaque identities.
 import { resultCommentTerminal, type TerminalResult } from "./run-result.ts";
 import { runCommentResults } from "./run-comment.ts";
+import { object } from "./status.ts";
 
 export const terminalResultsUsage =
   "node src/main.ts results --author <trusted publishing account>";
@@ -12,10 +13,6 @@ type Ports = {
   error(line: string): void;
 };
 
-const object = (value: unknown): Record<string, unknown> | null =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 const login = (value: string) =>
   value.toLowerCase().replace(/^app\/(.+)$/, "$1[bot]");
 
