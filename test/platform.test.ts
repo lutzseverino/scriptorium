@@ -130,6 +130,46 @@ function labeled(id: number, actor: unknown, at: string, label = labels.ready) {
 
 const user = (login: string) => ({ login, type: "User" });
 
+test("native cross-repository parent references retain the platform's open and closed state without reading the parent", async () => {
+  const { connection, requests } = github((request) => {
+    if (request === "PosternIssues")
+      return {
+        status: 200,
+        data: {
+          data: {
+            repository: {
+              issues: page([
+                issueNode(1, {
+                  labels: page([]),
+                  parent: reference("Acme/Plans", 8),
+                }),
+                issueNode(2, {
+                  labels: page([]),
+                  parent: reference("acme/unserved", 9, "CLOSED"),
+                }),
+              ]),
+            },
+          },
+        },
+      };
+  });
+  const issues = await repositoryPlatform(
+    connection,
+    configuration,
+  ).readIssues();
+  assert.deepEqual(
+    issues.map(({ nativeParent, nativeParentState }) => ({
+      nativeParent,
+      nativeParentState,
+    })),
+    [
+      { nativeParent: "Acme/Plans#8", nativeParentState: "open" },
+      { nativeParent: "acme/unserved#9", nativeParentState: "closed" },
+    ],
+  );
+  assert.deepEqual(requests, ["PosternIssues"]);
+});
+
 function restComment(comment: Comment) {
   return {
     id: comment.id,
@@ -1191,6 +1231,7 @@ test("open issues reach the core with their readiness, links and times, and with
       editedAt: null,
       contractHold: null,
       nativeParent: 1,
+      nativeParentState: "open",
       latestLink: null,
       linkAdditions: null,
       subIssues: [],

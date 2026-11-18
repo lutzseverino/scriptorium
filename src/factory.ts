@@ -41,6 +41,7 @@ import {
   type Policy,
   type Readiness,
   type ReadinessHold,
+  type ParentRepositories,
 } from "./readiness.ts";
 import {
   handBackLimit,
@@ -91,6 +92,8 @@ export type Issue = {
   contractHold: ReadinessHold | null;
   // Its parent, or null when it has none.
   nativeParent: IssueId | null;
+  // The platform's state of that parent, without another repository read.
+  nativeParentState?: "open" | "closed";
   // When a sub-issue was last linked, and which when the platform says, or
   // null when none was or the platform doesn't report it.
   latestLink: { ticket: IssueId | null; at: string } | null;
@@ -179,6 +182,9 @@ export type Claim = EndingFacts & { issue: number; inputResume?: InputResume };
 export type Repository = {
   name: string;
   configuration: FactoryConfiguration;
+  // False when settlement uses cached configuration after this pass's read
+  // failed. That cached policy cannot authorize another repository's child.
+  configurationReadable?: boolean;
   // Its platform's role names whose readiness the factory accepts, and the
   // accounts whose readiness it never accepts.
   authorization: { authorizedRoles: string[]; neverAuthorize: string[] };
@@ -257,6 +263,9 @@ export type OwnerControl = {
 export type Snapshot = {
   now: string;
   repositories: Repository[];
+  // Includes served repositories whose configuration or issue read failed.
+  // Absent in older snapshots, where only read repositories are known served.
+  servedRepositories?: string[];
   runs: Run[];
   usage: Record<string, Usage | null>;
   holds: Record<string, UsageHold | null>;
@@ -346,6 +355,7 @@ export type Decision = { repository: string; issue: number } & (
 
 export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
   const decisions: Decision[] = [];
+  const parents = parentRepositories(snapshot);
   const running = runningCounts(snapshot.runs);
   const retries = new Map<string, Retry>();
   // Interrupted and paused runs, which launch again rather than settle.
@@ -402,6 +412,7 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
         retries.get(key(repository.name, issue.number)),
         snapshot,
         models,
+        parents,
       ),
     ),
   );
@@ -465,7 +476,12 @@ export function decideFactory(snapshot: Snapshot, models: Models): Decision[] {
     )) {
       holds.push(
         ...(reconcile.readiness
-          ? readinessExclusions(issue, repository.issues, policy(repository))
+          ? readinessExclusions(
+              issue,
+              repository.issues,
+              policy(repository),
+              parents,
+            )
           : []
         ).flatMap((hold) =>
           hold.key ? [{ hold: hold.key, reason: hold.reason }] : [],
@@ -530,6 +546,23 @@ function policy(repository: Repository): Policy {
   return {
     ready: repository.configuration.labels.ready,
     ...repository.authorization,
+  };
+}
+
+// Parent facts and policy belong to the parent's repository pass. All pickup
+// consumers share this projection; it performs no additional platform read.
+function parentRepositories(snapshot: Snapshot): ParentRepositories {
+  return {
+    served:
+      snapshot.servedRepositories ??
+      snapshot.repositories.map(({ name }) => name),
+    read: snapshot.repositories
+      .filter((repository) => repository.configurationReadable !== false)
+      .map((repository) => ({
+        name: repository.name,
+        issues: repository.issues,
+        policy: policy(repository),
+      })),
   };
 }
 
@@ -754,6 +787,7 @@ function continuation(
   retry: Retry | undefined,
   snapshot: Snapshot,
   models: Models,
+  parents: ParentRepositories,
 ): Admission {
   const { configuration } = repository;
   const { labels } = configuration;
@@ -909,7 +943,7 @@ function continuation(
       handedOn?.kind === "review"
         ? (handedOn.implementedBy ?? null)
         : null,
-    exclusions: continuationExclusions(classified),
+    exclusions: continuationExclusions(classified, parents),
     afterModel: mergeExcluded
       ? skipped(classified, mergeExcluded, undefined, "merge relaunch waits: ")
       : typeof expanded === "object"
@@ -1025,6 +1059,7 @@ function resumes(repository: Repository, claim: Claim): boolean {
 function continuationExclusions(
   next: ContinuationState &
     Pick<Admission, "repository" | "issue" | "previous">,
+  parents: ParentRepositories,
 ): Decision[] | null {
   const { repository, issue } = next;
   const { labels } = repository.configuration;
@@ -1079,12 +1114,13 @@ function continuationExclusions(
       return next.kind === "retry"
         ? [unretried(next.retry, `it no longer carries ${labels.ready}`)]
         : [];
-    const excluded = exclusion(issue, repository, next.kind);
+    const excluded = exclusion(issue, repository, next.kind, parents);
     if (next.kind === "retry" && excluded) {
       const readiness = readinessExclusion(
         issue,
         repository.issues,
         policy(repository),
+        parents,
       );
       return readiness?.waiting
         ? skipped(next, excluded.reason)
@@ -1787,6 +1823,7 @@ function exclusion(
   issue: Issue,
   repository: Repository,
   continuing: Continuing,
+  parents: ParentRepositories,
 ): { reason: string; key?: HoldKey } | null {
   const labelled = exclusionReason(
     issue.labels,
@@ -1794,7 +1831,12 @@ function exclusion(
     continuing,
   );
   if (labelled) return { reason: labelled };
-  const held = readinessExclusion(issue, repository.issues, policy(repository));
+  const held = readinessExclusion(
+    issue,
+    repository.issues,
+    policy(repository),
+    parents,
+  );
   if (held) return held;
   const blockers = issue.blockedBy.filter(
     (blocker) => blocker.state === "open",

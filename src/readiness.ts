@@ -31,6 +31,13 @@ export type Policy = {
 // A permanent refusal or a transient wait for platform or validator facts.
 export type ReadinessHold = { reason: string; waiting: boolean };
 
+// Successfully read parent facts under their own policy, plus served paths
+// whose pass may be unreadable. No caller reads an unserved repository.
+export type ParentRepositories = {
+  served: string[];
+  read: { name: string; issues: Issue[]; policy: Policy }[];
+};
+
 // An issue that carries readiness the factory accepts, with at least one
 // native sub-issue, every sub-issue closed and no open blockers, is finished.
 export function closes(issue: Issue, policy: Policy): boolean {
@@ -50,8 +57,11 @@ export function readinessExclusion(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
+  repositories?: ParentRepositories,
 ): (ReadinessHold & { key?: HoldKey }) | null {
-  return readinessExclusions(issue, openIssues, policy)[0] ?? null;
+  return (
+    readinessExclusions(issue, openIssues, policy, repositories)[0] ?? null
+  );
 }
 
 // All readiness reasons, so one actionable reason cannot hide another's
@@ -60,6 +70,7 @@ export function readinessExclusions(
   issue: Issue,
   openIssues: Issue[],
   policy: Policy,
+  repositories?: ParentRepositories,
 ): (ReadinessHold & { key?: HoldKey })[] {
   const holds: (ReadinessHold & { key?: HoldKey })[] = [];
   const refused = refusal(issue, policy);
@@ -78,6 +89,44 @@ export function readinessExclusions(
         waiting: false,
       },
     ];
+  if (typeof issue.nativeParent === "string") {
+    if (issue.nativeParentState === "closed") return holds;
+    const [path, number] = issue.nativeParent.split("#");
+    const repository = repositories?.read.find(
+      (other) => other.name.toLowerCase() === path.toLowerCase(),
+    );
+    const served =
+      repository ||
+      repositories?.served.some(
+        (name) => name.toLowerCase() === path.toLowerCase(),
+      );
+    const parent = repository?.issues.find(
+      (other) => other.number === Number(number),
+    );
+    const held: (ReadinessHold & { blocked?: true }) | null = !served
+      ? {
+          reason:
+            "whose repository is not served by the host; the factory cannot read its readiness",
+          waiting: false,
+        }
+      : !repository || !parent
+        ? {
+            reason:
+              "whose readiness waits: its facts could not be read this pass",
+            waiting: true,
+          }
+        : parentHold(parent, repository.policy, issue.nativeParent);
+    if (held)
+      holds.push({
+        ...held,
+        ...(!held.waiting &&
+          !held.blocked && {
+            key: holdKeys.parentReadiness,
+          }),
+        reason: `sub-issue of ${issue.nativeParent}, ${held.reason}`,
+      });
+    return holds;
+  }
   const parent = openIssues.find(
     (other) => other.number === issue.nativeParent,
   );
@@ -202,9 +251,9 @@ export function actorRefusal(
 function parentHold(
   parent: Issue,
   policy: Policy,
+  name = reference(parent.number),
 ): (ReadinessHold & { blocked?: true }) | null {
   const { ready } = policy;
-  const name = reference(parent.number);
   if (!parent.labels.includes(ready))
     return {
       reason: `which is not ready; apply ${ready} to ${name} once its tickets are published`,
