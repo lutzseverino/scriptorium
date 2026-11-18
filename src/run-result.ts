@@ -12,6 +12,7 @@ import type {
 import { configured, stopLabels } from "./label-roles.ts";
 import { sameLogin } from "./contract-protocol.ts";
 import { lastCommentLine } from "./comment-template.ts";
+import { object } from "./status.ts";
 
 export type RunResult = {
   outcome: "done" | "stop" | "failed";
@@ -38,18 +39,14 @@ function isOutcome(value: unknown): value is RunResult["outcome"] {
 
 // Validate retained and standalone observations with the producer's outcomes.
 export function parseTerminalResult(value: unknown): TerminalResult {
+  const result = object(value);
   if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    !("run" in value) ||
-    typeof value.run !== "string" ||
-    value.run.trim() === "" ||
-    !("outcome" in value) ||
-    !isOutcome(value.outcome)
+    typeof result?.run !== "string" ||
+    result.run.trim() === "" ||
+    !isOutcome(result.outcome)
   )
     throw new Error("Invalid published terminal result data");
-  return { run: value.run, outcome: value.outcome };
+  return { run: result.run, outcome: result.outcome };
 }
 
 // A result the host could not accept, which fails a normally exited run.

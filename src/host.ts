@@ -173,6 +173,9 @@ type HostRun = Run & {
   // A launch's result identity is independent of the provenance a relaunch
   // retains for filing attribution. Persist it before publication can retry.
   resultId?: string;
+  // A publication stop replaces this brief identity. Retain the withdrawal
+  // alongside the stop identity until its required report write succeeds.
+  withdrawnResultId?: string;
   // Its run result's comment and labels landed; retain the link while the
   // run report retries, including across a restart.
   resultLink?: string;
@@ -338,6 +341,7 @@ export function createHost(
       !hold ||
       pausedEnding(run)?.paused.cause === "GitHub rate limit" ||
       run.resultLink !== undefined ||
+      run.withdrawnResultId !== undefined ||
       run.resultPosted
     )
       return;
@@ -761,7 +765,9 @@ export function createHost(
             run.configuration,
           );
           // Undefined once publication stopped the result.
-          let link: string | null | undefined = run.resultLink ?? null;
+          let link: string | null | undefined = run.withdrawnResultId
+            ? undefined
+            : (run.resultLink ?? null);
           let waiting =
             "Publication waits for the configured validator's matching notice; restore automatic evaluation and retry the retained result";
           if (link === null)
@@ -779,24 +785,18 @@ export function createHost(
                 link = null;
                 waiting = `Publication held: ${error.message}`;
               } else if (error instanceof ContractPublicationStop) {
+                link = undefined;
                 // The retained done result ends as a stop in the triage state,
                 // which releases its claim without readiness.
                 const state = run.configuration.labels.triage!;
                 const reason = `Publication stopped: ${error.message}`;
                 const { labels: _, ...done } = run.result;
+                run.withdrawnResultId = terminalIdentity(run);
+                run.resultId = randomUUID();
                 run.result = { ...done, outcome: "stop", state, reason };
                 issue.labels = [...new Set([...issue.labels, state])];
-                run.resultPosted = true;
                 record(run);
                 report(`${name}#${run.issue} ${reason}`);
-                await tell(pass, issue, {
-                  phase: phaseOf(run),
-                  facts: {
-                    state: "stopped",
-                    reason,
-                    link: run.publication?.evidence?.url,
-                  },
-                });
               } else throw error;
             }
           if (link === null) {
@@ -812,25 +812,26 @@ export function createHost(
             run.resultLink = link;
             record(run);
             issue.labels = postedLabels(issue.labels, post);
-            await tell(pass, issue, {
-              phase: phaseOf(run),
-              facts: {
-                state: outcomeStates[run.result.outcome],
-                reason: run.result.reason,
-                link,
-              },
-              result: {
-                ...run.result,
-                terminal: {
-                  run: terminalIdentity(run),
-                  outcome: run.result.outcome,
-                },
-              },
-            });
-            run.resultPosted = true;
-            record(run);
-            mark(run, "lastPublication");
           }
+          await tell(pass, issue, {
+            phase: phaseOf(run),
+            facts: {
+              state: outcomeStates[run.result.outcome],
+              reason: run.result.reason,
+              link: link ?? run.publication?.evidence?.url,
+            },
+            result: {
+              ...run.result,
+              terminal: {
+                run: terminalIdentity(run),
+                outcome: run.result.outcome,
+              },
+              withdrawn: run.withdrawnResultId,
+            },
+          });
+          run.resultPosted = true;
+          record(run);
+          mark(run, "lastPublication");
         }
         const ending = await observeEnding(reads, issue, ended);
         run.ownedPullRequests = ending.ownedPullRequests;

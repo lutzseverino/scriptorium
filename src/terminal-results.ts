@@ -38,7 +38,8 @@ export function terminalResults(args: string[], ports: Ports): number {
     }
     if (!Array.isArray(comments))
       throw new Error("Input must be a JSON comment array");
-    const results = new Map<string, TerminalResult>();
+    const entries: TerminalResult[] = [];
+    const withdrawn = new Set<string>();
     for (const value of comments) {
       const comment = object(value);
       const author = object(comment?.author);
@@ -51,16 +52,19 @@ export function terminalResults(args: string[], ports: Ports): number {
       if (!author || login(author.login as string) !== login(args[1])) continue;
       const standalone = resultCommentTerminal(comment.body);
       const reported = runCommentResults(comment.body);
-      const entries = [
+      entries.push(
         ...(standalone ? [standalone] : []),
-        ...(reported ?? []),
-      ];
-      for (const entry of entries) {
-        const previous = results.get(entry.run);
-        if (previous && previous.outcome !== entry.outcome)
-          throw new Error("Conflicting outcomes for a published run identity");
-        results.set(entry.run, entry);
-      }
+        ...(reported?.results ?? []),
+      );
+      for (const run of reported?.withdrawn ?? []) withdrawn.add(run);
+    }
+    const results = new Map<string, TerminalResult>();
+    for (const entry of entries) {
+      if (withdrawn.has(entry.run)) continue;
+      const previous = results.get(entry.run);
+      if (previous && previous.outcome !== entry.outcome)
+        throw new Error("Conflicting outcomes for a published run identity");
+      results.set(entry.run, entry);
     }
     ports.print(
       JSON.stringify({

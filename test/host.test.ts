@@ -11521,6 +11521,8 @@ async function preparedNotice(
   t: TestContext,
   result: Record<string, unknown>,
   seams = false,
+  configuration = contractConfiguration,
+  beforeReport?: () => void,
 ) {
   const protocol = contractFixture();
   protocol.controls.mode = "prepared";
@@ -11531,10 +11533,22 @@ async function preparedNotice(
     remotes: {
       "acme/widgets": remote(t, {
         ...kindsFiles,
-        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+        ".scriptorium/config.json": JSON.stringify(configuration),
       }),
     },
-    wrapConnection: protocol.wrap,
+    wrapConnection(connection) {
+      const wrapped = protocol.wrap(connection);
+      return {
+        ...wrapped,
+        issueTracker: {
+          ...wrapped.issueTracker,
+          async updateComment(id, body) {
+            beforeReport?.();
+            return wrapped.issueTracker.updateComment(id, body);
+          },
+        },
+      };
+    },
   });
   await run.tick();
   run.launched[0].finish(undefined, undefined, {
@@ -11553,6 +11567,100 @@ const otherSource = {
   source: { type: "issue-body", editedAt: "2026-10-08T00:30:00Z" },
 };
 
+for (const marker of ["default", "custom"] as const)
+  for (const reportFailure of [false, true])
+    test(`results exposes a publication stop without withdrawn ${marker}-marker done, report failure: ${reportFailure}`, async (t) => {
+      let failReport = false;
+      const { protocol, run } = await preparedNotice(
+        t,
+        otherSource,
+        false,
+        {
+          ...contractConfiguration,
+          triageResult:
+            marker === "custom"
+              ? contractConfiguration.triageResult
+              : undefined,
+        },
+        () => {
+          if (failReport) {
+            run.github.quotas["acme/widgets"] = {
+              remaining: 0,
+              reset: 1791547500,
+            };
+            throw new PlatformError("rateLimited", "API rate limit exceeded");
+          }
+        },
+      );
+      const observe = () =>
+        JSON.parse(
+          execFileSync(
+            process.execPath,
+            ["src/main.ts", "results", "--author", "factory[bot]"],
+            {
+              cwd: new URL("..", import.meta.url),
+              input: JSON.stringify(protocol.comments),
+              encoding: "utf8",
+              timeout: 10_000,
+            },
+          ),
+        );
+      failReport = reportFailure;
+      await run.tick();
+      let active: Pick<typeof run, "tick"> = run;
+      if (reportFailure) {
+        assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+        assert.equal(recordOf(run.state, 4, 1).settled, false);
+        assert.equal(healthOf(run).repositories[0].pass.lastPublication, null);
+        // Recovery retries only the stop report, without republishing the brief
+        // or changing the stop's identity.
+        const stopIdentity = recordOf(run.state, 4, 1).resultId;
+        await run.tick();
+        assert.ok(
+          run.reports.some((line) => line.includes("quota held")),
+          run.reports.join("\n"),
+        );
+        assert.equal(
+          recordOf(run.state, 4, 1).continuation.quotaRelaunches,
+          undefined,
+        );
+        assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+        active = run.restart();
+        await active.tick();
+        assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+        failReport = false;
+        run.github.quotas["acme/widgets"] = { remaining: 5000 };
+        run.clock.now = new Date("2026-10-09T12:05:00Z");
+        await active.tick();
+        assert.equal(observe().results[0].run, stopIdentity);
+      }
+      const stopped = observe();
+      assert.equal(stopped.results.length, 1);
+      assert.equal(stopped.results[0].outcome, "stop");
+      assert.notEqual(
+        stopped.results[0].run,
+        recordOf(run.state, 4, 1).provenance.id,
+      );
+      assert.equal(recordOf(run.state, 4, 1).settled, true);
+      assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+      assert.ok(healthOf(run).repositories[0].pass.lastPublication);
+      assert.equal(
+        protocol.comments.filter(
+          (c) =>
+            c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+        ).length,
+        1,
+      );
+      // Tracker ordering must not affect withdrawal or produce a conflict.
+      protocol.comments.reverse();
+      assert.deepEqual(observe(), stopped);
+      await active.tick();
+      assert.deepEqual(observe(), stopped);
+      await run.restart().tick();
+      assert.deepEqual(observe(), stopped);
+      assert.equal(run.launched.length, 1);
+    });
+
 for (const status of [
   "awaiting-review",
   "approved",
@@ -11566,7 +11674,6 @@ for (const status of [
       { ...otherSource, status: status.split(" ")[0] },
       status.endsWith("(v3)"),
     );
-    await run.tick();
     await run.tick();
     assert.equal(
       protocol.result!.format,
@@ -11595,6 +11702,10 @@ for (const status of [
     assert.equal(record.settled, true);
     assert.equal(record.result.outcome, "stop");
     assert.equal(record.result.state, "state:triage");
+    assert.ok(
+      !run.reports.some((line) => line.includes("Publication waits")),
+      run.reports.join("\n"),
+    );
     // The consumed trigger starts no new triage, and the action is told once.
     await run.tick();
     assert.equal(run.launched.length, 1);

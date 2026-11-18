@@ -67,7 +67,10 @@ function standInText(facts: PhaseFacts): string | undefined {
 export type RunUpdate = {
   phase: Phase;
   facts: PhaseFacts;
-  result?: Pick<RunResult, "body"> & { terminal?: TerminalResult };
+  result?: Pick<RunResult, "body"> & {
+    terminal?: TerminalResult;
+    withdrawn?: string;
+  };
   final?: true;
   resume?: InputResume;
 };
@@ -119,6 +122,7 @@ export function stopAction(
 type State = {
   phases: Partial<Record<Phase, PhaseFacts>>;
   results?: TerminalResult[];
+  withdrawnResults?: string[];
   final?: true;
   resume?: InputResume;
 };
@@ -159,12 +163,22 @@ function runState(comment: Comment): State | null {
 
 // Internal access for the supported reader: it validates the retained facts
 // after selecting the caller's trusted author, independently of bot marking.
-export function runCommentResults(body: string): TerminalResult[] | undefined {
-  const results = readState(body)?.results;
-  if (results === undefined) return undefined;
-  if (!Array.isArray(results))
+export function runCommentResults(
+  body: string,
+): { results: TerminalResult[]; withdrawn: string[] } | undefined {
+  const state = readState(body);
+  if (!state) return undefined;
+  const { results = [], withdrawnResults = [] } = state;
+  if (
+    !Array.isArray(results) ||
+    !Array.isArray(withdrawnResults) ||
+    withdrawnResults.some((run) => typeof run !== "string" || run.trim() === "")
+  )
     throw new Error("Invalid published terminal result data");
-  return results.map(parseTerminalResult);
+  return {
+    results: results.map(parseTerminalResult),
+    withdrawn: withdrawnResults,
+  };
 }
 
 // The mutable report role, without exposing its encoded state to the platform.
@@ -275,6 +289,8 @@ export function issueComments(
       const pass =
         latest && (!latest.state.final || update.final) ? latest : undefined;
       const results = [...(pass?.state.results ?? [])];
+      const withdrawn = new Set(pass?.state.withdrawnResults ?? []);
+      if (update.result?.withdrawn) withdrawn.add(update.result.withdrawn);
       const terminal = update.result?.terminal;
       if (terminal && !results.some((entry) => entry.run === terminal.run))
         results.push(terminal);
@@ -289,7 +305,10 @@ export function issueComments(
             ...update.facts,
           },
         },
-        ...(results.length && { results }),
+        ...(results.length && {
+          results: results.filter((entry) => !withdrawn.has(entry.run)),
+        }),
+        ...(withdrawn.size && { withdrawnResults: [...withdrawn] }),
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };

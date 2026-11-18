@@ -42,12 +42,23 @@ for one identity fail observation rather than inventing another result.
 
 The factory also retains result identities in its mutable run comment. A result
 can therefore appear in an existing comment, and subsequent progress edits
-retain it. All results published in that pass are retained, including when a
-later result replaces the visible result body. Consumers reread current
+retain it. Accepted results in that pass are retained unless withdrawn,
+including when a later result replaces the visible result body. Consumers reread current
 comment bodies instead of watching only new comment IDs. Standalone results
 using Scriptorium's default result marker are also readable and deduplicate
 against the run comment. Older reports without retained identities and older
 standalone triage results using a custom marker provide no readable guarantee.
+
+If the validator selects another contract source after a triage brief was
+published, publication stops. The stop has its own terminal identity; the
+withdrawn brief's `done` identity is omitted from subsequent observations,
+including when its standalone comment still exists. The run comment retains
+both the stop and the withdrawal through later edits and host restarts. This
+works with either the default result marker or a custom triage marker. The
+stop's report write must succeed before publication completes and the claim
+is released. Readers need the complete current comment set to observe that
+withdrawal; an earlier observation of the brief alone cannot establish that
+its publication will finish.
 
 Exit status `0` means observation succeeded, including an empty result set;
 `2` means invalid command arguments; `1` means unreadable or invalid input,
