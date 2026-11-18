@@ -9,13 +9,17 @@
 // next write, so the work resumes on the same PRs. A parent's close comment
 // is posted fresh.
 import type { Comment, IssueTracker } from "@lutzseverino/postern";
-import { renderComment } from "./comment-template.ts";
+import { lastCommentLine, renderComment } from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
 import { roleNames, type Labels, type RoleName } from "./label-roles.ts";
 import type { InputResume } from "./platform.ts";
-import type { RunResult } from "./run-result.ts";
+import {
+  parseTerminalResult,
+  type RunResult,
+  type TerminalResult,
+} from "./run-result.ts";
 import { reference } from "./readiness.ts";
 import { contractEvidenceIds } from "./contract-protocol.ts";
 
@@ -63,7 +67,10 @@ function standInText(facts: PhaseFacts): string | undefined {
 export type RunUpdate = {
   phase: Phase;
   facts: PhaseFacts;
-  result?: Pick<RunResult, "body">;
+  result?: Pick<RunResult, "body"> & {
+    terminal?: TerminalResult;
+    withdrawn?: string;
+  };
   final?: true;
   resume?: InputResume;
 };
@@ -114,6 +121,8 @@ export function stopAction(
 
 type State = {
   phases: Partial<Record<Phase, PhaseFacts>>;
+  results?: TerminalResult[];
+  withdrawnResults?: string[];
   final?: true;
   resume?: InputResume;
 };
@@ -123,18 +132,17 @@ const actionMarker = /^<!-- scriptorium:action \{.*\} -->$/;
 // Run result bodies are contained, so no body closes these.
 const bodyStart = "<!-- scriptorium:run-body -->\n";
 const bodyEnd = "\n<!-- /scriptorium:run-body -->";
-const lastLine = (comment: Comment) =>
-  comment.body.split(/\r\n?|\n/).at(-1) ?? "";
+const lastLine = (comment: Comment) => lastCommentLine(comment.body);
 // JSON whose text cannot close the HTML comment holding it.
 const encode = (value: unknown) =>
   JSON.stringify(value).replace(/[<>]/g, (character) =>
     character === "<" ? "\\u003c" : "\\u003e",
   );
 
-// A run comment the factory's account wrote, with the state its marker holds.
-function runState(comment: Comment): State | null {
-  if (comment.body.includes("<!-- repo-canon:triage-attestation ")) return null;
-  const match = comment.author?.bot && runMarker.exec(lastLine(comment));
+// The run comment's owned state, independent of transport author selection.
+function readState(body: string): State | null {
+  if (body.includes("<!-- repo-canon:triage-attestation ")) return null;
+  const match = runMarker.exec(lastCommentLine(body));
   if (!match) return null;
   try {
     const state = JSON.parse(match[1]);
@@ -147,6 +155,30 @@ function runState(comment: Comment): State | null {
   } catch {
     return null;
   }
+}
+
+function runState(comment: Comment): State | null {
+  return comment.author?.bot ? readState(comment.body) : null;
+}
+
+// Internal access for the supported reader: it validates the retained facts
+// after selecting the caller's trusted author, independently of bot marking.
+export function runCommentResults(
+  body: string,
+): { results: TerminalResult[]; withdrawn: string[] } | undefined {
+  const state = readState(body);
+  if (!state) return undefined;
+  const { results = [], withdrawnResults = [] } = state;
+  if (
+    !Array.isArray(results) ||
+    !Array.isArray(withdrawnResults) ||
+    withdrawnResults.some((run) => typeof run !== "string" || run.trim() === "")
+  )
+    throw new Error("Invalid published terminal result data");
+  return {
+    results: results.map(parseTerminalResult),
+    withdrawn: withdrawnResults,
+  };
 }
 
 // The mutable report role, without exposing its encoded state to the platform.
@@ -256,6 +288,12 @@ export function issueComments(
       );
       const pass =
         latest && (!latest.state.final || update.final) ? latest : undefined;
+      const results = [...(pass?.state.results ?? [])];
+      const withdrawn = new Set(pass?.state.withdrawnResults ?? []);
+      if (update.result?.withdrawn) withdrawn.add(update.result.withdrawn);
+      const terminal = update.result?.terminal;
+      if (terminal && !results.some((entry) => entry.run === terminal.run))
+        results.push(terminal);
       const state: State = {
         phases: {
           ...pass?.state.phases,
@@ -267,6 +305,10 @@ export function issueComments(
             ...update.facts,
           },
         },
+        ...(results.length && {
+          results: results.filter((entry) => !withdrawn.has(entry.run)),
+        }),
+        ...(withdrawn.size && { withdrawnResults: [...withdrawn] }),
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };

@@ -929,12 +929,19 @@ restarts without host state; it trusts only a comment its bot account posted.
 A write after the pass merged or failed starts the next pass's comment, so a
 retry after a failure, once its failed label is removed, starts a new one.
 
-Progress writes, at each launch, posted result, pause and wait for merge, are
+Progress writes, at each launch, pause and wait for merge, are
 best-effort: a failed one is logged and the next write carries the state on.
-A pass's final write, at merge or failure, a stop's continuation and every
-action are required: the decision fails and retries on a later pass, and a
+A posted result's report write, a pass's final write at merge or failure,
+a stop's continuation and every action are required: the decision fails and retries on a later pass, and a
 retry finds the same comment and posts no action twice. An unchanged comment
 is not edited.
+
+The result report retains terminal identities for the supported
+[`results` command](terminal-results.md). When triage publication stops after
+the validator selects another source, the report records a distinct `stop`
+and withdraws the brief's `done` identity. Both identities survive a report
+write failure and host restart; publication completes only after that required
+report write succeeds.
 
 An action comment is posted fresh, once per occasion, only when a person must
 act: when a run's stop leaves the issue in the reporter, grill or owner state,
@@ -2022,8 +2029,11 @@ health.overdueRuns               null while the observation is unavailable; othe
   [redacted](#redaction) and names repository inputs by their repository path,
   never by the host's clone path.
 - **Last publication and settlement.** `lastPublication` is the last run result
-  whose comment and labels the host posted, including a triage brief's
-  publication. `lastSettlement` is the last run the host stopped holding,
+  whose publication completed after its required report write succeeded,
+  including a triage brief's publication or publication stop. Once the
+  standalone result comment and labels land, the host keeps that comment's link
+  in its run record, so a report retry does not post them again.
+  `lastSettlement` is the last run the host stopped holding,
   including an attempt it retires to launch the next. The host keeps both, and
   `failingSince`, in the status file it writes, and takes them from there when
   it starts, so they survive a [restart](#restarts). A status file written by
@@ -2040,7 +2050,8 @@ health.overdueRuns               null while the observation is unavailable; othe
   agent exited and the run's ending is not yet resolved, for example while its
   result publication or ending observation is pending, including a
   publication a restart found pending; `resultPosted` says
-  whether its result comment and labels have landed. A run whose ending is
+  whether its result publication, including the required report write, has
+  completed. A run whose ending is
   resolved never appears, whether done, awaiting merge, stopped, failed,
   paused or interrupted. Phases read the same exit fact as capacity counts.
 - **Time limit.** `limitAt` is the run's start plus `timeLimitMinutes`. A run

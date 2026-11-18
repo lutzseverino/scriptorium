@@ -2,7 +2,8 @@
 // repository the host configuration lists until it is stopped, and
 // `node src/main.ts resume <host configuration> <provider>` queues the owner's
 // resume request for it. `status <host configuration> [--json]` reads the
-// operational observations without serving repositories.
+// operational observations without serving repositories. `results --author
+// <account>` reads terminal result facts from tracker comments on stdin.
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -16,7 +17,33 @@ import { createRegistry } from "./providers.ts";
 import { pruneSandboxCache, retainSandboxImages } from "./image-retention.ts";
 import { resume, resumeUsage } from "./resume.ts";
 import { status, statusUsage } from "./status-command.ts";
+import { terminalResults, terminalResultsUsage } from "./terminal-results.ts";
 import { buildSandboxImage, docker, stopSandboxes } from "./sandbox-image.ts";
+
+// Comments may arrive later or exceed a pipe buffer, and exiting drops
+// unwritten pipe output, so read all input and flush the observation first.
+if (process.argv[2] === "results") {
+  let output = "";
+  const code = await terminalResults(process.argv.slice(3), {
+    async read() {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks).toString("utf8");
+    },
+    print: (line) => (output += `${line}\n`),
+    error: (line) => console.error(line),
+  });
+  // A failed write is reported once here, not as an unhandled stream error.
+  process.stdout.on("error", () => {});
+  const written = await new Promise<boolean>((resolve) =>
+    process.stdout.write(output, (error) => {
+      if (error)
+        console.error(`Could not write the observation: ${error.message}`);
+      resolve(!error);
+    }),
+  );
+  process.exit(written ? code : 1);
+}
 
 if (process.argv[2] === "status")
   process.exit(
@@ -39,7 +66,7 @@ if (process.argv[2] === "resume")
 const path = process.argv[2];
 if (process.argv.length !== 3) {
   console.error(
-    `Usage: node src/main.ts <host configuration>\n   or: ${resumeUsage}\n   or: ${statusUsage}`,
+    `Usage: node src/main.ts <host configuration>\n   or: ${resumeUsage}\n   or: ${statusUsage}\n   or: ${terminalResultsUsage}`,
   );
   process.exit(2);
 }

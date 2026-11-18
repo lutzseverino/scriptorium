@@ -10374,6 +10374,248 @@ test("a stop result posts its question and applies its state together, then rele
   assert.match(run.launched[1].options.prompt!, /Needs-input resume:/);
 });
 
+for (const outcome of ["done", "failed"] as const)
+  test(`a merge relaunch publishes a distinct terminal result after restart: ${outcome}`, async (t) => {
+    const bare = remote(t, factoryFiles);
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": bare },
+    });
+    await run.tick();
+    // A retry opens a PR and publishes a result before merge recovery launches.
+    run.launched[0].finish(undefined, undefined, null);
+    await run.drain();
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const pr = publishedPR(bare);
+    issue.branchPullRequests.push(pr);
+    run.launched[1].finish(undefined, undefined, {
+      outcome: "done",
+      body: "Delivered.",
+    });
+    await run.drain();
+    await run.tick();
+    const observe = (bodies: string[]) => {
+      const observed = execFileSync(
+        process.execPath,
+        ["src/main.ts", "results", "--author", "factory[bot]"],
+        {
+          cwd: new URL("..", import.meta.url),
+          input: JSON.stringify(
+            bodies.map((body) => ({ body, author: { login: "factory[bot]" } })),
+          ),
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      return JSON.parse(observed).results;
+    };
+    const first = observe(issue.comments);
+    assert.equal(first.length, 1);
+    assert.equal(first[0].outcome, "done");
+    advanceDefault(bare);
+    await run.tick();
+    assert.equal(run.launched.length, 3);
+    assert.match(run.launched[2].options.prompt!, /Merge relaunch:/);
+    run.launched[2].finish(undefined, undefined, {
+      outcome,
+      body: "Delivered.",
+      ...(outcome === "failed" && { reason: "Merge checks failed" }),
+    });
+    await run.drain();
+    // The pending result must retain its launch identity across host restart.
+    const restarted = run.restart();
+    await restarted.tick();
+    const results = observe(issue.comments);
+    assert.equal(results.length, 2);
+    assert.deepEqual(
+      results.find((entry: { run: string }) => entry.run === first[0].run),
+      first[0],
+    );
+    assert.equal(
+      results.find((entry: { run: string }) => entry.run !== first[0].run)
+        .outcome,
+      outcome,
+    );
+    // The mutable report and standalone publications expose the same facts.
+    assert.deepEqual(observe(runComments(issue)), results);
+    assert.deepEqual(
+      observe(
+        issue.comments.filter((body) => !runComments(issue).includes(body)),
+      ),
+      results,
+    );
+    await restarted.tick();
+    assert.deepEqual(observe(issue.comments), results);
+  });
+
+test("terminal result observation retries an unavailable report and survives a host restart", async (t) => {
+  let failReport = false;
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+    wrapConnection(connection) {
+      return {
+        ...connection,
+        issueTracker: {
+          ...connection.issueTracker,
+          async updateComment(id, body) {
+            if (failReport) throw new Error("report unavailable");
+            return connection.issueTracker.updateComment(id, body);
+          },
+        },
+      };
+    },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  const observe = () =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        ["src/main.ts", "results", "--author", "factory[bot]"],
+        {
+          cwd: new URL("..", import.meta.url),
+          input: JSON.stringify([
+            { body: runComment(issue), author: { login: "factory[bot]" } },
+          ]),
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      ),
+    );
+  const original = runComment(issue);
+  const identity = recordOf(run.state, 4, 1).provenance.id;
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "factory:needs-input",
+    body: "Which database should the tests use?",
+  });
+  await run.drain();
+  failReport = true;
+  await run.tick();
+  assert.equal(runComment(issue), original);
+  assert.deepEqual(observe().results, []);
+  assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+  assert.equal(healthOf(run).repositories[0].pass.lastPublication, null);
+  failReport = false;
+  run.clock.now = new Date("2026-10-09T12:05:00Z");
+  await run.restart().tick();
+  assert.deepEqual(observe().results, [{ run: identity, outcome: "stop" }]);
+  assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+  assert.deepEqual(healthOf(run).repositories[0].pass.lastPublication, {
+    at: "2026-10-09T12:05:00.000Z",
+    issue: 4,
+    runKind: "implement",
+  });
+  assert.equal(runComments(issue).length, 1);
+  assert.equal(
+    issue.comments.length,
+    2,
+    "publication retries reuse the standalone result",
+  );
+});
+
+for (const outcome of ["stop", "failed"] as const)
+  test(`a published ${outcome} result survives a rate-limited report write and restart`, async (t) => {
+    let failReport = false;
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      wrapConnection(connection) {
+        return {
+          ...connection,
+          issueTracker: {
+            ...connection.issueTracker,
+            async updateComment(id, body) {
+              if (failReport) {
+                run.github.quotas["acme/widgets"] = {
+                  remaining: 0,
+                  reset: 1791547500,
+                };
+                throw new PlatformError(
+                  "rateLimited",
+                  "API rate limit exceeded",
+                );
+              }
+              return connection.issueTracker.updateComment(id, body);
+            },
+          },
+        };
+      },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    const observe = (bodies: string[]) =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          ["src/main.ts", "results", "--author", "factory[bot]"],
+          {
+            cwd: new URL("..", import.meta.url),
+            input: JSON.stringify(
+              bodies.map((body) => ({
+                body,
+                author: { login: "factory[bot]" },
+              })),
+            ),
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        ),
+      ).results;
+    run.launched[0].finish(undefined, undefined, {
+      outcome,
+      body: "The tests need a database.",
+      ...(outcome === "stop"
+        ? { state: "factory:needs-input" }
+        : { reason: "No test database was available" }),
+    });
+    await run.drain();
+    failReport = true;
+    await run.tick();
+    const published = observe(issue.comments);
+    assert.equal(published.length, 1);
+    assert.equal(published[0].outcome, outcome);
+    assert.deepEqual(observe(runComments(issue)), []);
+    assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+    assert.equal(healthOf(run).repositories[0].pass.lastPublication, null);
+
+    // Exhaustion after publication cannot turn this result into a same-attempt
+    // quota relaunch, either on the next tick or after recovery.
+    await run.tick();
+    assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+    assert.equal(
+      recordOf(run.state, 4, 1).continuation.quotaRelaunches,
+      undefined,
+    );
+    const restarted = run.restart();
+    await restarted.tick();
+    assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+    assert.equal(
+      recordOf(run.state, 4, 1).continuation.quotaRelaunches,
+      undefined,
+    );
+    assert.equal(run.launched.length, 1);
+
+    failReport = false;
+    run.github.quotas["acme/widgets"] = { remaining: 5000 };
+    run.clock.now = new Date("2026-10-09T12:05:00Z");
+    await restarted.tick();
+    assert.deepEqual(observe(runComments(issue)), published);
+    assert.deepEqual(observe(issue.comments), published);
+    assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+    assert.deepEqual(healthOf(run).repositories[0].pass.lastPublication, {
+      at: "2026-10-09T12:05:00.000Z",
+      issue: 4,
+      runKind: "implement",
+    });
+    assert.equal(run.launched.length, outcome === "failed" ? 2 : 1);
+    if (outcome === "failed")
+      assert.equal(recordOf(run.state, 4, 2).continuation.attempt, 2);
+    else assert.ok(issue.labels.includes("factory:needs-input"));
+  });
+
 test("a failed result fails with its reason, and a run without a valid result fails with why", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },
@@ -11279,6 +11521,8 @@ async function preparedNotice(
   t: TestContext,
   result: Record<string, unknown>,
   seams = false,
+  configuration = contractConfiguration,
+  beforeReport?: () => void,
 ) {
   const protocol = contractFixture();
   protocol.controls.mode = "prepared";
@@ -11289,10 +11533,22 @@ async function preparedNotice(
     remotes: {
       "acme/widgets": remote(t, {
         ...kindsFiles,
-        ".scriptorium/config.json": JSON.stringify(contractConfiguration),
+        ".scriptorium/config.json": JSON.stringify(configuration),
       }),
     },
-    wrapConnection: protocol.wrap,
+    wrapConnection(connection) {
+      const wrapped = protocol.wrap(connection);
+      return {
+        ...wrapped,
+        issueTracker: {
+          ...wrapped.issueTracker,
+          async updateComment(id, body) {
+            beforeReport?.();
+            return wrapped.issueTracker.updateComment(id, body);
+          },
+        },
+      };
+    },
   });
   await run.tick();
   run.launched[0].finish(undefined, undefined, {
@@ -11311,6 +11567,100 @@ const otherSource = {
   source: { type: "issue-body", editedAt: "2026-10-08T00:30:00Z" },
 };
 
+for (const marker of ["default", "custom"] as const)
+  for (const reportFailure of [false, true])
+    test(`results exposes a publication stop without withdrawn ${marker}-marker done, report failure: ${reportFailure}`, async (t) => {
+      let failReport = false;
+      const { protocol, run } = await preparedNotice(
+        t,
+        otherSource,
+        false,
+        {
+          ...contractConfiguration,
+          triageResult:
+            marker === "custom"
+              ? contractConfiguration.triageResult
+              : undefined,
+        },
+        () => {
+          if (failReport) {
+            run.github.quotas["acme/widgets"] = {
+              remaining: 0,
+              reset: 1791547500,
+            };
+            throw new PlatformError("rateLimited", "API rate limit exceeded");
+          }
+        },
+      );
+      const observe = () =>
+        JSON.parse(
+          execFileSync(
+            process.execPath,
+            ["src/main.ts", "results", "--author", "factory[bot]"],
+            {
+              cwd: new URL("..", import.meta.url),
+              input: JSON.stringify(protocol.comments),
+              encoding: "utf8",
+              timeout: 10_000,
+            },
+          ),
+        );
+      failReport = reportFailure;
+      await run.tick();
+      let active: Pick<typeof run, "tick"> = run;
+      if (reportFailure) {
+        assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+        assert.equal(recordOf(run.state, 4, 1).settled, false);
+        assert.equal(healthOf(run).repositories[0].pass.lastPublication, null);
+        // Recovery retries only the stop report, without republishing the brief
+        // or changing the stop's identity.
+        const stopIdentity = recordOf(run.state, 4, 1).resultId;
+        await run.tick();
+        assert.ok(
+          run.reports.some((line) => line.includes("quota held")),
+          run.reports.join("\n"),
+        );
+        assert.equal(
+          recordOf(run.state, 4, 1).continuation.quotaRelaunches,
+          undefined,
+        );
+        assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+        active = run.restart();
+        await active.tick();
+        assert.equal(recordOf(run.state, 4, 1).ended?.paused, undefined);
+        failReport = false;
+        run.github.quotas["acme/widgets"] = { remaining: 5000 };
+        run.clock.now = new Date("2026-10-09T12:05:00Z");
+        await active.tick();
+        assert.equal(observe().results[0].run, stopIdentity);
+      }
+      const stopped = observe();
+      assert.equal(stopped.results.length, 1);
+      assert.equal(stopped.results[0].outcome, "stop");
+      assert.notEqual(
+        stopped.results[0].run,
+        recordOf(run.state, 4, 1).provenance.id,
+      );
+      assert.equal(recordOf(run.state, 4, 1).settled, true);
+      assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+      assert.ok(healthOf(run).repositories[0].pass.lastPublication);
+      assert.equal(
+        protocol.comments.filter(
+          (c) =>
+            c.body.includes("## Agent Brief") && !c.body.includes('"phases":'),
+        ).length,
+        1,
+      );
+      // Tracker ordering must not affect withdrawal or produce a conflict.
+      protocol.comments.reverse();
+      assert.deepEqual(observe(), stopped);
+      await active.tick();
+      assert.deepEqual(observe(), stopped);
+      await run.restart().tick();
+      assert.deepEqual(observe(), stopped);
+      assert.equal(run.launched.length, 1);
+    });
+
 for (const status of [
   "awaiting-review",
   "approved",
@@ -11324,7 +11674,6 @@ for (const status of [
       { ...otherSource, status: status.split(" ")[0] },
       status.endsWith("(v3)"),
     );
-    await run.tick();
     await run.tick();
     assert.equal(
       protocol.result!.format,
@@ -11353,6 +11702,10 @@ for (const status of [
     assert.equal(record.settled, true);
     assert.equal(record.result.outcome, "stop");
     assert.equal(record.result.state, "state:triage");
+    assert.ok(
+      !run.reports.some((line) => line.includes("Publication waits")),
+      run.reports.join("\n"),
+    );
     // The consumed trigger starts no new triage, and the action is told once.
     await run.tick();
     assert.equal(run.launched.length, 1);

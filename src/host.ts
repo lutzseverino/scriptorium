@@ -170,7 +170,16 @@ export const dockerfilePath = ".scriptorium/Dockerfile";
 
 type HostRun = Run & {
   provenance?: Provenance;
-  // Its run result's comment and labels are on the issue.
+  // A launch's result identity is independent of the provenance a relaunch
+  // retains for filing attribution. Persist it before publication can retry.
+  resultId?: string;
+  // A publication stop replaces this brief identity. Retain the withdrawal
+  // alongside the stop identity until its required report write succeeds.
+  withdrawnResultId?: string;
+  // Its run result's comment and labels landed; retain the link while the
+  // run report retries, including across a restart.
+  resultLink?: string;
+  // Its run result and report are published completely.
   resultPosted?: true;
   // The quota pause's label and cached run notice were written successfully.
   quotaNotified?: true;
@@ -331,6 +340,8 @@ export function createHost(
     if (
       !hold ||
       pausedEnding(run)?.paused.cause === "GitHub rate limit" ||
+      run.resultLink !== undefined ||
+      run.withdrawnResultId !== undefined ||
       run.resultPosted
     )
       return;
@@ -747,50 +758,47 @@ export function createHost(
             run.result,
             {
               ...run,
-              id: run.provenance?.id ?? run.startedAt,
+              id: terminalIdentity(run),
               kind: run.continuation.runKind ?? "implement",
               attempt: run.continuation.attempt,
             },
             run.configuration,
           );
           // Undefined once publication stopped the result.
-          let link: string | null | undefined;
+          let link: string | null | undefined = run.withdrawnResultId
+            ? undefined
+            : (run.resultLink ?? null);
           let waiting =
             "Publication waits for the configured validator's matching notice; restore automatic evaluation and retry the retained result";
-          try {
-            link = await platform.postResult(run.issue, post, {
-              state: run.publication,
-              now: ports.now,
-              save(publication) {
-                run.publication = publication;
-                record(run);
-              },
-            });
-          } catch (error) {
-            if (error instanceof ContractPublicationHold) {
-              link = null;
-              waiting = `Publication held: ${error.message}`;
-            } else if (error instanceof ContractPublicationStop) {
-              // The retained done result ends as a stop in the triage state,
-              // which releases its claim without readiness.
-              const state = run.configuration.labels.triage!;
-              const reason = `Publication stopped: ${error.message}`;
-              const { labels: _, ...done } = run.result;
-              run.result = { ...done, outcome: "stop", state, reason };
-              issue.labels = [...new Set([...issue.labels, state])];
-              run.resultPosted = true;
-              record(run);
-              report(`${name}#${run.issue} ${reason}`);
-              await tell(pass, issue, {
-                phase: phaseOf(run),
-                facts: {
-                  state: "stopped",
-                  reason,
-                  link: run.publication?.evidence?.url,
+          if (link === null)
+            try {
+              link = await platform.postResult(run.issue, post, {
+                state: run.publication,
+                now: ports.now,
+                save(publication) {
+                  run.publication = publication;
+                  record(run);
                 },
               });
-            } else throw error;
-          }
+            } catch (error) {
+              if (error instanceof ContractPublicationHold) {
+                link = null;
+                waiting = `Publication held: ${error.message}`;
+              } else if (error instanceof ContractPublicationStop) {
+                link = undefined;
+                // The retained done result ends as a stop in the triage state,
+                // which releases its claim without readiness.
+                const state = run.configuration.labels.triage!;
+                const reason = `Publication stopped: ${error.message}`;
+                const { labels: _, ...done } = run.result;
+                run.withdrawnResultId = terminalIdentity(run);
+                run.resultId = randomUUID();
+                run.result = { ...done, outcome: "stop", state, reason };
+                issue.labels = [...new Set([...issue.labels, state])];
+                record(run);
+                report(`${name}#${run.issue} ${reason}`);
+              } else throw error;
+            }
           if (link === null) {
             record(run);
             report(`${name}#${run.issue} ${waiting}`);
@@ -801,20 +809,29 @@ export function createHost(
             continue;
           }
           if (link !== undefined) {
-            issue.labels = postedLabels(issue.labels, post);
-            run.resultPosted = true;
+            run.resultLink = link;
             record(run);
-            mark(run, "lastPublication");
-            await tell(pass, issue, {
-              phase: phaseOf(run),
-              facts: {
-                state: outcomeStates[run.result.outcome],
-                reason: run.result.reason,
-                link,
-              },
-              result: run.result,
-            });
+            issue.labels = postedLabels(issue.labels, post);
           }
+          await tell(pass, issue, {
+            phase: phaseOf(run),
+            facts: {
+              state: outcomeStates[run.result.outcome],
+              reason: run.result.reason,
+              link: link ?? run.publication?.evidence?.url,
+            },
+            result: {
+              ...run.result,
+              terminal: {
+                run: terminalIdentity(run),
+                outcome: run.result.outcome,
+              },
+              withdrawn: run.withdrawnResultId,
+            },
+          });
+          run.resultPosted = true;
+          record(run);
+          mark(run, "lastPublication");
         }
         const ending = await observeEnding(reads, issue, ended);
         run.ownedPullRequests = ending.ownedPullRequests;
@@ -1136,7 +1153,8 @@ export function createHost(
           exited: true,
           exitedAt: new Date(recorded.exitedAt ?? ports.now()),
           ended:
-            recorded.publication && !recorded.resultPosted
+            (recorded.publication || recorded.resultLink) &&
+            !recorded.resultPosted
               ? null
               : recorded.interrupted
                 ? { interrupted: true }
@@ -1318,6 +1336,7 @@ export function createHost(
           };
     const run: HostRun = {
       provenance,
+      resultId: continuation.relaunch ? randomUUID() : provenance.id,
       configuration: pass.configuration!,
       repository,
       base,
@@ -1546,8 +1565,8 @@ export function createHost(
   }
 
   // Writes the open issue's run comment and an action to tell once. A
-  // progress write is best-effort. A final write, a continuation or an
-  // action is required and rejects, so its decision retries on a later pass.
+  // progress write is best-effort. A final write, a continuation, a terminal
+  // result or an action is required and rejects, so it retries on a later pass.
   async function tell(
     pass: Pass,
     issue: Issue | undefined,
@@ -1558,7 +1577,8 @@ export function createHost(
     try {
       await pass.platform!.comments.write(issue.number, update, action);
     } catch (error) {
-      if (action || update.final || update.resume) throw error;
+      if (action || update.final || update.resume || update.result?.terminal)
+        throw error;
       report(
         `${pass.name}#${issue.number} run comment was not written; a later write retries it: ${error}`,
       );
@@ -2057,7 +2077,7 @@ export function createHost(
   return { tick, interrupt, drain, refreshTokens, report };
 }
 
-// Whether the run's result comment and labels have yet to land. An
+// Whether the run's result and report have yet to finish publication. An
 // interrupted or paused run launches again rather than posting.
 function publicationPending(run: HostRun): boolean {
   return (
@@ -2103,6 +2123,11 @@ function stoppedWork(
 ): "implement" | "review" | undefined {
   const kind = run?.continuation.runKind ?? "implement";
   return kind === "triage" ? undefined : kind;
+}
+
+// Records predating per-launch result identity retain their published identity.
+function terminalIdentity(run: HostRun): string {
+  return run.resultId ?? run.provenance?.id ?? run.startedAt;
 }
 
 // The run comment's phase a run works in: a merge relaunch merges.

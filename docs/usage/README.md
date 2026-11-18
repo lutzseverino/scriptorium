@@ -19,3 +19,5 @@ immediately, with no legacy-directory reading window.
   the factory's agent layer, pinned tools, and image reuse.
 
 - [Body-backed triage contracts](body-contracts.md): publication, exact evidence, legacy compatibility, staged activation and recovery.
+- [Read terminal run results](terminal-results.md): read-only external observation
+  of published outcomes and stable identities, including edits to existing reports.

@@ -129,3 +129,7 @@ export function renderComment(
   }
   return render(parse(comment, template ?? defaults[comment]), values);
 }
+
+// Marker readers share the definition of a comment's final line.
+export const lastCommentLine = (body: string): string =>
+  body.split(/\r\n?|\n/).at(-1) ?? "";
