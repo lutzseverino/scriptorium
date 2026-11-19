@@ -131,7 +131,9 @@ export function createQuota(ports: Ports) {
       "squashMerge",
     ]);
     function port<T extends object>(value: T): T {
-      return new Proxy(value, {
+      // Postern freezes its ports; a proxy may only replace methods on a copy.
+      const target = { ...value };
+      return new Proxy(target, {
         get(target, key, receiver) {
           const operation = Reflect.get(target, key, receiver);
           if (typeof operation !== "function") return operation;
@@ -140,7 +142,7 @@ export function createQuota(ports: Ports) {
             if (!writes.has(String(key)) && hold(name))
               throw new QuotaHeld(`${name} waits for its GitHub quota reset`);
             try {
-              return await operation.apply(target, args);
+              return await operation.apply(value, args);
             } catch (error) {
               if (
                 error instanceof PlatformError &&
