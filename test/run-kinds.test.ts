@@ -798,7 +798,6 @@ test("priority is configured per repository and preserves age, repository and nu
   );
 });
 
-// Issue 6 is newer than every competitor, so only its group can put it first.
 const triaging = issue(1, [labels.triage]);
 const reviewing = (number: number, priority?: string) => ({
   issue: issue(number, [...claimed, ...(priority ? [priority] : [])]),
@@ -813,12 +812,36 @@ const ordered = (input: Parameters<typeof decide>[0], cap: number) =>
     }),
   );
 
-test("finishing work takes a provider's last slot ahead of older starting work", () => {
+for (const createdAt of ["2026-10-01T00:00:00Z", "2026-10-06T00:00:00Z"])
+  test(`high-priority starting work takes the last slot ahead of a normal review created ${createdAt}`, () => {
+    const review = reviewing(6);
+    const decisions = decide({
+      issues: [
+        triaging,
+        issue(2, [labels.ready, "urgent"]),
+        { ...review.issue, createdAt },
+      ],
+      runs: [review.run, run({ issue: 9 })],
+      details: { configuration: priorityConfiguration },
+      settings: { caps: { "provider-a": 2, "provider-b": 2 } },
+    });
+    assert.deepEqual(launchedIssues(decisions), [widgets + "#2"]);
+    assert.deepEqual(
+      decisions
+        .filter((decision) => decision.kind === "skip")
+        .filter((decision) => decision.issue === 6)
+        .map(({ reason }) => reason),
+      ["review waits: provider-a already runs its cap of 2 agents"],
+    );
+  });
+
+// At equal priority, only its finishing group puts issue 6 ahead of older work.
+test("finishing work takes a provider's last slot ahead of older starting work at the same priority", () => {
   const review = reviewing(6);
   assert.deepEqual(
     ordered(
       {
-        issues: [triaging, issue(2, [labels.ready, "urgent"]), review.issue],
+        issues: [triaging, issue(2), review.issue],
         runs: [review.run, run({ issue: 9 })],
       },
       2,
@@ -827,11 +850,11 @@ test("finishing work takes a provider's last slot ahead of older starting work",
   );
 });
 
-test("a low-priority review goes ahead of normal starting work", () => {
+test("normal triage goes ahead of a low-priority review", () => {
   const review = reviewing(6, "later");
   assert.deepEqual(
     ordered({ issues: [triaging, review.issue], runs: [review.run] }, 1),
-    [widgets + "#6"],
+    [widgets + "#1"],
   );
 });
 
