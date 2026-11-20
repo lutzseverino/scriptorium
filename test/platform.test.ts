@@ -1433,7 +1433,7 @@ test("a closing issue gets its comment, then closes", async () => {
   ]);
 });
 
-test("a run's pull request is its repository's own, opened since its first attempt, from a closing reference or its branch", async () => {
+test("a run's pull request is its repository's own, from a closing reference or its branch", async () => {
   const pull = (number: number, state: string, details = {}) => ({
     number,
     fullDatabaseId: String(2000 + number),
@@ -1460,6 +1460,11 @@ test("a run's pull request is its repository's own, opened since its first attem
             viewerStatus === 200
               ? { login: "factory", type: "User" }
               : { message: "Resource not accessible by integration" },
+        };
+      if (request === "FactoryPullRequestDraft")
+        return {
+          status: 200,
+          data: { data: { repository: { pullRequest: { isDraft: true } } } },
         };
       if (request === "PosternClosingPullRequests") {
         assert.equal(body.variables.number, 4);
@@ -1585,21 +1590,60 @@ test("a run's pull request is its repository's own, opened since its first attem
       createdAt: "2026-10-09T12:00:00Z",
     },
   ]);
-  // A closed PR reads as closed, and one opened before the first attempt
-  // started is not the run's.
-  for (const [branch, since, state] of [
-    [[pull(1, "CLOSED")], undefined, "closed"],
-    [[pull(1, "OPEN")], "2026-10-09T12:00:01Z", "none"],
-  ] as const)
-    assert.equal(
-      (
-        await repositoryPlatform(
-          answers([], [...branch]).connection,
-          configuration,
-        ).pullRequestObservation(4, since)
-      ).state,
-      state,
-    );
+  const earlier = await repositoryPlatform(
+    answers([], [pull(2, "OPEN")]).connection,
+    configuration,
+  ).pullRequestObservation(4, "2026-10-09T12:00:01Z", true);
+  assert.deepEqual(earlier, {
+    state: "open",
+    ownedPullRequests: [2],
+    pullRequests: [
+      {
+        number: 2,
+        headBranch: "factory/issue-4",
+        state: "open",
+        createdAt: "2026-10-09T12:00:00Z",
+      },
+    ],
+    mergeCandidate: { ...candidate, draft: true },
+  });
+  const authored = await repositoryPlatform(
+    answers([pull(2, "OPEN", { headRefName: "other" })], []).connection,
+    configuration,
+  ).pullRequestObservation(4, "2026-10-09T12:00:01Z");
+  assert.equal(authored.state, "open");
+  assert.deepEqual(authored.ownedPullRequests, [2]);
+  assert.deepEqual(authored.mergeCandidate, candidate);
+
+  for (const [state, details, viewerStatus] of [
+    ["CLOSED", {}, 200],
+    ["MERGED", {}, 200],
+    [
+      "OPEN",
+      { headRefName: "other", author: { __typename: "User", login: "person" } },
+      200,
+    ],
+    ["OPEN", { headRefName: "other" }, 403],
+    ["OPEN", { isCrossRepository: true }, 200],
+  ] as const) {
+    const excluded = await repositoryPlatform(
+      answers([pull(2, state, details)], [], viewerStatus).connection,
+      configuration,
+    ).pullRequestObservation(4, "2026-10-09T12:00:01Z");
+    assert.deepEqual(excluded, {
+      state: "none",
+      ownedPullRequests: [],
+      pullRequests: [],
+    });
+  }
+  const ambiguous = await repositoryPlatform(
+    answers([], [pull(2, "OPEN"), pull(3, "OPEN")]).connection,
+    configuration,
+  ).pullRequestObservation(4, "2026-10-09T12:00:01Z");
+  assert.equal(ambiguous.state, "open");
+  assert.deepEqual(ambiguous.ownedPullRequests, [2, 3]);
+  assert.equal(ambiguous.mergeCandidate, undefined);
+  assert.equal(context.state, "closed");
 });
 
 test("closed claims include needs-input-only issues across every page with configured labels", async () => {
