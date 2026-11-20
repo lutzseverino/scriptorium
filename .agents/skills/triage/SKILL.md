@@ -12,7 +12,7 @@ Bring requests to agent briefs that hold. Resolve bare issue/PR numbers and
 whether external PRs are a request surface from `docs/agents/issue-tracker.md`.
 A PR is an issue with attached code: use the same roles and states.
 
-Before every tracker comment or issue body, read `.repo-standards/rules/comments.md#disclaimers` for the triage disclaimer.
+Before every tracker comment or issue body, read `.repo-standards/rules/comments.md#lead-line` for its lead line and `.repo-standards/rules/comments.md#disclaimers` for the triage disclosure footer.
 The contribution guide's Triage and Readiness sections and installed rules own
 routing, inference, acceptance, readiness, labels and owner questions; apply them
 where named below, with the absent-input fallbacks under Reads.
@@ -99,7 +99,7 @@ Every research run, on either path, does two checks first:
 
 2. **Review.** Read the published brief as a reviewer who did not write it. Check it against the issue and the code yourself, not against the research run's own summary:
    - **Evidence**: each claim the brief rests on traces to a code path, a reproduction, or the issue. Spot-check the one the change depends on. Verify every required input under [Available inputs](AGENT-BRIEF.md#available-inputs); reject a private-workbench reference in place of copied decision content.
-   - **Scope**: desired behavior is what the request asks for; nothing the request needs is dropped, nothing beyond it is added, and out of scope names the adjacent work an agent might reach for. Work that must be shown on a live system is split as [AGENT-BRIEF.md](AGENT-BRIEF.md#live-acceptance-gets-its-own-ticket) says.
+   - **Scope**: desired behavior is what the request asks for; nothing the request needs is dropped, nothing beyond it is added, and out of scope names the adjacent work an agent might reach for. Work that must be shown on a live system carries or splits its live evidence as [AGENT-BRIEF.md](AGENT-BRIEF.md#live-evidence-and-split-tickets) says.
    - **Acceptance criteria**: each is concrete, testable, and independently verifiable, and together they cover the edge cases the request and the code expose.
    - **Dependencies**: work that must land first is named, so it can be recorded as a blocker.
    - **Seams**: assess the writer's result under `codebase-design`'s [Ownership check](../codebase-design/SKILL.md#ownership-check), including its honesty, Value owner, consumers, reversibility and cost read.
@@ -151,7 +151,7 @@ When your credentials cannot apply readiness, or the destination's factory workf
 
 1. **Read the revision** in the validator's current notice; without one, stop as [Accept a brief that holds](#accept-a-brief-that-holds) step 1 says. If this session published it, refuse: post nothing, and report that another session must review it.
 2. **Review it** as the [code-bound path](#code-bound-path)'s step 2 says, or the [intent-bound path](#intent-bound-path)'s step 6 for a direct contract, running each read-only check of live facts the contract names.
-3. **Post one verdict comment**: `**Verdict:**` holds or does not hold, `**Revision:**` the exact `sha256:` reviewed, and `**Findings:**`, one bullet each with its evidence, live checks' results included. Start it with the triage disclaimer, as `.repo-standards/rules/comments.md#disclaimers` says. A failing verdict is the writer's correction list.
+3. **Post one verdict comment**: `**Verdict:**` holds or does not hold, `**Revision:**` the exact `sha256:` reviewed, and `**Findings:**`, one bullet each with its evidence, live checks' results included. Its lead line states the verdict, and it ends with the triage disclosure footer, as `.repo-standards/rules/comments.md#disclaimers` says. A failing verdict is the writer's correction list.
 4. **Accept** a holding revision as [Accept a brief that holds](#accept-a-brief-that-holds) says.
 
 ## Factory triage run
@@ -167,11 +167,11 @@ The factory starts this run for one issue, read-only, and the installed factory 
    - `state:grill`: the facts gathered (current behavior, constraints, the records you read, the options and what each would cost) and the open questions, numbered.
    - `state:carried`: the carrier the Triage run section names, linked, and how it settles the request.
 
-   A directly authored specification or implementation ticket, an issue-body contract with no category label, takes this branch instead: write no Agent Brief and ask for no `type:` label in any outcome. Read the revision in the validator's current notice; without one, stop in `state:owner` and say the notice is missing, as [Accept mode](#accept-mode)'s step 1 does, naming `state:triage` for when it arrives. Otherwise review that revision as Accept mode's step 2 says for a direct contract, and stop:
-   - **The body holds**: `state:owner`, naming `state:ready` at the exact `sha256:` revision you reviewed, with the companion labels readiness needs: one `model:` label you choose under the installed Model selection rule, with its reason, any `factory:skip` Skipped work requires, and a `priority:` label. Record your findings, one bullet each with its evidence.
+   A directly authored specification or implementation ticket, an issue-body contract with no category label, takes this branch instead: write no Agent Brief and ask for no `type:` label in any outcome. Read the revision in the validator's current notice; without one, stop in `state:owner` and say the notice is missing, as [Accept mode](#accept-mode)'s step 1 does, naming `state:triage` for when it arrives. Otherwise review that revision as Accept mode's step 2 says for a direct contract, and choose:
+   - **The body holds**: ask the host to accept the exact `sha256:` revision from the validator's notice you reviewed, in the format its run-result interface defines, with `state:ready` and the companion labels readiness needs: one `model:` label you choose under the installed Model selection rule, with its reason, any `factory:skip` Skipped work requires, and a `priority:` label. Record your findings, one bullet each with its evidence. If this run wrote the issue, refuse acceptance instead: stop in `state:owner`, naming `state:triage` for an independent run to review it.
    - **The body needs correction**: `state:owner`, naming each correction, which a separate writer makes before the issue returns to `state:triage`, as the contribution guide's Owner questions section says.
    - **An open intent question**: `state:grill`, as above.
-4. **Write the run result** to the path the factory gives, in the format its run-result interface defines: the state and labels you ask for, and the body, with no disclaimer, as `.repo-standards/rules/comments.md#disclaimers` says. When you cannot finish, write a failed result with the reason.
+4. **Write the run result** to the path the factory gives, in the format its run-result interface defines: the state and labels you ask for, and the body, starting with its lead line and carrying no footer or disclaimer, as `.repo-standards/rules/comments.md#disclaimers` says. When you cannot finish, write a failed result with the reason.
 5. **Write nothing else**, as the Triage run section says, even where a credential would allow it: a reproduction stays in your sandbox, and `ready.mjs` never runs.
 
 ## Other outcomes
@@ -212,7 +212,7 @@ Repository Standards'
 - `CONTRIBUTING.md`: Triage, Readiness and Owner questions. If missing,
   follow this method and ask the owner for any rule left to the guide.
 - `.repo-standards/rules/comments.md`: posting sections named above. If missing,
-  post as each step describes; an installed issue-contract check names the Agent Brief disclaimer.
+  post as each step describes; an installed issue-contract check names the Agent Brief preambles.
 - Installed rules, such as `github-repository-configuration` and factory workflow,
   looked up by `repository-standards`. If missing, use [AGENT-BRIEF.md](AGENT-BRIEF.md)
   for brief shape and categories, and this skill's routing and outcomes for roles; use no `model:` or `factory:` label.

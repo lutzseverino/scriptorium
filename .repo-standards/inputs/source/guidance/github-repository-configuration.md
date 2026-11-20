@@ -16,6 +16,28 @@ Until the PR metadata validation workflow is on the default branch, requiring
 the check is deferred, and the next adoption or update after the workflow
 merges requires it.
 
+For a public repository, the fix establishes the active
+`Repo Canon PR metadata events` repository Actions policy alongside that check,
+allowing `pull_request_target` for `.github/workflows/pr-metadata.yml` after
+GitHub's default block. The policy uses `conditions.workflow_path.include`
+and a `restrict_action_events` rule with `allowed_events` containing
+`pull_request_target`. It creates a missing policy, matches its name without
+case sensitivity, and blocks duplicate managed names. Differences in existing
+enforcement, targeting or event rules require confirmation before any writes;
+confirmed reconciliation keeps other conditions, rules and allowed events
+and leaves other policies untouched. Final readback confirms active workflow
+targeting and the event allowance. Matching configuration needs no writes.
+
+Unsupported or refused policy requests return `blocked` with the missing
+capability or permission and credential-redacted platform status and message,
+confirmed partial effects and remaining work; no further mutation follows.
+There is no trigger fallback. Private and internal repositories receive no
+policy requests. An absent workflow on default defers the policy with the
+check until the next adoption or update. Enterprise or organization Actions
+policies can still block execution; repository-level readback cannot detect
+that. See the [setup policy documentation](../docs/development/github-pr-integration-setup.md#public-repository-actions-event-policy)
+for API and reconciliation details.
+
 For a first adoption that installs the workflow absent from default, deliver
 through the owner, including when both protection mechanisms are proven
 unavailable on the private plan. After separate review, leave the PR open and
@@ -131,16 +153,26 @@ declarations, including plain human logins, and file-read failures fail with
 a correction identifying the policy and the requirement from the rules. The
 check never rewrites the file or treats invalid content as absence.
 
-## Installed workflow runners
+## Check location
 
-Assess the repository's visibility and the repository-level
-`REPO_CANON_RUNS_ON` variable as unset, valid with its labels, or invalid,
-following the
-[discovery guidance](../discovery/github-repository-configuration.md), against
-the runner rules. Disclose uncertainty about an organization-level value the
-run cannot read. Report parsed falsy JSON such as `false`, `0`, `null`, or `""`
-as invalid, even though it selects the hosted default.
+Assess against the selection's check location, following the
+[discovery guidance](../discovery/github-repository-configuration.md) and the
+runner rules. At `github`, Repo Canon's workflows install and every job runs
+on `ubuntu-latest`; disclose when a private repository's jobs consume its
+account's hosted Actions minutes. At `runner` (a repository-named machine
+posting commit statuses, independent of the Actions scheduler) or
+`self-reported` (the authoring agent's own sandbox, identified as such and
+repeated by the separate review run), Repo Canon installs no workflow file.
+Every location runs the one required check command the repository's
+development guide names; the repository owns that command.
 
-The adoption or update run reports this setting but never sets, changes, or
-deletes the variable. Setting it without matching runners would strand every
-installed job. The assessment changes nothing remotely.
+Off-Actions execution is separate check-execution work. Until it ships, a
+`runner` or `self-reported` repository gets no issue-contract result, so no
+readiness, no PR metadata result and no automated standards updates, and merge
+gates that need results only Repo Canon's workflows produce refuse or hand off
+to the owner rather than pass. Report that limit; the first-adoption owner
+handoff above still applies.
+
+The `REPO_CANON_RUNS_ON` variable is retired: the run neither reads nor sets,
+changes, or deletes it, and repository-owned workflows that read it keep their
+own behavior. The assessment changes nothing remotely.
