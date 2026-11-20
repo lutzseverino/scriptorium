@@ -174,7 +174,8 @@ module's observation and outcome table for ended runs and orphaned claims, and
 `test/terminal-results.test.ts` invokes the supported read-only results command
 over real publication fixtures, covering stable identity, presentation edits,
 later results and publication into an existing report; host tests also cover
-report-publication retries across restart.
+report-publication retries across restart, and a failed report write held at
+its run while sibling endings settle.
 `test/run-result.test.ts` covers the run-result interface, its containment and its
 frame. `test/run-comment.test.ts` drives the one writer of the run, action and
 close comments over a fake tracker: passes, final-write retries, actions told
