@@ -46,10 +46,12 @@ issue closed as will not be actioned.
 
 A triaged request carries one `type:` label, its category.
 
-Triage sets pickup priority: a broken workflow, data loss or security problem
-is `priority:high`; most work is `priority:normal`; cleanup with no user effect
-is `priority:low`. No priority label means normal. Triage never replaces a
-person's priority; the owner may change it at any time.
+Triage sets `priority:high` for harm (security, data loss, a broken default
+branch) and `priority:low` for everything else, unless a person or the agent
+planning for the maintainer asked for the work. Only they set
+`priority:normal`, or `priority:high` for the next items on a goal's path,
+never for every row of a plan. No priority label means normal. Triage never
+replaces a person's priority; the owner may change it at any time.
 
 `docs/agents/triage-labels.md` maps the triage skills' roles to these labels.
 
@@ -68,6 +70,31 @@ for the repository. On a private repository whose plan offers neither, the
 requirement is unavailable, not optional, and applies once GitHub offers
 either. GitHub runs the PR metadata validation workflow only from the default
 branch, so the check is required once the workflow is on the default branch.
+
+On a public repository requiring that check, the PR integration setup also
+manages one repository Actions event policy, `Repo Canon PR metadata events`,
+to allow `pull_request_target` after GitHub's default block. It is active,
+targets `.github/workflows/pr-metadata.yml` through
+`conditions.workflow_path.include`, and has a `restrict_action_events` rule
+whose `allowed_events` includes `pull_request_target`. Keep the workflow's
+base checkout, lack of persisted credentials and `contents: read` permission.
+
+Match the policy name case-insensitively; duplicate matches block without
+mutation. Create a missing policy freely. Changes to existing enforcement,
+workflow conditions or event rules require confirmation with current and
+proposed values before any mutation. Confirmed reconciliation preserves other
+conditions, rules and allowed events, and leaves other policies untouched.
+Read back active workflow targeting and the event allowance before reporting
+`changed`; matching policy, check and merge settings are `unchanged`.
+
+Unsupported or refused policy operations return `blocked`, name the capability
+or permission and credential-redacted platform status and message, retain
+confirmed partial effects and remaining work, and stop further mutation.
+Never fall back to another trigger. Private and internal repositories receive
+no Actions policy requests; an absent workflow on default defers policy setup
+with the check until the next adoption or update. An enterprise or organization
+Actions policy can still block the event; repository-level readback cannot
+detect this.
 
 ## Pull request asset branches
 
@@ -184,10 +211,10 @@ its reason. A later stale base follows the overlap decision and bound above.
 
 Read both the authoritative implementation contract, resolved under the
 contribution guide's Implementation contracts section, and the worker's
-handoff. Either can require owner review; an omission in one cancels no
-designation in the other. Carry the designation and its source into the PR
-handoff and a delivery record under the `comments` rules, even when no worker
-handoff is required.
+handoff in the pull request body's Delivery subsection. Either can require
+owner review; an omission in one cancels no designation in the other. Carry
+the designation and its source into that handoff and a designation delivery
+record under the `comments` rules, even when no worker handoff is required.
 
 Before merging a designated PR, the merging agent verifies the owner's explicit
 approval of the current head. Record the approval's source and head SHA as a
@@ -224,8 +251,10 @@ through the applicable owner correction and merge procedure, then invoke again
 to select the current revision. A proposed file alone cannot repair an invocation;
 there is no bootstrap bypass and no automatic selection of required names.
 
-At every check location (`github`, `runner` and `self-reported`), merge itself
-requires positive success for every declared name on the exact current head.
+At every check location (`github`, `runner` and `self-reported`), the required
+checks run the one required check command that the repository's development
+guide names, and merge itself requires positive success for every declared name
+on the exact current head.
 A completed successful check run or successful commit status qualifies. Missing,
 pending, failed, cancelled, timed-out, skipped and neutral results do not.
 Older-head success and earlier attempts cannot satisfy later pending or failed
@@ -253,54 +282,34 @@ and its accepted concurrent-base race.
 ## Preserved settings
 
 The GitHub configuration changes only the labels, merge settings, required check,
-and freshness these rules name. Unrelated labels, rules, checks, and repository
+Actions event policy and freshness these rules name. Unrelated labels, rules, checks, and repository
 settings stay as the repository has them.
 
 ## Installed workflow runners
 
-Every installed job reads `vars.REPO_CANON_RUNS_ON`. Unset or empty selects
-`ubuntu-latest`; public repositories normally leave it unset. Private
-repositories needing their own runners can use a non-empty JSON array of
-non-empty runner label strings, such as `["self-hosted", "homelab"]`. Set it
-only with matching runners, each carrying every listed label. Repository-owned
-workflows may read it too.
+The repository's selection records its check location. Repo Canon's workflows
+install only at `github`, and every installed job runs on `ubuntu-latest`,
+GitHub's hosted runners; on a private repository they consume the account's
+hosted Actions minutes. At `runner` and `self-reported`, Repo Canon installs
+none of its workflow files. A repository that cannot use hosted Actions selects
+one of those locations instead. Their off-Actions execution is separate work;
+until it ships they produce no issue-contract or PR metadata result and no
+automated standards update, and the merge gate above refuses rather than
+passes without the declared results.
 
-Repository-level values override an organization-level variable of the same
-name; installed jobs use no environments. Malformed JSON or unusable `runs-on`
-values fail every installed job during GitHub evaluation, before any steps.
-The expression does not validate the schema: parsed falsy JSON (`false`, `0`,
-`null`, `""`) selects the hosted default but remains invalid. Never rely on
-invalid-value fallback.
-
-The runners need `git`, `bash`, and network access for Node.js setup through
-`actions/setup-node`. The factory profile's sandbox-image job also needs a
-`docker` CLI with a daemon that can run `docker build`. A job with no matching
-online runner waits in the queue for up to 24 hours and then fails.
-Issue-contract feedback, and therefore readiness review, waits for those
-runners too.
-
-The sandbox-image job executes pull request workflow and Dockerfile content,
-including content from forks. For repositories accepting untrusted pull
-requests, keep the hosted default or select isolated, ephemeral self-hosted
-runners with no secrets or sensitive network access. This applies to private
-and internal repository forks too. A read-only workflow token does not prevent
-untrusted code from compromising a persistent runner and later jobs. Every
-runner matching the variable's labels must be suitable for that workload;
-runner isolation is a host provisioning responsibility. See GitHub's
-[self-hosted runner security guidance](https://docs.github.com/en/actions/reference/security/secure-use#hardening-for-self-hosted-runners).
-
-For unavailable self-hosted runners, delete the variable or set
-`["ubuntu-latest"]` without editing installed files. Deletion exposes any
-inherited organization value; `["ubuntu-latest"]` overrides it. Another machine
-with the same runner labels needs no change. Variable changes affect new jobs;
-cancel and rerun jobs already queued on unavailable labels.
+The `REPO_CANON_RUNS_ON` repository variable is retired. Installed jobs never
+read it, so an existing value has no effect on them: a repository whose value
+selected self-hosted runner labels runs its installed jobs on GitHub-hosted
+runners after updating at `github`. Repository-owned workflows that read the
+variable keep their own behavior. Adoption never creates, changes or deletes
+the variable or edits repository-owned workflows.
 
 ## Automated standards updates
 
-Standard and factory install `.github/workflows/standards-update.yml`. Its daily
+At `github`, standard and factory install `.github/workflows/standards-update.yml`. Its daily
 schedule and manual `workflow_dispatch` run only when
 `REPO_CANON_UPDATES` is `true`; installing the file opts nobody in. The job
-reads `vars.REPO_CANON_RUNS_ON`, checks out the default branch, and serializes
+runs on `ubuntu-latest`, checks out the default branch, and serializes
 runs through one concurrency group. Workflow-level permissions are empty; its
 job's workflow token has only
 `contents: write`, `pull-requests: write`, and `issues: write` permissions.
@@ -319,10 +328,6 @@ Otherwise it passes `github.token` (`GITHUB_TOKEN`). Pull requests opened with
 that fallback trigger no CI, and it cannot push workflow-file changes. The
 repository must allow GitHub Actions to create pull requests for that fallback
 to open one.
-
-This job puts the App private key and a write token on the
-`REPO_CANON_RUNS_ON` runners, so the warning above about persistent runners
-running untrusted pull request code applies to it too.
 
 The action moves both pins together to the newest CLI and standards release,
 maintaining one rolling PR on `repo-standards/update` on headless completion,
@@ -488,8 +493,8 @@ findings retain their existing routes; a changed head follows the ordinary
 new-head review and validation path.
 
 A round with no open finding holds: mark the PR ready and deliver under the
-guide's Merging section. List only open findings in the round's review, fixes
-under `Fixed`, and answer declines in their threads. Only the reviewing
+guide's Merging section. The round's review lists its open, fixed and filed
+findings, and declines are answered in their threads. Only the reviewing
 account's undismissed standing reviews submitted on the head they name count
 as its rounds. Resume delivery, including after interruption, only while that
 account's latest review holds on the current head. Installed factory workflow
@@ -538,9 +543,10 @@ At every invocation, merge independently checks the platform PR author and the
 trusted destination policy, including without a prior wait. A caller's wait
 result or PR-branch policy never authorizes a skip. For a matching author, it
 requires a complete pull request review of the current head in the shape the
-`comments` rules' Reviews section gives; an issue comment or an earlier record
-shape does not count. Missing, incomplete or stale evidence returns merge exit
-`5` without a merge write: post the completed current-head review, then rerun.
+`comments` rules' Reviews section gives, including the former record it
+accepts for one release; an issue comment or another shape does not count.
+Missing, incomplete or stale evidence returns merge exit `5` without a merge
+write: post the completed current-head review, then rerun.
 That retry is distinct from owner handoff (`3`), head changed (`2`) and stale
 base (`4`); every other merge condition still applies.
 
@@ -697,13 +703,18 @@ Only an exact unchanged inventoried legacy comment remains eligible, without
 expiry, until its next revision moves to the body. Follow the validator's
 selected source rather than selecting a competing comment.
 
-The selected source starts with the `comments` rules' triage disclaimer, then a blank
-line, then the `## Agent Brief` heading.
+The selected source starts with one of these preambles, then a blank line,
+then the `## Agent Brief` heading:
 
-Nothing else comes between the disclaimer and the heading; other triage notes
-follow the brief. Under the heading, each of these fields starts a line with
-its name and a colon in bold, such as `**Category:**`, and holds content that
-is not a placeholder:
+- the `comments` rules' lead line alone;
+- their former leading triage disclaimer, accepted for one release;
+- that disclaimer, a blank line, then the lead line.
+
+The workflow checks disclosure only in the disclaimer's shapes and never reads
+a host's frame or footer. Nothing else comes before the heading; triage notes
+and a hand post's disclosure footer follow the brief. Under the heading, each
+of these fields starts a line with its name and a colon in bold, such as
+`**Category:**`, and holds content that is not a placeholder:
 
 - Category
 - Summary
@@ -731,9 +742,10 @@ accepts the disclaimer emphasized with `_` or without the blank line before
 the heading. Contract syntax inside code or HTML comments is example content,
 not part of the brief.
 
-In body mode, place `## Original request` at the end, preserving the reporter's
-original text verbatim exactly once through every revision. Reuse a correctly
-preserved original; missing or ambiguous original input holds body conversion. Capture
+In body mode, place `## Original request` at the end, after any disclosure
+footer, preserving the reporter's original text verbatim exactly once through
+every revision. Reuse a correctly preserved original; missing or ambiguous
+original input holds body conversion. Capture
 intake author/writer proof before overwriting the body. A factory's configured
 author posts a separate exact-revision attestation; app authorship or a copied
 marker alone never authorizes readiness. The validator verifies durable

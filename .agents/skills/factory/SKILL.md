@@ -59,7 +59,7 @@ labels together through the authorized readiness path. When readiness is
 already approved without the skip or model label, run the same `triage`
 readiness command: it adds the missing labels and records readiness again. Launch `implement`
 directly with the contract, evidence, decisions, issue link and delivery role.
-The worker opens the PR and records its handoff as
+The worker opens the PR and records its handoff in the body's Delivery subsection, as
 `.repo-standards/rules/comments.md#delivery-records` says. Continue as the orchestrating agent through `babysit` from that handoff;
 apply its current-head owner-approval gate when designated.
 
@@ -69,14 +69,14 @@ After resolution and any required renewed readiness, resume the worker if no
 PR exists, or continue the same open PR and its handoff. Live host access gates
 only the authorized live steps.
 
-A live-acceptance ticket takes this route. Its worker records the ticket's live
-acceptance on it, as `.repo-standards/rules/comments.md#disclaimers` says,
-instead of opening a PR, and reports back. It closes only once
-its live acceptance is recorded on it, never on a merge; its source ticket's PR
-links it without a closing reference. A time-bounded host access grant belongs to the
-orchestrating agent that asked the maintainer for it, which records the workers
-using it. Workers never end it: it ends when the last of them reports back, or
-at its own time bound.
+In the contribution guide's split case, a live-acceptance ticket takes this
+route. Its worker records the ticket's live acceptance on it, as
+`.repo-standards/rules/comments.md#disclaimers` says, instead of opening a PR,
+and reports back. It closes only once its live acceptance is recorded on it,
+never on a merge; its source ticket's PR links it without a closing reference.
+A time-bounded host access grant belongs to the orchestrating agent that asked
+the maintainer for it, which records the workers using it. Workers never end
+it: it ends when the last of them reports back, or at its own time bound.
 
 ## Resume stopped work
 

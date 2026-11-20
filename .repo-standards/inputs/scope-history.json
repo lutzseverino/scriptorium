@@ -1,7 +1,7 @@
 {
   "format": "repo-standards/scope-history/v7",
   "evidence": "historical",
-  "inspection": "sha256:9905e3489d387c0662c71c5361f3d0bfa7b23189fe5f4c5545834ab7a1040752",
+  "inspection": "sha256:2b93494f0fb96b07d5d79bad1125df246ae0df18697cbb9ee0ed6bf767dba19d",
   "resolved": {
     "description": "The standard profile plus the factory's repository files and workflow rules, for a repository a factory serves",
     "declarations": [
@@ -163,6 +163,9 @@
       },
       {
         "id": "factory-sandbox-image-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -419,6 +422,9 @@
       },
       {
         "id": "issue-contract-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -531,6 +537,9 @@
       },
       {
         "id": "pr-metadata-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -811,6 +820,9 @@
       },
       {
         "id": "standards-update-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -1043,6 +1055,9 @@
       },
       {
         "id": "factory-sandbox-image-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -1293,6 +1308,9 @@
       },
       {
         "id": "issue-contract-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -1405,6 +1423,9 @@
       },
       {
         "id": "pr-metadata-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -1682,6 +1703,9 @@
       },
       {
         "id": "standards-update-workflow",
+        "check-locations": [
+          "github"
+        ],
         "checks": [],
         "fixes": [],
         "kind": "file",
@@ -1866,13 +1890,13 @@
     ]
   },
   "discovery": {
-    "identity": "sha256:945c9aebe83d8c8c0017dad8180dd0e48c422df918f7fcafb4e42793fae815bf",
+    "identity": "sha256:3ffc639d6024f655bc89044de11e1a9ce94263222554ce6b9685675b149ca942",
     "proposal": {
       "format": "repo-standards/scope/v2",
       "declarations": [
         {
           "id": "comments",
-          "coverage": "Intentionally empty content scope: comment rules govern issue and pull-request posts throughout this repository. CONTRIBUTING.md and #108 discussion establish tracker practice.",
+          "coverage": "Intentionally empty content scope: discovery/comments.md directs no content paths; these rules govern issue and pull-request posts repository-wide. CONTRIBUTING.md and the current update issue establish tracker practice.",
           "candidates": [],
           "unresolved": []
         },
@@ -2133,13 +2157,13 @@
         },
         {
           "id": "factory-workflow",
-          "coverage": "Intentionally empty content scope: workflow rules govern repository and tracker work. Canonical .scriptorium/config.json belongs to its separate exact declaration. Legacy .factory/config.json and src/factory-configuration.ts establish migration context.",
+          "coverage": "Intentionally empty content scope: discovery/factory-workflow.md governs work and tracker activity repository-wide. .scriptorium/config.json exists and belongs to its separate exact declaration; no root or directory target belongs here. Existing selection already uses factory.",
           "candidates": [],
           "unresolved": []
         },
         {
           "id": "github-repository-configuration",
-          "coverage": "Intentionally empty content scope: CLI-ready remote fixes reconcile GitHub settings and read-only checks validate policy without editing it. Authenticated gh establishes PUBLIC user-owned lutzseverino/scriptorium with REPO_CANON_RUNS_ON absent and no organization inheritance; only REPO_CANON_UPDATES=true is set. Adoption request authorizes those fixes. Main supplies required-check policy PR metadata/Test in .github/required-checks.json. Legacy needs-triage is reconciled only by CLI canonical-labels, with actual outcome reported. For the v0.30.0 update, both remote fixes probed HTTP 403 under the supplied factory credentials and are deferred.",
+          "coverage": "Intentionally empty content scope per discovery/github-repository-configuration.md: remote setup fixes reconcile GitHub configuration, and checks read repository-owned policy without writing it. Authenticated gh resolves lutzseverino/scriptorium, visibility PUBLIC; selection retains github checks. The 2026-11-20 adoption authorization includes documented ready remote setup; any non-default remote overwrite still requires the owner. Preserve .github/required-checks.json and optional reviewer/policy data. Do not read or change retired REPO_CANON_RUNS_ON.",
           "candidates": [],
           "unresolved": []
         },
@@ -2299,7 +2323,7 @@
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "597b3d633071f9352f314786bbde7e47f7d3b31c0d0197f8776a2bd7c4373b6e",
+          "sha256": "d0e6457423671957e7fbf8dadb70b1a9305563b57186281c60c9b33c08dd43ae",
           "executable": false
         },
         "docs/development/release.md": {
@@ -2314,17 +2338,17 @@
         },
         "docs/usage/body-contracts.md": {
           "type": "file",
-          "sha256": "4fe6befa4ee947148696806f86efbe159a30785b3d652e109516fa6eca9a8c0a",
+          "sha256": "0c1434ecfcbd5ea5d86413bf095e21966e4132eae2f80b9f364578e6cb7929d3",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "51e0984aa28898a84204eb6ac291a1e99de09e9d5d5252a75ef740b0c0a13925",
+          "sha256": "db4ecc220a4dc6da3f7e60dbc6531cb48775952117e9838ec455830dd6c6bf54",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "9c83aa807b4cdc59bbcc3b0223362f7cf588cae4460b33f527f2e6342ccaffd1",
+          "sha256": "1ffeb3dbb80d53217e0a1a5ec89913c3099ad278bff5f743201fec0480a4e57c",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
@@ -2339,7 +2363,7 @@
         },
         "package.json": {
           "type": "file",
-          "sha256": "50070e51ede67ff0f4ec328c48de9997029d8ba2008a128273a849a475b007e4",
+          "sha256": "d2bd43d0d1fcea1f75cce38b27edfd5dcce073c8930a2d6572137543b6778568",
           "executable": false
         }
       }
@@ -2672,7 +2696,7 @@
       {
         "id": "github-repository-configuration",
         "source": "discovery/github-repository-configuration.md",
-        "sha256": "05f27e38f22870239eac4f15f63d9ff758c87ff3c8c5098dc7b8cd66a5685616",
+        "sha256": "c76ba654f007222e7c7e0ad555ed0ce214ed7ff55bd4647e585b541d071b8e59",
         "executable": false
       },
       {
@@ -2714,12 +2738,12 @@
         },
         ".agents/skills/babysit/CREDITS.md": {
           "type": "file",
-          "sha256": "407cbf3f51699040bf0006e3c9722a8a2b9a867bedf52f60c2d734db5103d09e",
+          "sha256": "36ec61589142d86f92249c8911d6dad7dc10bc8c1de3c9ed0f6bf57ed488fdd6",
           "executable": false
         },
         ".agents/skills/babysit/SKILL.md": {
           "type": "file",
-          "sha256": "eacf6fe48d52cb49562e9302e822f13b95694793766d40fb767fca9052e38fe8",
+          "sha256": "c422b5b0d9bda85ec10dc5e4dd3696e2d68198e36893df4ce1559a3b75bcce36",
           "executable": false
         },
         ".agents/skills/babysit/body-links.mjs": {
@@ -2727,9 +2751,19 @@
           "sha256": "01c984d07a0e1395daa6a111634f8a222b498c5dcb75ce20969699a0f0f7641e",
           "executable": false
         },
+        ".agents/skills/babysit/branch-update.mjs": {
+          "type": "file",
+          "sha256": "6548c6bdc01abab268f9c279d40586781a6b075de8233ce0b3c9084f2593225b",
+          "executable": false
+        },
+        ".agents/skills/babysit/declared-deletions.mjs": {
+          "type": "file",
+          "sha256": "c064232a567e074af53f48eba3b57b7d86443e78de23ba208b300871f94d31b4",
+          "executable": false
+        },
         ".agents/skills/babysit/merge.mjs": {
           "type": "file",
-          "sha256": "6bc63ad548d5360554280b1e31c7c1e746a630e7ef68c29831f1b1a0fe6ca540",
+          "sha256": "10b1b4a75980016be1c4afef31b80ec8a6c2aad994a7522d56b5f943c73928f9",
           "executable": false
         },
         ".agents/skills/babysit/owner-gates.mjs": {
@@ -2749,7 +2783,7 @@
         },
         ".agents/skills/babysit/request.mjs": {
           "type": "file",
-          "sha256": "859748cea839f995d20f31886818f7ca5176f916fd992bb9b3d5a9afa94e9535",
+          "sha256": "601a505503edbb64c0029c09bd49673532405f126901d72641304d6d576f28a9",
           "executable": false
         },
         ".agents/skills/babysit/required-checks.mjs": {
@@ -2759,7 +2793,7 @@
         },
         ".agents/skills/babysit/review-outcome.mjs": {
           "type": "file",
-          "sha256": "a3213bb3983f56a1df1b498157105cfd591b4e6a4afbcf9d47b6bf2429feceba",
+          "sha256": "1b8e26200ae132a5cef96e8ac9fbaa4686c28087161f3e5282a295a4526826c9",
           "executable": false
         },
         ".agents/skills/babysit/review-policy.mjs": {
@@ -2779,7 +2813,7 @@
         },
         ".agents/skills/babysit/wait.mjs": {
           "type": "file",
-          "sha256": "c4aa0514411a924001d9c4d28f242256db8d3d61e3ff543bf79fd542a7697681",
+          "sha256": "1b1acf691520d17c2c7569d717ff3424b3eb61e52000e13ec35b8f8333421b9d",
           "executable": false
         },
         ".agents/skills/code-review/CREDITS.md": {
@@ -2789,7 +2823,7 @@
         },
         ".agents/skills/code-review/SKILL.md": {
           "type": "file",
-          "sha256": "77eae9f8d2bd383c1decfd8aab8b902e2b258915a60b4f86755610e8c91e8a2c",
+          "sha256": "3dd14cb034440961cc5c72527289fe82f6c484ae52bc98e5da9c9222f7cd7b93",
           "executable": false
         },
         ".agents/skills/code-review/agents/openai.yaml": {
@@ -2879,7 +2913,7 @@
         },
         ".agents/skills/factory/SKILL.md": {
           "type": "file",
-          "sha256": "8631c2e2c100b6e2bb842a7c70cc2990b55e7c1982a1e92e4df9c423615ffbb9",
+          "sha256": "302620b9aa5a48174a7822604b443e88f2726225f66387e7f85d2ee7dee7934e",
           "executable": false
         },
         ".agents/skills/grill-with-docs/CREDITS.md": {
@@ -2914,12 +2948,12 @@
         },
         ".agents/skills/implement/CREDITS.md": {
           "type": "file",
-          "sha256": "b6b3df15545ee616281f80b2fde9c8eb96354491059ba13e23bf13c8373958fb",
+          "sha256": "fe70d824559620aebab6ff1efaef04ef64b22d86877c04c732d521056084056a",
           "executable": false
         },
         ".agents/skills/implement/SKILL.md": {
           "type": "file",
-          "sha256": "4d10c26aa5c87054db9eb6abca3471a7babf4e3561ea2c16f67ed22d0d106be5",
+          "sha256": "672ab5a2453f51e12fe42dcc421a475eaee533fad18137bd8b6d215f774d83e2",
           "executable": false
         },
         ".agents/skills/implement/agents/openai.yaml": {
@@ -3089,7 +3123,7 @@
         },
         ".agents/skills/triage/CREDITS.md": {
           "type": "file",
-          "sha256": "2a81c614cc02b8e600ffce05364c486caaaab31684c3cb02ae049782d0fa7709",
+          "sha256": "1e59e2a0ed9af4fc107014c2575fc0b3d6f4bd32a19dc639fc74706a6e0eba70",
           "executable": false
         },
         ".agents/skills/triage/OUT-OF-SCOPE.md": {
@@ -3099,7 +3133,7 @@
         },
         ".agents/skills/triage/SKILL.md": {
           "type": "file",
-          "sha256": "8c4e192ee30957283a3b5453c290023c4c0dcc98ef9aee5dcf0a072260431ba2",
+          "sha256": "af298b3a72183eb2b0f3e333dbd82c565943add67c06b145aedcb0a3f12305c1",
           "executable": false
         },
         ".agents/skills/triage/agents/openai.yaml": {
@@ -3109,7 +3143,7 @@
         },
         ".agents/skills/triage/ready.mjs": {
           "type": "file",
-          "sha256": "884a09c9dd9381c88e1a53c505171aa0eaa42f87b77e7f5730711616b289cdb9",
+          "sha256": "6b17b71c24eb97d7f29096257942d85dcfd98091e2bd57b3acb2a6b644c571f3",
           "executable": false
         },
         ".agents/skills/wayfinder/CREDITS.md": {
@@ -3129,12 +3163,12 @@
         },
         ".agents/skills/writing-for-agents/CREDITS.md": {
           "type": "file",
-          "sha256": "1653c6d6471ab2a5f674c8f4813c81d7bd2325c069db8d21b3442c01b67f43b3",
+          "sha256": "455cbc11b3cade69f362ea0f7c69697cae2f5b46b23a4ba0a5401a1b2f0f86a7",
           "executable": false
         },
         ".agents/skills/writing-for-agents/SKILL-MECHANICS.md": {
           "type": "file",
-          "sha256": "c768e6307c7c10728c401c213f2c4ba71c542127eeb7ad2956aabd15a0fa0059",
+          "sha256": "97e350a3dbcf06bfe958fdf0764369ff373761a8b5c3056dbd10b6478ecee51d",
           "executable": false
         },
         ".agents/skills/writing-for-agents/SKILL.md": {
@@ -3283,7 +3317,7 @@
         },
         ".github/scripts/validate.mjs": {
           "type": "file",
-          "sha256": "ba298cfed877e125c274808a16aa33d3ab8939a7a96c6a8a50acb366a34d4a56",
+          "sha256": "1df72fc54dd090042c3b803368d779cf8ab8ae8e3eac1cb98911f3b05ece4af6",
           "executable": false
         },
         ".github/workflows/ci.yml": {
@@ -3343,7 +3377,7 @@
         },
         "CONTRIBUTING.md": {
           "type": "file",
-          "sha256": "1827dc79bef54fc21abec1a44adde1946683e1299de82809a20718d9f0641156",
+          "sha256": "721e953e83d762024615eb7b3bf08373cf196eab1c85f120ffb4f069f5e7780f",
           "executable": false
         },
         "GLOSSARY.md": {
@@ -3463,17 +3497,17 @@
         },
         "docs/agents/issue-tracker.md": {
           "type": "file",
-          "sha256": "5b850cbe40cf2f4493c87b559a8c1f7aadaac000dcccae55409307d0ff9df57c",
+          "sha256": "1e6f21e4a8c7025c72a630c318b21f3e04a4e08ecedbf766e2397ed948a8f1c7",
           "executable": false
         },
         "docs/agents/triage-labels.md": {
           "type": "file",
-          "sha256": "6dcd641788dcf3fba088e082d2ced46fb0731befb071f3c3a572a7e9f8257998",
+          "sha256": "97f7592e861ab22b48fc613b244da1aabf9fca3a4b253037483d02a3933932a0",
           "executable": false
         },
         "docs/development/README.md": {
           "type": "file",
-          "sha256": "597b3d633071f9352f314786bbde7e47f7d3b31c0d0197f8776a2bd7c4373b6e",
+          "sha256": "d0e6457423671957e7fbf8dadb70b1a9305563b57186281c60c9b33c08dd43ae",
           "executable": false
         },
         "docs/development/release.md": {
@@ -3488,17 +3522,17 @@
         },
         "docs/usage/body-contracts.md": {
           "type": "file",
-          "sha256": "4fe6befa4ee947148696806f86efbe159a30785b3d652e109516fa6eca9a8c0a",
+          "sha256": "0c1434ecfcbd5ea5d86413bf095e21966e4132eae2f80b9f364578e6cb7929d3",
           "executable": false
         },
         "docs/usage/factory-configuration.md": {
           "type": "file",
-          "sha256": "51e0984aa28898a84204eb6ac291a1e99de09e9d5d5252a75ef740b0c0a13925",
+          "sha256": "db4ecc220a4dc6da3f7e60dbc6531cb48775952117e9838ec455830dd6c6bf54",
           "executable": false
         },
         "docs/usage/host.md": {
           "type": "file",
-          "sha256": "9c83aa807b4cdc59bbcc3b0223362f7cf588cae4460b33f527f2e6342ccaffd1",
+          "sha256": "1ffeb3dbb80d53217e0a1a5ec89913c3099ad278bff5f743201fec0480a4e57c",
           "executable": false
         },
         "docs/usage/sandbox-image.md": {
@@ -3513,7 +3547,7 @@
         },
         "operations/lib/canonical-labels.mjs": {
           "type": "file",
-          "sha256": "811395a0625754735c2b2e9533d335f769d7610d24fb9dcf19ff0c95a8facf6a",
+          "sha256": "5cbff3cc62b3276823d787d269a4eaf5e9649920f54bb6d73dfffcc713b5147d",
           "executable": false
         },
         "operations/lib/factory-labels.mjs": {
@@ -3528,7 +3562,7 @@
         },
         "package.json": {
           "type": "file",
-          "sha256": "50070e51ede67ff0f4ec328c48de9997029d8ba2008a128273a849a475b007e4",
+          "sha256": "d2bd43d0d1fcea1f75cce38b27edfd5dcce073c8930a2d6572137543b6778568",
           "executable": false
         },
         "pnpm-lock.yaml": {
@@ -3543,12 +3577,12 @@
         },
         "schemas/factory-configuration.schema.json": {
           "type": "file",
-          "sha256": "a6402d4cc0063c8ee6c339de61b60d735ec2638036541df92380b59258408d43",
+          "sha256": "d542f0ba3503ee8ada2122ac61debc7ff31a681ccca902072021ea9510289482",
           "executable": false
         },
         "scripts/check-release-artifact.ts": {
           "type": "file",
-          "sha256": "7c4f0c40fbc43bc9dc85fc3f46d419de9c0bd42319e98a9c44387e26aa5ded4d",
+          "sha256": "f96d72890a1db6b20209a341a944ef2a4c22c04b09196a42f5621ed81d0e5855",
           "executable": false
         },
         "scripts/issue-contract-cutoff.mjs": {
@@ -3558,12 +3592,12 @@
         },
         "scripts/issue-contract-sources.mjs": {
           "type": "file",
-          "sha256": "c42a91c91491bb74a6053aa290f73aba67a4768b6048a0d056b1c22c523473fd",
+          "sha256": "2e0fb5ef7f00995d1a69bb617a6cdb7d92e19e403f477bbc7c217ec09e60aa61",
           "executable": false
         },
         "scripts/issue-contract-store.mjs": {
           "type": "file",
-          "sha256": "1e15c9b40cfcbfcbd2186e7ec3d080bbf2fa10e576bcd8ee43a01b5adb1fb49e",
+          "sha256": "5da91198d8cd83f4114377e24ecbd336530777e5b8de27f59128c4ec3df17909",
           "executable": false
         },
         "src/agent-layer.Dockerfile": {
@@ -3588,12 +3622,12 @@
         },
         "src/contract-publication.ts": {
           "type": "file",
-          "sha256": "3c2691b31bc1cb8c86e07b5c1db8526e3b745c63ba0e9f37e59e4864c03ecd26",
+          "sha256": "f3b84b20444f20b4f6522adabe038787fd52a46e93f50209b7d9a6efab216de3",
           "executable": false
         },
         "src/contract-result.ts": {
           "type": "file",
-          "sha256": "b6aef849c97c71ab9bcb2a71c3aa00b4e03623ddaa6ee1474cc76f8835d196d7",
+          "sha256": "736312cce3d84df4569dcb783860e5be0441ef3ffe61a02b0977fda2b2848a8c",
           "executable": false
         },
         "src/credentials.ts": {
@@ -3613,7 +3647,7 @@
         },
         "src/factory.ts": {
           "type": "file",
-          "sha256": "cc4ee2e6ea4c159e1507fe7a1b8ceeb074c9e5cdd7521cbcb5b55a8f9fd44211",
+          "sha256": "4af25533e1fb0bcf28cd0a44be501e5eba717b355a64effbb2a75153c2c71276",
           "executable": false
         },
         "src/github-token.ts": {
@@ -3633,7 +3667,7 @@
         },
         "src/host.ts": {
           "type": "file",
-          "sha256": "3be121acba7db603781c2194ed50d1e62888f238eab10f6c0fc4ae81779c51f2",
+          "sha256": "2bc43c3050556b68bd9d0a9e05b82eae4ef0671913d5b02202adde2435d2b463",
           "executable": false
         },
         "src/image-retention.ts": {
@@ -3678,7 +3712,7 @@
         },
         "src/prompt.ts": {
           "type": "file",
-          "sha256": "c13e201efd17a8bd636424397b4e45dfd2c84de40a7db17c00671551750189c2",
+          "sha256": "853256f5bf28bcac864bbd07cfdac0c5f5fc920df7854f7e2f826d8c40039894",
           "executable": false
         },
         "src/providers.ts": {
@@ -3713,7 +3747,7 @@
         },
         "src/quota.ts": {
           "type": "file",
-          "sha256": "2b988da50ac8832eacd7b5359c4cd8b55e0861d9a3cd5af02e8bd52fcce786c3",
+          "sha256": "347b37456355989681c8b16ce1198bc2e6634838919baa2d7ab4361d1d09e586",
           "executable": false
         },
         "src/readiness.ts": {
@@ -3736,6 +3770,11 @@
           "sha256": "ee496dc5dae07838c4d43569d7690cac9aef1bea30868985547858e649dfb75f",
           "executable": false
         },
+        "src/review-attestation.ts": {
+          "type": "file",
+          "sha256": "9e938608157ae426cfa4c8b89f90c6febcf719c9262753b1a6ee62356d1b6101",
+          "executable": false
+        },
         "src/run-comment.ts": {
           "type": "file",
           "sha256": "44d6160c9cb4c3faa8b966a9bc123d649ed52f2689254ae294b6bca00bd9d043",
@@ -3753,7 +3792,7 @@
         },
         "src/run-result.ts": {
           "type": "file",
-          "sha256": "8ebd0243aea309c44a0eb32850ce9af4d99a4ee8b6cd39accce183946be04888",
+          "sha256": "cdbdf6f724f559568f7d224a4d8ba5e7652c9c9a51a0dfe9721dbfcaa3d55540",
           "executable": false
         },
         "src/sandbox-image.ts": {
@@ -3813,7 +3852,7 @@
         },
         "test/boundary.test.ts": {
           "type": "file",
-          "sha256": "0c52b911a4b0a6b0007ee74f7489da5649e1209911f6e021d4044bd4aa61775c",
+          "sha256": "f3c56d5c514b4e65fafc68607f8edddf3278f777fd7f8764b89c7accb387b468",
           "executable": false
         },
         "test/claude-code.test.ts": {
@@ -3838,22 +3877,22 @@
         },
         "test/configuration-schema.test.ts": {
           "type": "file",
-          "sha256": "f23c205c1482066304d216e229c866f6442b01d7a8b2d4ed3db4d876218f1998",
+          "sha256": "037f32a6fe614e2efac95dcbeaa07152f99c9fa478dce9b69435984fa71bcbde",
           "executable": false
         },
         "test/contract-fixture.ts": {
           "type": "file",
-          "sha256": "ca77e200531422986f6e64ff87f8fd63e16d2f2341bf1566ee613dd18b4dfb9f",
+          "sha256": "4bc032f4134adc60df482936408188858d0ec090a926f3e80e1dedf94ff4caf1",
           "executable": false
         },
         "test/contract-protocol.test.ts": {
           "type": "file",
-          "sha256": "b0f51ecd7d3a66a8865030f0cf6b73da101025ce74f51d5e3bbed0365cf02025",
+          "sha256": "56cb10d2acaf22ae1233d2d3b5a586f767eee4469e58ea5b80d0db4655e29cc4",
           "executable": false
         },
         "test/contract-publication.test.ts": {
           "type": "file",
-          "sha256": "32c41adc30740606db25edf5ecf544d65147191d508bf1357334768a80fa5c9d",
+          "sha256": "8933038b26dbd8351f6b92b689f8449b3cf33091f15c7394d1f3ef6fb6985cab",
           "executable": false
         },
         "test/contract-result-fixture.ts": {
@@ -4023,7 +4062,7 @@
         },
         "test/host.test.ts": {
           "type": "file",
-          "sha256": "61153d1f72d6971a342fc4455be445d54d0521087345e2a7a48e1ac96b445527",
+          "sha256": "20ca9bb61342cdb572de62d3f82c34ea34f2b93b2a29c34051976b3395b4d7b5",
           "executable": false
         },
         "test/image-retention.test.ts": {
@@ -4058,12 +4097,12 @@
         },
         "test/platform.test.ts": {
           "type": "file",
-          "sha256": "2ba4e2377963e6f66cd6a255a468fc1be93e48b1b7b3acee74c5d6433a5891b4",
+          "sha256": "572c44e88a96a6dc423d6b0608aebecc799c3be299311d69cc3ef2dc84862d81",
           "executable": false
         },
         "test/prompt.test.ts": {
           "type": "file",
-          "sha256": "64ca41539183e4ba6019a5dc32bee56ab93f8b042f36095158bd47673a5848ae",
+          "sha256": "e45f4a14c62b6378bdca6eb48a534934109f38107e5ddee7dd77d7c962a3bed0",
           "executable": false
         },
         "test/providers.test.ts": {
@@ -4074,6 +4113,11 @@
         "test/pull-request-reviewer.test.ts": {
           "type": "file",
           "sha256": "a8142cad66524d94a6c29482e0f5de8f2ca3ced08a0e9fe405789602eb7723df",
+          "executable": false
+        },
+        "test/quota.test.ts": {
+          "type": "file",
+          "sha256": "f49fb39d3b8a14903b95b28b6675f04cf0f4f32479c3e11eb25af8bf09d6c9f7",
           "executable": false
         },
         "test/redaction.test.ts": {
@@ -4098,7 +4142,7 @@
         },
         "test/run-kinds.test.ts": {
           "type": "file",
-          "sha256": "e5bc035d27946997a29a816cec2f7a014521efcff769fac3e38a9e62c0bb2e7e",
+          "sha256": "23a617b2b440811de6c834c705f08fc0f4e57740a579b60f875803534fd286a8",
           "executable": false
         },
         "test/run-log.test.ts": {
@@ -4108,7 +4152,7 @@
         },
         "test/run-result.test.ts": {
           "type": "file",
-          "sha256": "4f2a937264ba7fb5d53908e260cc0fccadceddce735123a2ddcb0661e3645d25",
+          "sha256": "284550db8507324532af01e40bbb21b8d6ee153d9f5e8f637d705c8f0056a976",
           "executable": false
         },
         "test/sandbox-image-build.test.ts": {
@@ -4208,12 +4252,12 @@
         },
         "vendor/repo-canon/validate-issue-contract.mjs": {
           "type": "file",
-          "sha256": "8269294034982636fe70ae352e4066074d27f31f2c25f6062a11f449d342fd8a",
+          "sha256": "ea9f35773077993efc842d674251790f24502f155f787059073ddad40ccdacf9",
           "executable": false
         },
         "vendor/repo-canon/validate.mjs": {
           "type": "file",
-          "sha256": "4e200a90252579cad398b74cbe56e3588f98dcdc36e71de59c38941cfeba986e",
+          "sha256": "080011f48aab2344c3ca10e48e42962058e93968ab4e82d5ecc2ab28818da0d0",
           "executable": false
         }
       },
@@ -4276,6 +4320,8 @@
           ".agents/skills/babysit/CREDITS.md",
           ".agents/skills/babysit/SKILL.md",
           ".agents/skills/babysit/body-links.mjs",
+          ".agents/skills/babysit/branch-update.mjs",
+          ".agents/skills/babysit/declared-deletions.mjs",
           ".agents/skills/babysit/merge.mjs",
           ".agents/skills/babysit/owner-gates.mjs",
           ".agents/skills/babysit/platform.mjs",
@@ -4606,6 +4652,7 @@
           "src/redaction.ts",
           "src/repository-holds.ts",
           "src/resume.ts",
+          "src/review-attestation.ts",
           "src/run-comment.ts",
           "src/run-ending.ts",
           "src/run-log.ts",
@@ -4659,6 +4706,7 @@
           "test/prompt.test.ts",
           "test/providers.test.ts",
           "test/pull-request-reviewer.test.ts",
+          "test/quota.test.ts",
           "test/redaction.test.ts",
           "test/resume.test.ts",
           "test/run-comment.test.ts",
@@ -4959,7 +5007,7 @@
         },
         "info": {
           "type": "file",
-          "sha256": "6e662a9785c07fb3b9b0fef9a834aab1f1f693b5348d90720d3b7464c498fcfe",
+          "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
           "executable": false
         },
         ".gitignore": {
@@ -5183,13 +5231,5 @@
       }
     }
   },
-  "scopeChanges": [
-    {
-      "id": "documentation",
-      "additions": [
-        "docs/usage/terminal-results.md"
-      ],
-      "removals": []
-    }
-  ]
+  "scopeChanges": []
 }

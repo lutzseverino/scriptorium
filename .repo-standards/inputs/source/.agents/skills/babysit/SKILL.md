@@ -11,13 +11,13 @@ Take the PR through authorized delivery under `CONTRIBUTING.md` and the
 
 Before requesting or waiting, establish your role from `CONTRIBUTING.md`'s
 Merging section and applicable installed rules. Record any prescribed worker
-handoff on the open PR under `.repo-standards/rules/comments.md#delivery-records`
-and stop. The designated merging agent resumes with its review requirements
+handoff in the open PR body's Delivery subsection under
+`.repo-standards/rules/comments.md#delivery-records` and stop. The designated merging agent resumes with its review requirements
 and outstanding findings. For an owner-question pause, follow installed
 continuation rules before request and wait. For authorized delivery of a
 stopped run's open PR, enter Branch-update recovery first, using this
 invocation's branch update. Carry the handoff context and follow installed
-rules for retaining its waiting marker and recording the merge outcome.
+rules for retaining its waiting marker.
 
 The bundled scripts require Node.js 24 or 26. Request and wait read optional
 `.github/pull-request-reviewer.json` and `.github/factory-review-policy.json`
@@ -93,8 +93,8 @@ body was checked. Link-free bodies need no reconstruction.
    After any push or re-request, return to step 1.
 5. Before each merge attempt, verify merge ownership and any required owner
    approval against the current head under the applicable installed rules.
-   Read the authoritative implementation contract and any worker handoff and
-   apply the `github-repository-configuration` rules' Designated owner review gate.
+   Read the authoritative implementation contract and any worker handoff in
+   the PR body's Delivery subsection, and apply the `github-repository-configuration` rules' Designated owner review gate.
    Read PR comments carrying designation provenance and current-head approval;
    record approval there under `.repo-standards/rules/comments.md#delivery-records`.
    Missing required approval means the guide's owner-question handoff under
@@ -243,13 +243,14 @@ Paths are relative to the repository root.
   steps and the commands' own checks as written, and hand off to the owner in
   one PR comment for any rule the steps leave to the guide.
 - `.repo-standards/rules/comments.md`: the installed comment rules, whose
-  sections the steps name before each post. When it is missing, post each
-  record or question the steps name as one comment, and each review in the
-  shape the wait prints.
+  sections the steps name before each post. When it is missing, keep the
+  worker handoff in the PR body's Evidence section, post each other record or
+  question the steps name as one comment, and each review in the shape the
+  wait prints.
 - The installed rules the steps name, such as the
   `github-repository-configuration` rules, which the `repository-standards`
   skill looks up. When they are missing, the commands' own behavior stands, no
-  rule prescribes a worker handoff, owner approval or merge outcome record,
+  rule prescribes a worker handoff or owner approval,
   and `CONTRIBUTING.md` alone sets the merge rules.
 - `.github/required-checks.json`: the required-name authority for wait and merge.
   Missing, invalid or unreadable at the selected trusted commit stops delivery
