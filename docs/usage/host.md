@@ -839,8 +839,12 @@ The sandbox's environment points the GitHub CLI at that directory
 (`GH_CONFIG_DIR`) and makes Git ask the GitHub CLI for its `github.com`
 credentials, so neither reads the token from an environment variable. Each
 time the run's token is refreshed, within the same permissions, the factory
-replaces the files whole, so a run longer than a token's lifetime keeps its
-GitHub access. Concurrent runs of different kinds in one repository each keep
+replaces the files whole, so every new GitHub CLI or Git call reads the current
+token. A process that is already running keeps the token it read when it
+started, and its requests fail once that token expires. The run's prompt
+therefore tells the run to wait by repeating short GitHub CLI calls rather than
+keeping one process, such as `gh pr checks --watch`, running through a long
+wait. Concurrent runs of different kinds in one repository each keep
 their own kind's token, and the factory's own reads and refreshes never
 replace it. The
 factory removes the directory when the run's agent exits, so a token outlives

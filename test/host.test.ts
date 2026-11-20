@@ -1761,6 +1761,62 @@ for (const kind of ["triage", "review"] as const)
     assert.doesNotMatch(run.reports.join("\n"), /attachment-upload/);
   });
 
+for (const kind of [undefined, "triage", "implement", "review"] as const)
+  for (const upload of [false, true])
+    test(`the ${kind ?? "version 2"} launch prompt says a refreshed token reaches only new GitHub CLI calls, upload credential: ${upload}`, async (t) => {
+      const bare = remote(t, kind ? kindsFiles : factoryFiles);
+      const source = join(directory(t), "upload-token");
+      writeFileSync(source, "upload_first\n");
+      const run = host(t, {
+        repositories: {
+          "acme/widgets": [
+            {
+              number: 4,
+              labels:
+                kind === "triage"
+                  ? ["state:triage"]
+                  : kind === "implement"
+                    ? ["state:ready"]
+                    : kind
+                      ? []
+                      : ["ready-for-agent"],
+              ...(kind === "review" && {
+                isPullRequest: true,
+                branchPullRequests: [
+                  {
+                    ...publishedPR(bare, "proposal/changes"),
+                    number: 4,
+                    body: "Direct change: requested improvement",
+                    author: { login: "owner", bot: false },
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+        remotes: { "acme/widgets": bare },
+        configuration: upload
+          ? { attachmentUploadCredential: { file: source } }
+          : {},
+      });
+      if (kind === "review") run.github.drafts.add(4);
+      await run.tick();
+      assert.equal(run.launched.length, 1);
+      const rendered = run.launched[0].options.prompt!;
+      assert.equal(
+        rendered.includes("FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE"),
+        upload && (kind === undefined || kind === "implement"),
+      );
+      assert.match(
+        rendered,
+        /Each new GitHub CLI or Git call reads the current token.*already running keeps the token it started with/,
+      );
+      assert.match(
+        rendered,
+        /long wait.*gh pr checks --watch.*repeating separate short calls/,
+      );
+    });
+
 test("a failed upload source prevents implement launch without leaking its output", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },
