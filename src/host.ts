@@ -120,7 +120,7 @@ import {
 } from "./status.ts";
 import { credentialHealth, readCredentialObservations } from "./credentials.ts";
 import { createUsage } from "./usage.ts";
-import { createQuota, permissionRefusal } from "./quota.ts";
+import { createQuota, permissionRefusal, QuotaHeld } from "./quota.ts";
 import {
   stopAction,
   type Action,
@@ -813,22 +813,33 @@ export function createHost(
             record(run);
             issue.labels = postedLabels(issue.labels, post);
           }
-          await tell(pass, issue, {
-            phase: phaseOf(run),
-            facts: {
-              state: outcomeStates[run.result.outcome],
-              reason: run.result.reason,
-              link: link ?? run.publication?.evidence?.url,
-            },
-            result: {
-              ...run.result,
-              terminal: {
-                run: terminalIdentity(run),
-                outcome: run.result.outcome,
+          try {
+            await tell(pass, issue, {
+              phase: phaseOf(run),
+              facts: {
+                state: outcomeStates[run.result.outcome],
+                reason: run.result.reason,
+                link: link ?? run.publication?.evidence?.url,
               },
-              withdrawn: run.withdrawnResultId,
-            },
-          });
+              result: {
+                ...run.result,
+                terminal: {
+                  run: terminalIdentity(run),
+                  outcome: run.result.outcome,
+                },
+                withdrawn: run.withdrawnResultId,
+              },
+            });
+          } catch (error) {
+            if (repositoryWide(error)) throw error;
+            // An issue-local failure stays with its run, which keeps its
+            // publication progress and retries only this report.
+            record(run);
+            report(
+              `${name}#${run.issue} terminal report was not written; a later pass retries it: ${error}`,
+            );
+            continue;
+          }
           run.resultPosted = true;
           record(run);
           mark(run, "lastPublication");
@@ -2083,6 +2094,16 @@ export function createHost(
   }
 
   return { tick, interrupt, drain, refreshTokens, report };
+}
+
+// Whether a failure describes the repository's shared quota or credential
+// rather than the one issue whose write it refused.
+function repositoryWide(error: unknown): boolean {
+  return (
+    error instanceof QuotaHeld ||
+    (error instanceof PlatformError &&
+      ["rateLimited", "unauthenticated", "forbidden"].includes(error.reason))
+  );
 }
 
 // Whether the run's result and report have yet to finish publication. An

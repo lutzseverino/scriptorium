@@ -10719,6 +10719,175 @@ for (const outcome of ["stop", "failed"] as const)
     else assert.ok(issue.labels.includes("factory:needs-input"));
   });
 
+for (const [failure, error] of [
+  [
+    "PlatformError unavailable",
+    () => new PlatformError("unavailable", "report unavailable"),
+  ],
+  ["a plain Error", () => new Error("report unavailable")],
+] as const)
+  for (const recovery of ["pass", "restart"] as const)
+    test(`a terminal report write failing with ${failure} stays with its run while siblings settle and work starts, recovering on a later ${recovery}`, async (t) => {
+      let failReport = false;
+      const question = "Which database should the tests use?";
+      const run = host(t, {
+        repositories: {
+          "acme/widgets": [{ number: 4 }, { number: 5 }, { number: 6 }],
+        },
+        remotes: { "acme/widgets": remote(t, factoryFiles) },
+        wrapConnection(connection) {
+          return {
+            ...connection,
+            issueTracker: {
+              ...connection.issueTracker,
+              async updateComment(id, body) {
+                if (failReport && body.includes(question)) throw error();
+                return connection.issueTracker.updateComment(id, body);
+              },
+            },
+          };
+        },
+      });
+      await run.tick();
+      const launched = (number: number) =>
+        run.launched.filter((l) => l.options.name?.endsWith(`#${number}`));
+      assert.equal(launched(4).length, 1);
+      assert.equal(launched(5).length, 1);
+      assert.equal(launched(6).length, 0);
+      const [a, b] = [4, 5].map((number) =>
+        run.github.find("acme/widgets", number),
+      );
+      const observe = () =>
+        JSON.parse(
+          execFileSync(
+            process.execPath,
+            ["src/main.ts", "results", "--author", "factory[bot]"],
+            {
+              cwd: new URL("..", import.meta.url),
+              input: JSON.stringify([
+                { body: runComment(a), author: { login: "factory[bot]" } },
+              ]),
+              encoding: "utf8",
+              timeout: 10_000,
+            },
+          ),
+        ).results;
+      const identity = recordOf(run.state, 4, 1).provenance.id;
+      launched(4)[0].finish(undefined, undefined, {
+        outcome: "stop",
+        state: "factory:needs-input",
+        body: question,
+      });
+      launched(5)[0].finish(undefined, undefined, {
+        outcome: "stop",
+        state: "factory:needs-input",
+        body: "Which queue should the worker read?",
+      });
+      await run.drain();
+      failReport = true;
+      await run.tick();
+
+      // The sibling publishes and settles, and independent work starts.
+      assert.equal(recordOf(run.state, 5, 1).resultPosted, true);
+      assert.equal(recordOf(run.state, 5, 1).settled, true);
+      assert.ok(!b.labels.includes("factory:running"));
+      assert.ok(b.labels.includes("factory:needs-input"));
+      assert.equal(launched(6).length, 1);
+      assert.equal(run.status().repositories[0].state, "running");
+      const [widgets] = healthOf(run).repositories;
+      assert.equal(widgets.pass.failingSince, null);
+      assert.equal(widgets.pass.failure, undefined);
+
+      // The failing run keeps its progress and stays claimed.
+      const retained = recordOf(run.state, 4, 1);
+      assert.ok(retained.resultLink);
+      assert.equal(retained.resultPosted, undefined);
+      assert.equal(retained.settled, false);
+      assert.ok(a.labels.includes("factory:running"));
+      assert.deepEqual(observe(), []);
+      assert.equal(launched(4).length, 1);
+      assert.equal(
+        run.reports.filter(
+          (line) =>
+            line.startsWith("acme/widgets#4 ") &&
+            line.includes("report unavailable"),
+        ).length,
+        1,
+        run.reports.join("\n"),
+      );
+
+      failReport = false;
+      run.clock.now = new Date("2026-10-09T12:05:00Z");
+      await (recovery === "restart" ? run.restart() : run).tick();
+      assert.deepEqual(observe(), [{ run: identity, outcome: "stop" }]);
+      const posted = recordOf(run.state, 4, 1);
+      assert.equal(posted.resultPosted, true);
+      assert.equal(posted.resultLink, retained.resultLink);
+      assert.equal(posted.settled, true);
+      assert.deepEqual(healthOf(run).repositories[0].pass.lastPublication, {
+        at: "2026-10-09T12:05:00.000Z",
+        issue: 4,
+        runKind: "implement",
+      });
+      assert.ok(!a.labels.includes("factory:running"));
+      assert.equal(launched(4).length, 1);
+      assert.equal(
+        a.comments.length,
+        2,
+        "publication retries reuse the standalone result",
+      );
+    });
+
+for (const reason of ["unauthenticated", "forbidden"] as const)
+  test(`a terminal report write failing as ${reason} still fails the repository's read and recovers without a second result`, async (t) => {
+    let failReport = false;
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+      wrapConnection(connection) {
+        return {
+          ...connection,
+          issueTracker: {
+            ...connection.issueTracker,
+            async updateComment(id, body) {
+              if (failReport) throw new PlatformError(reason, "report refused");
+              return connection.issueTracker.updateComment(id, body);
+            },
+          },
+        };
+      },
+    });
+    await run.tick();
+    const issue = run.github.find("acme/widgets", 4);
+    run.launched[0].finish(undefined, undefined, {
+      outcome: "stop",
+      state: "factory:needs-input",
+      body: "Which database should the tests use?",
+    });
+    await run.drain();
+    failReport = true;
+    await run.tick();
+    assert.equal(run.status().repositories[0].state, "paused");
+    assert.match(
+      healthOf(run).repositories[0].pass.failure,
+      /^its platform reads failed: .*report refused/,
+    );
+    assert.ok(recordOf(run.state, 4, 1).resultLink);
+    assert.equal(recordOf(run.state, 4, 1).resultPosted, undefined);
+
+    failReport = false;
+    await run.tick();
+    assert.equal(recordOf(run.state, 4, 1).resultPosted, true);
+    assert.equal(recordOf(run.state, 4, 1).settled, true);
+    assert.equal(run.status().repositories[0].state, "running");
+    assert.equal(run.launched.length, 1);
+    assert.equal(
+      issue.comments.length,
+      2,
+      "publication retries reuse the standalone result",
+    );
+  });
+
 test("a failed result fails with its reason, and a run without a valid result fails with why", async (t) => {
   const run = host(t, {
     repositories: { "acme/widgets": [{ number: 4 }] },

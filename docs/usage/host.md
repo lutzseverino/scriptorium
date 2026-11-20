@@ -961,6 +961,17 @@ a stop's continuation and every action are required: the decision fails and retr
 retry finds the same comment and posts no action twice. An unchanged comment
 is not edited.
 
+A failed report write for a posted result stays with its run. The host logs
+the issue and the error, and the run keeps its result link, stays claimed and
+waits for publication without settling or relaunching. The repository is not
+paused: its other endings publish and settle, and its other issues launch in
+the same pass. A later pass, including after a restart, retries only the report
+write, without a second standalone result. A failure that describes the
+repository's shared quota or credential still holds the whole repository: a
+rate-limited refusal places the [quota hold](#github-quota-holds), and an
+unauthenticated or forbidden one fails the repository's platform reads for the
+pass.
+
 The result report retains terminal identities for the supported
 [`results` command](terminal-results.md). When triage publication stops after
 the validator selects another source, the report records a distinct `stop`
