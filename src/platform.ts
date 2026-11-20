@@ -330,7 +330,6 @@ export function repositoryPlatform(
 
   async function candidates(
     number: number,
-    since?: string,
     target?: number,
   ): Promise<{ found: PullRequest[]; closing: Set<number> }> {
     const closing =
@@ -341,13 +340,7 @@ export function repositoryPlatform(
       ...(target !== undefined ? [await pullRequests.pullRequest(target)] : []),
       ...closing,
       ...(await pullRequests.byHeadBranch(runBranch(number))),
-    ].filter(
-      (pr) =>
-        (pr.number === target || !pr.crossRepository) &&
-        (pr.number === target ||
-          since === undefined ||
-          Date.parse(pr.createdAt) >= Date.parse(since)),
-    );
+    ].filter((pr) => pr.number === target || !pr.crossRepository);
     return {
       found: [...new Map(found.map((pr) => [pr.number, pr])).values()],
       closing: new Set(closing.map((pr) => pr.number)),
@@ -797,8 +790,9 @@ export function repositoryPlatform(
     },
 
     // A run's pull request is one from this repository, not a fork, that
-    // closes its issue or comes from the run's branch, opened since the first
-    // attempt started (`since`). Issue closure is observed separately. A
+    // closes its issue or comes from the run's branch. Owned open PRs count
+    // regardless of creation time; `since` still bounds all other candidates
+    // except an explicit review target. Issue closure is observed separately. A
     // closing reference is observation, not delivery authorization. Only
     // the run branch or the supplied connection's verified identity owns a PR.
     // With `draft`, the owned open PR also says whether it is a draft.
@@ -814,8 +808,8 @@ export function repositoryPlatform(
       ownedPullRequests: number[];
       mergeCandidate?: MergeRelaunch & { draft?: true };
     }> {
-      const { found, closing } = await candidates(number, since, target);
-      const open = found.filter((pr) => pr.state === "open");
+      const { found: all, closing } = await candidates(number, target);
+      const open = all.filter((pr) => pr.state === "open");
       let viewer: Account | null = null;
       if (open.some((pr) => pr.headBranch !== runBranch(number))) {
         try {
@@ -830,6 +824,13 @@ export function repositoryPlatform(
           pr.headBranch === runBranch(number) ||
           (viewer !== null &&
             pr.author?.login.toLowerCase() === viewer.login.toLowerCase()),
+      );
+      const found = all.filter(
+        (pr) =>
+          pr.number === target ||
+          since === undefined ||
+          Date.parse(pr.createdAt) >= Date.parse(since) ||
+          owned.includes(pr),
       );
       const pr = owned.length === 1 ? owned[0] : undefined;
       return {

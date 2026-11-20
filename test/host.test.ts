@@ -8923,6 +8923,104 @@ const kindsFiles = {
   ".scriptorium/config.json": JSON.stringify(kindsConventions),
 };
 
+for (const scenario of [
+  "unchanged",
+  "pushed",
+  "retry",
+  "orphaned",
+  "without review",
+  "closed",
+  "merged",
+] as const)
+  test(`an earlier claim's pull request settles a later implement run: ${scenario}`, async (t) => {
+    const bare = remote(
+      t,
+      scenario === "without review" ? factoryFiles : kindsFiles,
+    );
+    const pr = {
+      ...publishedPR(bare),
+      number: 42,
+      createdAt: "2026-10-09T11:00:00Z",
+      state:
+        scenario === "closed" || scenario === "merged"
+          ? scenario
+          : ("open" as const),
+    };
+    const retry = scenario === "retry" || scenario === "orphaned";
+    const run = host(t, {
+      repositories: {
+        "acme/widgets": [
+          {
+            number: 4,
+            labels: [
+              scenario === "without review" ? "ready-for-agent" : "state:ready",
+            ],
+            branchPullRequests: retry ? [] : [pr],
+          },
+        ],
+      },
+      remotes: { "acme/widgets": bare },
+    });
+    run.github.drafts.add(42);
+    await run.tick();
+    assert.equal(run.launched.length, 1);
+    const issue = run.github.find("acme/widgets", 4);
+    if (retry) {
+      run.launched[0].finish();
+      await run.drain();
+      await run.tick();
+      assert.equal(run.launched.length, 2);
+      assert.equal(recordOf(run.state, 4, 2).continuation.attempt, 2);
+      issue.branchPullRequests.push(pr);
+    }
+    if (scenario === "pushed") {
+      const work = join(dirname(bare), "work");
+      git(work, ["checkout", "--quiet", pr.headBranch]);
+      write(work, { "feature.txt": "updated issue work\n" });
+      git(work, ["commit", "--quiet", "-am", "update issue work"]);
+      git(work, ["push", "--quiet", bare, pr.headBranch]);
+      pr.headCommit = git(work, ["rev-parse", "HEAD"]).trim();
+    }
+    let active: Pick<ReturnType<typeof createHost>, "tick"> = run;
+    if (scenario === "orphaned") active = run.restart();
+    else {
+      run.launched.at(-1)!.finish(undefined, undefined, {
+        outcome: "done",
+        body: "Continued the existing pull request.",
+      });
+      await run.drain();
+    }
+    await active.tick();
+    if (scenario === "closed" || scenario === "merged") {
+      // The old PR cannot deliver either attempt.
+      assert.equal(run.launched.length, 2);
+      run.launched[1].finish();
+      await run.drain();
+      await active.tick();
+      assert.ok(issue.labels.includes("factory:failed"));
+      assert.match(
+        actions(issue).at(-1)!,
+        /the run ended without an open pull request/,
+      );
+      return;
+    }
+    assert.ok(!issue.labels.includes("factory:failed"));
+    assert.deepEqual(actions(issue), []);
+    if (scenario === "without review") {
+      assert.equal(run.launched.length, 1);
+      assert.match(runComment(issue), /Merge: awaiting merge/);
+    } else {
+      const review = recordOf(run.state, 4, 1);
+      assert.equal(review.continuation.runKind, "review");
+      assert.equal(review.continuation.target.number, 42);
+      assert.equal(review.continuation.target.headCommit, pr.headCommit);
+      assert.equal(
+        invocation(run.launched.at(-1)!.options.prompt),
+        "/review #42",
+      );
+    }
+  });
+
 for (const configuration of [conventions, kindsConventions])
   test(`version ${configuration.version} trusts only its configured contract-result author and marker`, async (t) => {
     const identity = { marker: "custom:contract", author: "validator[bot]" };

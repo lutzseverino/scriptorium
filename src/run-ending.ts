@@ -56,9 +56,10 @@ export type EndingReads = {
   unpushablePaths: string[];
 };
 
-// An ended run or an orphaned claim as the host holds it: PRs opened since
-// `since` count, a review reads its PR's draft state, and its target is the
-// PR a review works on, which its run owns whatever its branch.
+// An ended run or an orphaned claim as the host holds it: owned open PRs
+// count regardless of creation time; `since` bounds other PRs except the
+// explicit review target. A review reads its PR's draft state, and its target
+// is the PR it works on, which its run owns whatever its branch.
 type Ended = Partial<Pick<Run, "holdObserved" | "ownedPullRequests">> & {
   issue: number;
   since?: string;
