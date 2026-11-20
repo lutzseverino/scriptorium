@@ -798,7 +798,6 @@ test("priority is configured per repository and preserves age, repository and nu
   );
 });
 
-// At equal priority, only its finishing group puts issue 6 ahead of older work.
 const triaging = issue(1, [labels.triage]);
 const reviewing = (number: number, priority?: string) => ({
   issue: issue(number, [...claimed, ...(priority ? [priority] : [])]),
@@ -836,6 +835,7 @@ for (const createdAt of ["2026-10-01T00:00:00Z", "2026-10-06T00:00:00Z"])
     );
   });
 
+// At equal priority, only its finishing group puts issue 6 ahead of older work.
 test("finishing work takes a provider's last slot ahead of older starting work at the same priority", () => {
   const review = reviewing(6);
   assert.deepEqual(
