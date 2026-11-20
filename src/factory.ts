@@ -1778,17 +1778,17 @@ function labelModel(
   return null;
 }
 
-// One queue across every repository: work that finishes an open PR the
-// factory owns first, then priority, oldest issue, repository and number.
+// One queue across every repository: priority, work that finishes an open PR
+// the factory owns, oldest issue, repository and number.
 // Admission still enforces every gate.
 function pickupOrder<
   T extends { repository: Repository; issue: Issue; launch: Continuation },
 >(continuations: T[]): T[] {
   return [...continuations].sort(
     (left, right) =>
-      Number(finishes(right)) - Number(finishes(left)) ||
       priority(left.issue.labels, left.repository.configuration.labels) -
         priority(right.issue.labels, right.repository.configuration.labels) ||
+      Number(finishes(right)) - Number(finishes(left)) ||
       Date.parse(left.issue.createdAt) - Date.parse(right.issue.createdAt) ||
       (left.repository.name < right.repository.name
         ? -1
