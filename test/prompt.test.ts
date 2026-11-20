@@ -111,3 +111,56 @@ test("prompt uses hold facts rather than deriving state from a reason", () => {
   assert.match(rendered, /factory-hold: unreadable/);
   assert.doesNotMatch(rendered, /a reason is not a prompt instruction/);
 });
+
+test("every continuation tells the run that a refreshed token reaches only new GitHub CLI calls", () => {
+  const createdAt = "2026-10-09T11:00:00Z";
+  const target = {
+    number: 40,
+    headCommit: "abc",
+    baseBranch: "main",
+    createdAt,
+  };
+  const continuations: Record<string, Continuation> = {
+    implement: { attempt: 1 },
+    triage: { attempt: 1, runKind: "triage" },
+    review: { attempt: 1, runKind: "review", target },
+    retry: { attempt: 2, retry: { failure: "agent exited", log: "" } },
+    "merge relaunch": { attempt: 1, mergeRelaunch: target },
+    "review hand-back": { attempt: 1, target, handBacks: 1 },
+    "needs-input resume": {
+      attempt: 1,
+      inputResume: {
+        pullRequests: [
+          { number: 40, state: "open", headBranch: "b", createdAt },
+        ],
+      },
+    },
+    recovery: {
+      attempt: 1,
+      recovery: { branch: "factory/issue-4", head: "abc" },
+    },
+  };
+  const upload =
+    "Use only the supplied credentials for their documented purposes. FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE names the upload credential.";
+  for (const [name, continuation] of Object.entries(continuations))
+    for (const credentialLimits of [facts.credentialLimits, upload]) {
+      const rendered = prompt(continuation, { ...facts, credentialLimits });
+      assert.ok(rendered.includes(credentialLimits), name);
+      const [rotation, ...others] = rendered
+        .split("\n")
+        .filter((line) => line.includes("GitHub credential is replaced"));
+      assert.equal(others.length, 0, name);
+      assert.match(
+        rotation,
+        /Each new GitHub CLI or Git call reads the current token when it starts.*a process that is already running keeps the token it started with/,
+        name,
+      );
+      assert.match(
+        rotation,
+        /not keep a GitHub CLI process running through a long wait.*gh pr checks --watch.*gh run watch.*repeating separate short calls/,
+        name,
+      );
+      // The instruction sets no time value of its own.
+      assert.doesNotMatch(rotation, /\d|minute|second|hour/, name);
+    }
+});
