@@ -1763,7 +1763,7 @@ for (const kind of ["triage", "review"] as const)
 
 for (const kind of [undefined, "triage", "implement", "review"] as const)
   for (const upload of [false, true])
-    test(`a ${kind ?? "version 2"} launch prompt says a refreshed token reaches only new GitHub CLI calls, upload credential: ${upload}`, async (t) => {
+    test(`the ${kind ?? "version 2"} launch prompt says a refreshed token reaches only new GitHub CLI calls, upload credential: ${upload}`, async (t) => {
       const bare = remote(t, kind ? kindsFiles : factoryFiles);
       const source = join(directory(t), "upload-token");
       writeFileSync(source, "upload_first\n");

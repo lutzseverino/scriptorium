@@ -842,7 +842,7 @@ time the run's token is refreshed, within the same permissions, the factory
 replaces the files whole, so every new GitHub CLI or Git call reads the current
 token. A process that is already running keeps the token it read when it
 started, and its requests fail once that token expires. The run's prompt
-therefore tells it to wait by repeating short GitHub CLI calls rather than
+therefore tells the run to wait by repeating short GitHub CLI calls rather than
 keeping one process, such as `gh pr checks --watch`, running through a long
 wait. Concurrent runs of different kinds in one repository each keep
 their own kind's token, and the factory's own reads and refreshes never
