@@ -9,13 +9,18 @@
 // next write, so the work resumes on the same PRs. A parent's close comment
 // is posted fresh.
 import type { Comment, IssueTracker } from "@lutzseverino/postern";
-import { lastCommentLine, renderComment } from "./comment-template.ts";
+import {
+  lastCommentLine,
+  lineNames,
+  renderComment,
+} from "./comment-template.ts";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { standInReason, type IssueId, type StandIn } from "./factory.ts";
 import { isHoldComment, upsert } from "./hold-comments.ts";
 import { roleNames, type Labels, type RoleName } from "./label-roles.ts";
 import type { InputResume } from "./platform.ts";
 import {
+  contain,
   parseTerminalResult,
   type RunResult,
   type TerminalResult,
@@ -26,17 +31,25 @@ import { contractEvidenceIds } from "./contract-protocol.ts";
 const phases = ["triage", "implement", "review", "merge"] as const;
 export type Phase = (typeof phases)[number];
 
-// Each phase state: the pass's status while its latest write leaves a phase
-// in it, and whether a later phase's start finishes it.
+// Each phase state, and whether a later phase's start finishes it.
 const states = {
-  running: { status: "in progress", unfinished: true },
-  done: { status: "in progress" },
-  paused: { status: "paused", unfinished: true },
-  stopped: { status: "waiting for an answer", unfinished: true },
-  carried: { status: "carried", unfinished: true },
-  "awaiting merge": { status: "awaiting merge" },
-  merged: { status: "merged" },
-  failed: { status: "failed" },
+  running: { unfinished: true },
+  done: {},
+  paused: { unfinished: true },
+  stopped: { unfinished: true },
+  carried: { unfinished: true },
+  "awaiting merge": {},
+  merged: {},
+  failed: {},
+};
+
+// Each phase's status words while it runs and once it is done. A merge
+// relaunch that is done leaves its pull request awaiting merge.
+const words = {
+  triage: { running: "Triaging", done: "Triaged" },
+  implement: { running: "Implementing", done: "Implemented" },
+  review: { running: "Reviewing", done: "Reviewed" },
+  merge: { running: "Merging", done: "Awaiting merge" },
 };
 
 export type PhaseFacts = {
@@ -50,20 +63,88 @@ export type PhaseFacts = {
   attempt?: number;
   round?: number;
   link?: string;
+  summary?: string;
+  waits?: string;
   unpushable?: string[];
 };
 
 function standInText(facts: PhaseFacts): string | undefined {
   if (!facts.standIn) return undefined;
   const { chosen, reason } = facts.standIn;
-  return `chosen \`${chosen}\`; ran \`${facts.provider}/${facts.model}\` as a stand-in: ${standInReason(reason)}`;
+  return `stand-in for \`${chosen}\`: ${standInReason(reason)}`;
 }
+
+// A run result's lead line: the first line with text once its heading
+// markers are removed, cut to 100 characters.
+export function summaryLine(body: string): string | undefined {
+  const line = contain(body)
+    .split(/\r\n?|\n/)
+    .map((text) =>
+      text
+        .trim()
+        .replace(/^#{1,6}(?:\s+|$)/, "")
+        .replace(/\s+#+$/, "")
+        .trim(),
+    )
+    .find((text) => text !== "");
+  if (line === undefined) return undefined;
+  const characters = [...line];
+  return characters.length > 100
+    ? `${characters.slice(0, 99).join("")}…`
+    : line;
+}
+
+// A phase's status marker and the pass's status word while that phase is
+// the latest written. A stop shows who it waits on: a person, triage, or
+// nobody once carried. A phase whose round an earlier phase passed was
+// handed back.
+function look(
+  phase: Phase,
+  facts: PhaseFacts | undefined,
+  labels: Labels,
+  handedBack: boolean,
+): { icon: string; status: string } {
+  const shown = (icon: string, status: string) => ({
+    icon: handedBack && facts?.state !== "running" ? "🔁" : icon,
+    status,
+  });
+  switch (facts?.state) {
+    case undefined:
+      return shown("⬜", words[phase].running);
+    case "running":
+      return shown("🔄", words[phase].running);
+    case "done":
+      return phase === "merge"
+        ? shown("👤", words.merge.done)
+        : shown("✅", words[phase].done);
+    case "paused":
+      return shown("⏸️", "Paused");
+    case "stopped":
+      return facts.waits !== undefined && facts.waits === labels.triage
+        ? shown("⬜", "Waiting for triage")
+        : facts.waits !== undefined && facts.waits === labels.carried
+          ? shown("↗️", "Carried")
+          : shown("👤", "Waiting for an answer");
+    case "carried":
+      return shown("↗️", "Carried");
+    case "awaiting merge":
+      return shown("👤", "Awaiting merge");
+    case "merged":
+      return shown("✅", "Merged");
+    case "failed":
+      return shown("❌", "Failed");
+  }
+}
+
+// The time of day a write shows, in UTC.
+const timeOfDay = (date: Date) => `${date.toISOString().slice(11, 16)}Z`;
 
 // One write: facts merged into one phase's, whose run facts and link stay
 // until replaced or cleared by an undefined fact, while its reason, reset and
-// unpushable paths describe only its new state; a run result just posted,
-// whose body the comment shows; whether the pass ends; and a released stop's
-// continuation.
+// unpushable paths and the stop label it waits in describe only its new
+// state; a run result just posted, whose lead line the comment shows and
+// whose body a template may insert; whether the pass ends; and a released
+// stop's continuation.
 export type RunUpdate = {
   phase: Phase;
   facts: PhaseFacts;
@@ -121,6 +202,7 @@ export function stopAction(
 
 type State = {
   phases: Partial<Record<Phase, PhaseFacts>>;
+  updated?: string;
   results?: TerminalResult[];
   withdrawnResults?: string[];
   final?: true;
@@ -229,6 +311,7 @@ export function issueComments(
   tracker: IssueTracker,
   configuration: PlatformConventions,
   evidenceIds?: (issue: number, comments: Comment[]) => Promise<Set<string>>,
+  now: () => Date = () => new Date(),
 ) {
   const templates = configuration.comments;
   // Quota pauses can write the current run notice without another platform
@@ -238,8 +321,13 @@ export function issueComments(
     { comments: Comment[]; evidence: Set<string> }
   >();
   // Implement and merge always show, review once it is on, and triage once
-  // it ran in the pass.
-  function render(state: State, phase: Phase, result: string | undefined) {
+  // it ran in the pass. Outside a phase, the facts are the written phase's.
+  function render(
+    state: State,
+    phase: Phase,
+    result: string | undefined,
+    updated: string,
+  ) {
     const shown = phases.filter(
       (name) =>
         state.phases[name] ||
@@ -247,22 +335,39 @@ export function issueComments(
         name === "merge" ||
         (name === "review" && configuration.runKinds?.review),
     );
+    // A phase's section names all its facts, so none it lacks is read from
+    // the written phase's outside it.
+    const unset = Object.fromEntries(
+      lineNames.map((name) => [name, undefined]),
+    );
+    const values = (name: Phase) => {
+      const facts = state.phases[name];
+      const done = facts?.state === "done" || facts?.state === "merged";
+      const round = facts?.round;
+      const handedBack =
+        round !== undefined &&
+        phases
+          .slice(0, phases.indexOf(name))
+          .some((earlier) => (state.phases[earlier]?.round ?? 0) > round);
+      const outcome = [facts?.summary, facts?.reason]
+        .filter((text) => text !== undefined && text !== "")
+        .join(" · ");
+      return {
+        ...unset,
+        ...facts,
+        icon: look(name, facts, configuration.labels, handedBack).icon,
+        standIn: facts && standInText(facts),
+        outcome: outcome || undefined,
+        check: done ? "x" : " ",
+      };
+    };
+    const current = state.phases[phase];
     return renderComment("run", templates?.run, {
-      status: states[state.phases[phase]?.state ?? "running"].status,
-      ...Object.fromEntries(
-        shown.map((name) => {
-          const facts = state.phases[name];
-          const done = facts?.state === "done" || facts?.state === "merged";
-          return [
-            name,
-            {
-              ...facts,
-              standIn: facts && standInText(facts),
-              check: done ? "x" : " ",
-            },
-          ];
-        }),
-      ),
+      ...values(phase),
+      ...look(phase, current, configuration.labels, false),
+      failure: current?.state === "failed" ? current.reason : undefined,
+      updated,
+      ...Object.fromEntries(shown.map((name) => [name, values(name)])),
       result: result && `${bodyStart}${result}${bodyEnd}`,
     });
   }
@@ -301,7 +406,9 @@ export function issueComments(
             ...pass?.state.phases[update.phase],
             reason: undefined,
             reset: undefined,
+            waits: undefined,
             unpushable: undefined,
+            ...(update.result && { summary: summaryLine(update.result.body) }),
             ...update.facts,
           },
         },
@@ -322,6 +429,7 @@ export function issueComments(
               state: "done",
               reason: undefined,
               reset: undefined,
+              waits: undefined,
             };
         }
       const previous = pass?.comment.body;
@@ -332,11 +440,15 @@ export function issueComments(
         (start !== -1 && end !== -1
           ? previous!.slice(start + bodyStart.length, end)
           : undefined);
+      // A write that changes nothing keeps the time the comment was updated.
+      const body = (updated: string) =>
+        `${render(state, update.phase, result, updated)}\n<!-- scriptorium:run ${encode({ ...state, updated })} -->`;
+      const kept = pass?.state.updated && body(pass.state.updated);
       const run = await upsert(
         tracker,
         issue,
         pass?.comment,
-        `${render(state, update.phase, result)}\n<!-- scriptorium:run ${encode(state)} -->`,
+        kept && kept === pass.comment.body ? kept : body(timeOfDay(now())),
       );
       remembered.set(issue, {
         comments: [...comments.filter((comment) => comment.id !== run.id), run],

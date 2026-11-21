@@ -90,6 +90,7 @@ export type OpenIssue = Issue & { title: string; url: string };
 export function repositoryPlatform(
   connection: ConnectionWithLinkAdditions,
   configuration: PlatformConventions,
+  now?: () => Date,
 ) {
   const { labels } = configuration;
   const { issueTracker, pullRequests, access } = connection;
@@ -99,7 +100,7 @@ export function repositoryPlatform(
     configuration.contractResult,
     isRunComment,
   );
-  const comments = issueComments(issueTracker, configuration, evidenceIds);
+  const comments = issueComments(issueTracker, configuration, evidenceIds, now);
   // An issue as the decision core identifies it: its number in this
   // repository, or `<path>#<n>` in another.
   const id = (linked: IssueReference): IssueId =>
