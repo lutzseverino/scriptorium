@@ -936,18 +936,35 @@ pull request of an independent review, from its first launch, triage or
 implement on readiness, to merge or failure. Every run kind, stop and resume
 of the pass edits the same comment in place, as
 [ADR 0008](../adr/0008-split-work-into-run-kinds-handed-off-by-the-host.md)
-records. It holds a heading with the pass's state, a checklist line for each
-phase (Triage, Implement, Review and Merge) with its state and its latest
-run's provider, model, effort, attempt, review round and result link, a pause
-or failure on the line of the phase it happened in, and the latest run
-result's body in a `<details>` block. Triage shows once it ran in the pass,
-and Review once the repository turns review on. A phase that starts, and a
-merge, finishes an earlier phase left running, paused or stopped. A failure after its pull
-request closed or merged without closing the issue is the merge's.
+records. By default it holds four parts, with status markers from the
+installed comment rules'
+[Status markers](https://github.com/lutzseverino/scriptorium/blob/main/.repo-standards/rules/comments.md#status-markers)
+and no checkboxes:
+
+- a lead line, a heading with the pass's marker and state, such as
+  `### 🔄 Implementing`, and for a paused pass its cause and reset, such as
+  `### ⏸️ Paused: usage limit, resumes at 18:00Z`;
+- a pipeline line of each phase's marker and name, such as
+  `✅ Triage → 🔄 Implement → ⬜ Review → ⬜ Merge`;
+- an outcome line for each phase with a run result or a reason, such as
+  `**Triage:** <summary> · [result](<link>)`, with the lead line of its
+  latest result and a link to it, rather than a copy;
+- a `<sub>` footer with the latest written phase's run facts: its provider,
+  model and effort, the chosen model and reason when it ran as a stand-in,
+  its attempt and review round, and the time of the comment's latest change.
+
+A failed pass adds a `> [!CAUTION]` alert with the failure. Triage shows once
+it ran in the pass, and Review once the repository turns review on. A phase
+that starts, and a merge, finishes an earlier phase left running, paused or
+stopped; a review whose round handed the pull request back shows 🔁 while
+implement continues. A failure after its pull request closed or merged
+without closing the issue is the merge's. A merge relaunch shows `Merging`
+while it runs and `Awaiting merge` once it is done.
 
 The comment's last line is its marker,
-`<!-- scriptorium:run {…} -->`, whose JSON holds each phase's facts, whether
-the pass has ended and, after a stop releases the claim, its continuation:
+`<!-- scriptorium:run {…} -->`, whose JSON holds each phase's facts,
+including its latest result's lead line, the time the comment last changed,
+whether the pass has ended and, after a stop releases the claim, its continuation:
 the PRs and review the answered stop resumes on. The factory reads the
 marker back on every write, so what the issue was told survives host
 restarts without host state; it trusts only a comment its bot account posted.
@@ -958,8 +975,8 @@ Progress writes, at each launch, pause and wait for merge, are
 best-effort: a failed one is logged and the next write carries the state on.
 A posted result's report write, a pass's final write at merge or failure,
 a stop's continuation and every action are required: the decision fails and retries on a later pass, and a
-retry finds the same comment and posts no action twice. An unchanged comment
-is not edited.
+retry finds the same comment and posts no action twice. A write that changes
+nothing keeps its update time, so an unchanged comment is not edited.
 
 A failed report write for a posted result stays with its run. The host logs
 the issue and the error, and the run keeps its result link, stays claimed and

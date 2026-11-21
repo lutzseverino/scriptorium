@@ -602,6 +602,7 @@ export function createHost(
     const platform = repositoryPlatform(
       quota.observe(name, served.connection),
       pass.configuration,
+      ports.now,
     );
     pass.platform = platform;
     try {
@@ -819,6 +820,8 @@ export function createHost(
               facts: {
                 state: outcomeStates[run.result.outcome],
                 reason: run.result.reason,
+                waits:
+                  run.result.outcome === "stop" ? run.result.state : undefined,
                 link: link ?? run.publication?.evidence?.url,
               },
               result: {
@@ -1570,6 +1573,7 @@ export function createHost(
           state: "running",
           ...runFacts(run),
           link: undefined,
+          summary: undefined,
         },
       },
     );
@@ -1792,6 +1796,7 @@ export function createHost(
                 facts: {
                   state: stop === labels.carried ? "carried" : "stopped",
                   reason: `${publicationStop ? `${publicationStop}; ` : ""}waits in \`${stop}\``,
+                  waits: stop,
                 },
                 resume: {
                   ...(since && { since }),

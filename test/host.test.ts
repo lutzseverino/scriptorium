@@ -1000,6 +1000,15 @@ function runComment(issue: { comments: string[] }): string {
   assert.ok(only, "a run comment");
   return only;
 }
+// The default run comment's lead line, and its footer with the latest written
+// phase's run facts.
+const leadOf = (comment: string) => comment.split("\n")[0];
+const footerOf = (comment: string) =>
+  comment.split("\n").find((line) => line.startsWith("<sub>")) ?? "";
+// The facts the run comment's marker holds for one phase.
+const phaseOf = (comment: string, phase: string) =>
+  JSON.parse(/^<!-- scriptorium:run (.*) -->$/.exec(lastLine(comment))![1])
+    .phases[phase];
 
 // Sandcastle that records each run, with the token the sandbox would read,
 // until the test finishes it or its sandbox is removed. A finished agent
@@ -1574,9 +1583,10 @@ test("a failed launch record leaves no sandbox or cap slot and its orphaned clai
   assert.equal(run.launched.length, 1);
   const issue = run.github.find("acme/widgets", 4);
   assert.deepEqual(notices(issue), []);
+  assert.equal(leadOf(runComment(issue)), "### 🔄 Implementing");
   assert.match(
-    runComment(issue),
-    /- \[ \] Implement: running · `claude-code\/claude-sonnet-5-5@high`, attempt 2\n/,
+    footerOf(runComment(issue)),
+    / · `claude-code\/claude-sonnet-5-5@high`, attempt 2 · /,
   );
 });
 
@@ -2936,7 +2946,11 @@ test("a failed first run retries with its failure and log tail after the provide
   const issue = run.github.find("acme/widgets", 4);
   assert.match(
     runComment(issue),
-    /^\*\*Factory run: failed\*\*\n\n- \[ \] Implement: failed \(the run ended without an open pull request\) · `codex\/gpt-5\.5@high`, attempt 2/,
+    /^### ❌ Failed\n\n> \[!CAUTION\]\n> the run ended without an open pull request\n\n❌ Implement → ⬜ Merge\n\n\*\*Implement:\*\* The run finished its work\. · the run ended without an open pull request · \[result\]\([^)]+\)\n/,
+  );
+  assert.match(
+    footerOf(runComment(issue)),
+    / · `codex\/gpt-5\.5@high`, attempt 2 · /,
   );
   assert.deepEqual(notices(issue), actions(issue));
   assert.equal(actions(issue).length, 1);
@@ -3289,7 +3303,7 @@ for (const timedOut of [false, true])
     assert.deepEqual(notices(issue), []);
     assert.match(
       runComment(issue),
-      /^\*\*Factory run: awaiting merge\*\*\n\n- \[x\] Implement: done .*\n- \[ \] Merge: awaiting merge\n/,
+      /^### 👤 Awaiting merge\n\n✅ Implement → 👤 Merge\n/,
     );
   });
 
@@ -3303,13 +3317,13 @@ test("an ended run awaiting merge shows it on its run comment across polls, labe
   issue.pullRequests.push("OPEN");
   await run.tick();
   assert.deepEqual(notices(issue), [], "a live run needs no notice");
-  assert.match(runComment(issue), /- \[ \] Implement: running · /);
+  assert.match(runComment(issue), /\n🔄 Implement → ⬜ Merge\n/);
   run.launched[0].finish();
   await run.drain();
   await run.tick();
   const awaiting = runComment(issue);
-  assert.match(awaiting, /^\*\*Factory run: awaiting merge\*\*\n/);
-  assert.match(awaiting, /- \[ \] Merge: awaiting merge\n/);
+  assert.equal(leadOf(awaiting), "### 👤 Awaiting merge");
+  assert.match(awaiting, /\n✅ Implement → 👤 Merge\n/);
   assert.deepEqual(notices(issue), [], "nobody is asked to act");
   const edits = () =>
     run.github.calls.filter(([, operation]) => operation === "updateComment")
@@ -3340,7 +3354,7 @@ test("an ended run awaiting merge shows it on its run comment across polls, labe
   assert.equal(decisions[0].kind, "fail");
   assert.match(
     runComment(issue),
-    /^\*\*Factory run: failed\*\*\n\n- \[x\] Implement: done .*\n- \[ \] Merge: failed \(its pull request merged without closing the issue; close the issue if that finished it\)\n/,
+    /^### ❌ Failed\n\n> \[!CAUTION\]\n> its pull request merged without closing the issue; close the issue if that finished it\n\n✅ Implement → ❌ Merge\n[^]*\n\*\*Merge:\*\* its pull request merged without closing the issue; close the issue if that finished it\n/,
   );
   assert.equal(actions(issue).length, 1);
   assert.match(
@@ -3380,7 +3394,7 @@ test("orphan claims awaiting merge show it on their run comments, retry a refuse
     assert.deepEqual(notices(issue), []);
     assert.match(
       runComment(issue),
-      /- \[ \] Implement\n- \[ \] Merge: awaiting merge \(no factory run holds its claim\)\n/,
+      /\n⬜ Implement → 👤 Merge\n\n\*\*Merge:\*\* no factory run holds its claim\n/,
     );
     assert.doesNotMatch(runComment(issue), /attempt/);
   }
@@ -3408,7 +3422,7 @@ test("orphan claims awaiting merge show it on their run comments, retry a refuse
   second.pullRequests = ["OPEN"];
   await run.restart().tick();
   assert.equal(second.comments.length, 1);
-  assert.match(runComment(second), /Merge: awaiting merge/);
+  assert.match(runComment(second), /^### 👤 Awaiting merge\n[^]*👤 Merge\n/);
 });
 
 for (const comments of [
@@ -3448,9 +3462,10 @@ for (const comments of [
     if (comments?.run)
       assert.equal(
         runComment(issue).split("\n")[0],
-        "Held: awaiting merge; claude-code/claude-sonnet-5-5@high #1",
+        "Held: Awaiting merge; claude-code/claude-sonnet-5-5@high #1",
       );
-    else assert.match(runComment(issue), /Merge: awaiting merge/);
+    else
+      assert.match(runComment(issue), /^### 👤 Awaiting merge\n[^]*👤 Merge\n/);
     await restarted.tick();
     await run.restart().tick();
     assert.equal(runComments(issue).length, 1);
@@ -3634,7 +3649,7 @@ for (const scenario of [
       const issue = run.github.find("acme/widgets", 4);
       const comment = runComment(issue);
       for (const path of paths)
-        assert.ok(comment.includes(`  - Unpushable: \`${path}\``), comment);
+        assert.ok(comment.includes(`> - Unpushable: \`${path}\``), comment);
       assert.match(comment, /claude-code\/claude-sonnet-5-5@high/);
       assert.equal(actions(issue).length, 1);
       assert.ok(
@@ -3807,7 +3822,7 @@ test("the configured skill, arguments and state labels drive first attempts, ret
   const issue = run.github.find("acme/widgets", 4);
   assert.equal(
     runComment(issue).split("\n")[0],
-    "failed: claude-code/claude-opus-5-5@high #2",
+    "Failed: claude-code/claude-opus-5-5@high #2",
   );
   assert.deepEqual(
     notices(issue).map((comment) => comment.split("\n")[0]),
@@ -5070,7 +5085,7 @@ test("a timed-out run fails at once when its branch has unpushable commits", asy
   const issue = run.github.find("acme/widgets", 4);
   assert.match(
     runComment(issue),
-    /\n {2}- Unpushable: `.github\/workflows\/new.yml`\n/,
+    /\n> - Unpushable: `.github\/workflows\/new.yml`\n/,
   );
   assert.match(
     actions(issue)[0],
@@ -5102,8 +5117,9 @@ test("a second attempt awaiting merge cannot retry after its pull request closes
   // first process would have, on the pass's one run comment.
   assert.match(
     runComment(issue),
-    /- \[x\] Implement: done · `codex\/gpt-5\.5@high`, attempt 2 .*\n- \[ \] Merge: failed \(its pull request closed without merging\)\n/,
+    /\n✅ Implement → ❌ Merge\n[^]*\n\*\*Merge:\*\* its pull request closed without merging\n/,
   );
+  assert.equal(phaseOf(runComment(issue), "implement").attempt, 2);
   assert.equal(notices(issue).length, 1);
   assert.match(notices(issue)[0], /run failed:.*pull request closed/);
 });
@@ -5169,7 +5185,8 @@ test("an orphaned second attempt with no interrupted record fails after startup 
   assert.equal(run.launched.length, 2);
   assert.equal(run.launched[1].removed, true);
   const issue = run.github.find("acme/widgets", 4);
-  assert.match(runComment(issue), /Implement: failed .*attempt 2/);
+  assert.match(runComment(issue), /\n❌ Implement → ⬜ Merge\n/);
+  assert.match(footerOf(runComment(issue)), /, attempt 2 · /);
   assert.match(actions(issue)[0], /^The factory run failed: no factory run/);
   assert.equal(recordOf(run.state, 4, 2).settled, true);
 });
@@ -5224,7 +5241,7 @@ for (const override of [false, true])
             "Deliver `.github/workflows/new.yml`, `.github/workflows/other.yml` once.",
           ]
         : [
-            "**Factory run: failed**\n\n- [ ] Implement: failed (the run's branch changes paths the factory's GitHub App can't push)\n  - Unpushable: `.github/workflows/new.yml`\n  - Unpushable: `.github/workflows/other.yml`\n- [ ] Merge\n",
+            "### ❌ Failed\n\n> [!CAUTION]\n> the run's branch changes paths the factory's GitHub App can't push\n> - Unpushable: `.github/workflows/new.yml`\n> - Unpushable: `.github/workflows/other.yml`\n\n❌ Implement → ⬜ Merge\n\n**Implement:** the run's branch changes paths the factory's GitHub App can't push\n\n<sub>Factory run, edited in place · updated 12:00Z</sub>",
             "The factory run failed: the run's branch changes paths the factory's GitHub App can't push. A person with permission to push `.github/workflows/new.yml`, `.github/workflows/other.yml` must deliver the change. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
           ],
     );
@@ -5390,14 +5407,20 @@ function endOnLimit(launch: { options: RunOptions }) {
   );
 }
 
-// The run comment's line for a paused first attempt, and whether the issue
-// shows it on its one run comment and nothing else.
-const pausedLine =
-  "- [ ] Implement: paused (usage limit, resets 12:50pm (UTC)) · `claude-code/claude-sonnet-5-5@high`, attempt 1\n";
+// The run comment's lead line and footer facts for a paused first attempt,
+// and whether the issue shows them on its one run comment and nothing else.
+const pausedLine = {
+  lead: "### ⏸️ Paused: usage limit, resumes at 12:50pm (UTC)",
+  facts: " · `claude-code/claude-sonnet-5-5@high`, attempt 1 · ",
+};
 function assertPaused(issue: { comments: string[] }, line = pausedLine) {
   assert.equal(issue.comments.length, 1);
-  assert.match(runComment(issue), /^\*\*Factory run: paused\*\*\n/);
-  assert.ok(runComment(issue).includes(line), runComment(issue));
+  assert.equal(leadOf(runComment(issue)), line.lead);
+  assert.match(runComment(issue), /\n⏸️ Implement → /);
+  assert.ok(
+    footerOf(runComment(issue)).includes(line.facts),
+    runComment(issue),
+  );
 }
 
 test("a run exit holds every exhausted repository, stops its reads across restart, and resumes the same attempt at its reset", async (t) => {
@@ -5434,10 +5457,10 @@ test("a run exit holds every exhausted repository, stops its reads across restar
   );
   const issue = run.github.find("acme/widgets", 4);
   assert.deepEqual(issue.labels, ["ready-for-agent", "factory:paused"]);
-  assertPaused(
-    issue,
-    "- [ ] Implement: paused (GitHub rate limit, resets 2026-10-09T12:05:00.000Z) · `claude-code/claude-sonnet-5-5@high`, attempt 1\n",
-  );
+  assertPaused(issue, {
+    lead: "### ⏸️ Paused: GitHub rate limit, resumes at 2026-10-09T12:05:00.000Z",
+    facts: pausedLine.facts,
+  });
   const before = run.github.calls.length;
   await run.tick();
   assert.ok(
@@ -5779,7 +5802,7 @@ test("a refused quota pause notice preserves the pause and resumes after a resta
   await restarted.tick();
   assert.match(
     runComment(run.github.find("acme/widgets", 4)),
-    /paused \(GitHub rate limit/,
+    /^### ⏸️ Paused: GitHub rate limit, /,
   );
   await restarted.tick();
   assert.equal(run.launched.length, 2);
@@ -5952,7 +5975,7 @@ for (const ended of [
       join(run.state, "repositories/acme/widgets/logs/issue-4-attempt-1.log"),
     );
     assert.equal(issue.comments.length, 1);
-    assert.match(runComment(issue), /- \[ \] Implement: running · /);
+    assert.equal(leadOf(runComment(issue)), "### 🔄 Implementing");
 
     // Hitting the limit again is a new pause, told again on the same comment.
     endOnLimit(resumed);
@@ -6099,10 +6122,9 @@ for (const change of ["needs input", "closed"] as const)
     assert.equal(recordOf(run.state, 4, 1).settled, true);
     if (change === "closed") assertPaused(issue);
     else
-      assert.ok(
-        runComment(issue).includes(
-          "- [ ] Implement: stopped (waits in `factory:needs-input`) · `claude-code/claude-sonnet-5-5@high`, attempt 1\n",
-        ),
+      assert.match(
+        runComment(issue),
+        /^### 👤 Waiting for an answer\n\n👤 Implement → ⬜ Merge\n\n\*\*Implement:\*\* .*waits in `factory:needs-input`.*\n[^]*\n<sub>.* · `claude-code\/claude-sonnet-5-5@high`, attempt 1 · /,
       );
     assert.deepEqual(notices(issue), []);
     run.usage["claude-code"] = 0;
@@ -6354,7 +6376,7 @@ test("an overdue legacy paused record relaunches after a restart with usage stil
   assert.equal(issue.comments.length, 1);
   assert.match(
     runComment(issue),
-    /Implement: paused \(usage limit, resets 5:50pm \(UTC\)\)/,
+    /^### ⏸️ Paused: usage limit, resumes at 5:50pm \(UTC\)\n/,
   );
 });
 
@@ -6395,7 +6417,10 @@ const thresholds = {
 const reset = "2026-10-09T15:00:00.000Z";
 
 function thresholdLine(model = "claude-code/claude-sonnet-5-5@high") {
-  return `- [ ] Implement: paused (pause threshold, resets ${reset}) · \`${model}\`, attempt 1\n`;
+  return {
+    lead: `### ⏸️ Paused: pause threshold, resumes at ${reset}`,
+    facts: ` · \`${model}\`, attempt 1 · `,
+  };
 }
 
 const nonSkips = (decisions: Decision[]) =>
@@ -6623,7 +6648,7 @@ test("a run that exits before the pause threshold's stop settles as it ended", a
   assert.equal(recordOf(run.state, 4, 1).pausing, null);
   const issue = run.github.find("acme/widgets", 4);
   assert.deepEqual(notices(issue), []);
-  assert.match(runComment(issue), /- \[ \] Merge: awaiting merge\n/);
+  assert.match(runComment(issue), /^### 👤 Awaiting merge\n[^]*👤 Merge\n/);
   assert.doesNotMatch(runComment(issue), /paused/);
 });
 
@@ -6969,7 +6994,7 @@ for (const state of ["live", "ended", "awaiting merge", "paused", "restarted"])
       // nothing new is posted.
       if (closure === "merged" && !["live", "paused"].includes(state)) {
         assert.equal(issue.comments.length, comments.length);
-        assert.match(runComment(issue), /^\*\*Factory run: merged\*\*\n/);
+        assert.match(runComment(issue), /^### ✅ Merged\n/);
       } else assert.deepEqual(issue.comments, comments);
       if (state === "live") {
         run.launched[0].finish();
@@ -9008,7 +9033,7 @@ for (const scenario of [
     assert.deepEqual(actions(issue), []);
     if (scenario === "without review") {
       assert.equal(run.launched.length, 1);
-      assert.match(runComment(issue), /Merge: awaiting merge/);
+      assert.match(runComment(issue), /^### 👤 Awaiting merge\n[^]*👤 Merge\n/);
     } else {
       const review = recordOf(run.state, 4, 1);
       assert.equal(review.continuation.runKind, "review");
@@ -9258,7 +9283,7 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   assert.equal(invocation(run.launched[2].options.prompt), "/implement #5");
   assert.equal(run.launched[2].options.agent.name, "claude-code");
   assert.deepEqual(notices(legacyIssue), []);
-  assert.equal(runComment(legacyIssue).split("\n")[0], "Legacy awaiting merge");
+  assert.equal(runComment(legacyIssue).split("\n")[0], "Legacy Awaiting merge");
 
   currentIssue.branchPullRequests.push({
     ...publishedPR(currentRemote, "factory/issue-5"),
@@ -9280,10 +9305,20 @@ test("one host preserves version 2 conventions beside version 3 triage, implemen
   // Triage, implement and review share the pass's one run comment.
   assert.match(
     runComment(currentIssue),
-    /^\*\*Factory run: in progress\*\*\n\n- \[x\] Triage: done · `codex\/gpt-5\.5@low`, attempt 1 · \[result\]\([^)]+\)\n- \[x\] Implement: done · `claude-code\/claude-opus-5-5@high`, attempt 1 · \[result\]\([^)]+\)\n- \[ \] Review: running · `[^`]+`, attempt 1, round 1\n- \[ \] Merge\n/,
+    /^### 🔄 Reviewing\n\n✅ Triage → ✅ Implement → 🔄 Review → ⬜ Merge\n\n\*\*Triage:\*\* .* · \[result\]\([^)]+\)\n\n\*\*Implement:\*\* .* · \[result\]\([^)]+\)\n\n<sub>Factory run, edited in place · `[^`]+`, attempt 1, round 1 · /,
+  );
+  assert.deepEqual(
+    ["triage", "implement"].map((phase) => {
+      const { provider, model, effort, attempt } = phaseOf(
+        runComment(currentIssue),
+        phase,
+      );
+      return `${provider}/${model}@${effort} #${attempt}`;
+    }),
+    ["codex/gpt-5.5@low #1", "claude-code/claude-opus-5-5@high #1"],
   );
   assert.deepEqual(notices(legacyIssue), []);
-  assert.equal(runComment(legacyIssue).split("\n")[0], "Legacy awaiting merge");
+  assert.equal(runComment(legacyIssue).split("\n")[0], "Legacy Awaiting merge");
 });
 
 test("a version 3 issue goes from implement to review to a hand-back on the same PR, without an awaiting-merge notice", async (t) => {
@@ -9456,7 +9491,7 @@ test("a review stopped at a gate is released with its PR, and resumes review onc
   );
   assert.match(
     runComment(issue),
-    /- \[ \] Review: stopped \(waits in `state:owner`\) · /,
+    /^### 👤 Waiting for an answer\n[^]* → 👤 Review → [^]*\n\*\*Review:\*\* (?:.* · )?waits in `state:owner`/,
   );
 
   // A gate on the PR alone still holds it, across a restart.
@@ -9476,7 +9511,7 @@ test("a review stopped at a gate is released with its PR, and resumes review onc
     "claude-code",
   );
   assert.equal(actions(issue).length, 1);
-  assert.match(runComment(issue), /- \[ \] Review: running · /);
+  assert.equal(leadOf(runComment(issue)), "### 🔄 Reviewing");
 });
 
 test("a full pass leaves one run comment from triage to merge, and asks a person to act only at its stop", async (t) => {
@@ -9540,8 +9575,9 @@ test("a full pass leaves one run comment from triage to merge, and asks a person
   assert.equal(runComments(issue).length, 1);
   assert.match(
     runComment(issue),
-    /^\*\*Factory run: merged\*\*\n\n- \[x\] Triage: done · .*\n- \[x\] Implement: done · .*\n- \[x\] Review: done · .*, round 1\n- \[x\] Merge: merged\n/,
+    /^### ✅ Merged\n\n✅ Triage → ✅ Implement → ✅ Review → ✅ Merge\n/,
   );
+  assert.equal(phaseOf(runComment(issue), "review").round, 1);
   assert.equal(actions(issue).length, 1);
 });
 
@@ -9565,7 +9601,7 @@ test("a failure whose label write fails retries without a second run comment or 
   await run.restart().tick();
   assert.deepEqual(issue.labels, ["ready-for-agent", "factory:failed"]);
   assert.equal(runComments(issue).length, 1);
-  assert.match(runComment(issue), /^\*\*Factory run: failed\*\*\n/);
+  assert.equal(leadOf(runComment(issue)), "### ❌ Failed");
   assert.equal(actions(issue).length, 1);
   assert.equal(run.launched.length, 1);
 });
@@ -9644,7 +9680,7 @@ test("a carried triage result cites its carrier quietly and removing its label s
   const issue = run.github.find("acme/widgets", 4);
   assert.deepEqual(issue.labels, [carried]);
   assert.ok(runComment(issue).includes(body));
-  assert.match(runComment(issue), /^\*\*Factory run: carried\*\*/);
+  assert.match(runComment(issue), /^### ↗️ Carried\n/);
   assert.deepEqual(actions(issue), []);
   for (const comment of issue.comments)
     assert.doesNotMatch(comment, /@(?:owner|outsider|factory)\b/);
@@ -9717,7 +9753,7 @@ test("a carried triage result started by a reporter reply settles the reporter s
   await run.drain();
   await run.tick();
   assert.deepEqual(issue.labels, [carried]);
-  assert.match(runComment(issue), /^\*\*Factory run: carried\*\*/);
+  assert.match(runComment(issue), /^### ↗️ Carried\n/);
   assert.deepEqual(actions(issue), []);
 });
 
@@ -9901,7 +9937,7 @@ test("a ready PR's unheld independent review hands back on the same PR, and a he
     const issue = run.github.find("acme/widgets", 42);
     if (held) {
       assert.equal(run.launched.length, 1, run.reports.join("\n"));
-      assert.match(runComment(issue), /Merge: awaiting merge/);
+      assert.match(runComment(issue), /^### 👤 Awaiting merge\n[^]*👤 Merge\n/);
       continue;
     }
     assert.equal(run.launched.length, 2, run.reports.join("\n"));
@@ -10192,7 +10228,7 @@ test("a stand-in is recorded and explained at launch and retained across restart
   const comment = () => run.github.find("acme/widgets", 4).comments.join("\n");
   assert.match(
     comment(),
-    /chosen `codex\/gpt-5\.5`; ran `claude-code\/claude-opus-5-5` as a stand-in: spare usage \(30% used, 50% elapsed\)/,
+    /`claude-code\/claude-opus-5-5@high`, stand-in for `codex\/gpt-5\.5`: spare usage \(30% used, 50% elapsed\)/,
   );
   run.interrupt();
   // Losing spare usage must neither reselect the model nor lose its reason.
@@ -10202,7 +10238,7 @@ test("a stand-in is recorded and explained at launch and retained across restart
   assert.equal(resumed.selection, "recorded");
   assert.equal(resumed.model, "claude-opus-5-5");
   assert.deepEqual(resumed.standIn, explanation);
-  assert.match(comment(), /as a stand-in: spare usage/);
+  assert.match(comment(), /, stand-in for `codex\/gpt-5\.5`: spare usage/);
 });
 
 test("concurrent triage, implement and review runs in one repository each keep their own kind's token through refresh and host reads", async (t) => {
@@ -10445,19 +10481,20 @@ test("a triage run's result posts its brief in the factory's frame and applies i
     comment.includes("## Agent Brief"),
   );
   assert.equal(briefs.length, 1, "a retried label write posts no second brief");
-  // The run comment shows the contained brief, and no marker but its own.
+  // The run comment links the brief with its lead line, and has no marker
+  // but its own.
   const shown = runComment(issue);
-  assert.match(shown, /- \[x\] Triage: done \(the brief is ready\)/);
   assert.match(
     shown,
-    /\n## Agent Brief\n\n\*\*Summary:\*\* Fix it\.\n&lt;!-- scriptorium:triage-result/,
+    /\n\*\*Triage:\*\* Agent Brief · the brief is ready · \[result\]\([^)]+\)\n/,
   );
+  assert.doesNotMatch(shown, /Fix it\.|scriptorium:triage-result/);
   assert.deepEqual(
     shown
       .split("\n")
       .filter((line) => line.startsWith("<!--"))
       .map((line) => line.split(" ")[1]),
-    ["scriptorium:run-body", "/scriptorium:run-body", "scriptorium:run"],
+    ["scriptorium:run"],
   );
   const [brief] = briefs;
   assert.ok(
@@ -10561,7 +10598,7 @@ test("a stop result posts its question and applies its state together, then rele
   assert.equal(issue.comments.length, 2);
   assert.match(
     runComment(issue),
-    /- \[ \] Implement: stopped \(waits in `factory:needs-input`\) · .*\n[^]*Which database should the tests use\?/,
+    /^### 👤 Waiting for an answer\n[^]*\n\*\*Implement:\*\* Which database should the tests use\? · waits in `factory:needs-input` · \[result\]\([^)]+\)\n/,
   );
   assert.deepEqual(actions(issue), [], "the run asked its own question");
   assert.match(
@@ -11013,14 +11050,18 @@ test("a failed result fails with its reason, and a run without a valid result fa
   assert.deepEqual(
     issue.comments.map((comment) => comment.split("\n")[0]),
     [
-      "**Factory run: failed**",
+      "### ❌ Failed",
       "> _This was generated by AI._",
       "The factory run failed: the run left no run result at /run/factory/result/result.json. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
     ],
   );
   assert.match(
     runComment(issue),
-    /Implement: failed \(the run left no run result at \/run\/factory\/result\/result\.json\) · `codex\/gpt-5\.5@high`, attempt 2/,
+    /\n> the run left no run result at \/run\/factory\/result\/result\.json\n[^]*\n\*\*Implement:\*\* the run left no run result at \/run\/factory\/result\/result\.json\n/,
+  );
+  assert.match(
+    footerOf(runComment(issue)),
+    / · `codex\/gpt-5\.5@high`, attempt 2 · /,
   );
   assert.ok(
     run.reports.includes(
@@ -11102,7 +11143,7 @@ test("a run that ends with its pull request open says why it ended, in the host'
   assert.match(issue.comments[1], /babysit was still waiting on its checks/);
   assert.match(
     runComment(issue),
-    /\n- \[ \] Merge: awaiting merge \(its required checks were still running when the run ended\)\n/,
+    /\n✅ Implement → 👤 Merge\n[^]*\n\*\*Merge:\*\* its required checks were still running when the run ended\n/,
   );
 });
 
@@ -13475,7 +13516,7 @@ test("runs that ended awaiting merge or paused never appear among unresolved run
   await run.tick();
   assert.match(
     runComment(run.github.find("acme/widgets", 4)),
-    /- \[ \] Merge: awaiting merge\n/,
+    /^### 👤 Awaiting merge\n[^]*👤 Merge\n/,
   );
   assert.ok("paused" in recordOf(run.state, 5, 1).ended);
   assert.deepEqual(run.status().unresolvedRuns, []);

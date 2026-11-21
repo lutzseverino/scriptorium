@@ -1,8 +1,10 @@
 // The factory's deterministic issue-comment language and its own wording.
 import { roleNames } from "./label-roles.ts";
 
-// The names within a run comment phase, which renders as one line.
-const lineNames = [
+// The names within a run comment phase, which outside a phase are the
+// written phase's.
+export const lineNames = [
+  "icon",
   "check",
   "state",
   "reason",
@@ -14,11 +16,15 @@ const lineNames = [
   "attempt",
   "round",
   "link",
+  "summary",
+  "outcome",
   "unpushable",
 ] as const;
 const names = {
   run: [
     "status",
+    "failure",
+    "updated",
     "triage",
     "implement",
     "review",
@@ -46,12 +52,12 @@ type Values = {
 };
 type Part = string | { name: string; section?: Part[] };
 
-// One checklist line of the run comment, for the phase `name`.
-const phase = (name: string, title: string) =>
-  `{#${name}}- [{check}] ${title}{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · \`{provider}/{model}@{effort}\`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#standIn} · {standIn}{/standIn}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: \`{unpushable}\`\n{/unpushable}{/${name}}`;
+// The run comment's outcome line for the phase `name`.
+const outcome = (name: string, title: string) =>
+  `{#${name}}{#outcome}\n**${title}:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/${name}}`;
 
 const defaults = {
-  run: `**Factory run: {status}**\n\n${phase("triage", "Triage")}${phase("implement", "Implement")}${phase("review", "Review")}${phase("merge", "Merge")}{#result}\n<details>\n<summary>Latest run result</summary>\n\n{result}\n\n</details>\n{/result}`,
+  run: `### {icon} {status}{#reset}: {reason}, resumes at {reset}{/reset}\n{#failure}\n> [!CAUTION]\n> {failure}\n{#unpushable}> - Unpushable: \`{unpushable}\`\n{/unpushable}{/failure}\n{#triage}{icon} Triage → {/triage}{#implement}{icon} Implement{/implement}{#review} → {icon} Review{/review} → {#merge}{icon} Merge{/merge}\n${outcome("triage", "Triage")}${outcome("implement", "Implement")}${outcome("review", "Review")}${outcome("merge", "Merge")}\n<sub>Factory run, edited in place{#provider} · \`{provider}/{model}@{effort}\`{#standIn}, {standIn}{/standIn}, attempt {attempt}{#round}, round {round}{/round}{/provider} · updated {updated}</sub>`,
   action:
     "{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link}).",
   close:
