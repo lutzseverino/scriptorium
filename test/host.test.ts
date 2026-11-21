@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -1593,6 +1594,90 @@ test("a launch recovers temporary and Git-less run clone directories left by a c
   assert.equal(git(checkout, ["status", "--porcelain"]), "");
   assert.equal(existsSync(temporary), false);
 });
+
+test("a host pass removes a closed issue's temporary clone leftovers", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4 }, { number: 40, labels: [] }],
+    },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const checkout = run.runClone("acme/widgets", 4);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "factory:needs-input",
+    body: "Owner answer needed",
+  });
+  await run.drain();
+  await run.tick();
+  rmSync(checkout, { recursive: true, force: true });
+  const temporary = `${checkout}-aBc123`;
+  write(temporary, { "partial.txt": "interrupted clone" });
+  const other = run.runClone("acme/widgets", 40);
+  write(other, { "partial.txt": "another issue" });
+  run.github.find("acme/widgets", 4).state = "CLOSED";
+  await run.restart().tick();
+  assert.equal(existsSync(temporary), false);
+  assert.ok(existsSync(other));
+});
+
+for (const state of ["held", "running"] as const)
+  test(`a ${state} claim's failed clone removal is reported, keeps the clone path free and is retried`, async (t) => {
+    // Directory permissions do not bind root.
+    if (process.getuid?.() === 0) return t.skip("runs as root");
+    const run = host(t, {
+      repositories: { "acme/widgets": [{ number: 4 }] },
+      remotes: { "acme/widgets": remote(t, factoryFiles) },
+    });
+    await run.tick();
+    const checkout = run.runClone("acme/widgets", 4);
+    if (state === "held") {
+      run.launched[0].finish(undefined, undefined, {
+        outcome: "stop",
+        state: "factory:needs-input",
+        body: "Owner answer needed",
+      });
+      await run.drain();
+      await run.tick();
+    }
+    const locked = join(checkout, "locked");
+    write(locked, { "file.txt": "undeletable\n" });
+    chmodSync(locked, 0o500);
+    const moved = () =>
+      readdirSync(dirname(checkout))
+        .filter((entry) => entry.startsWith("issue-4-"))
+        .map((entry) => join(dirname(checkout), entry, "clone", "locked"))
+        .filter((path) => existsSync(path));
+    try {
+      run.github.find("acme/widgets", 4).state = "CLOSED";
+      await run.tick();
+      if (state === "running") {
+        run.launched[0].finish();
+        await run.drain();
+      }
+      assert.ok(
+        run.reports.some((line) =>
+          line.startsWith("acme/widgets#4 run clone was not removed"),
+        ),
+        run.reports.join("\n"),
+      );
+      assert.ok(!run.reports.some((line) => line.includes("platform reads")));
+      // A partial removal never leaves a clone a later launch would reuse.
+      assert.equal(existsSync(checkout), false);
+      assert.equal(moved().length, 1);
+    } finally {
+      for (const path of [locked, ...moved()])
+        if (existsSync(path)) chmodSync(path, 0o700);
+    }
+    await run.tick();
+    assert.deepEqual(
+      readdirSync(dirname(checkout)).filter((entry) =>
+        entry.startsWith("issue-4"),
+      ),
+      [],
+    );
+  });
 
 test("legacy linked-worktree recovery carries committed and dirty work into the private run clone", async (t) => {
   const run = host(t, {

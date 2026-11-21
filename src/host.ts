@@ -29,6 +29,7 @@ import {
   updateClone,
   prepareRunClone,
   readRecovery,
+  removeRunClone as removeRunCloneDirectory,
   type Git,
 } from "./clone.ts";
 import {
@@ -711,11 +712,16 @@ export function createHost(
             .map(({ number, title, url }) => ({ number, title, url })),
         };
       const root = directory(name).runClones;
+      // Temporary siblings from interrupted creation or removal count too.
       const retained = existsSync(root)
-        ? readdirSync(root).flatMap((entry) => {
-            const match = /^issue-(\d+)$/.exec(entry);
-            return match ? [Number(match[1])] : [];
-          })
+        ? [
+            ...new Set(
+              readdirSync(root).flatMap((entry) => {
+                const match = /^issue-(\d+)(?:-|$)/.exec(entry);
+                return match ? [Number(match[1])] : [];
+              }),
+            ),
+          ]
         : [];
       const reviews = runKind(pass.configuration, "review");
       // The issue inventory excludes PRs. A clone missing from it can still
@@ -1105,11 +1111,19 @@ export function createHost(
     );
     if (users.length) {
       for (const run of users) run.removeClone = true;
-    } else
-      rmSync(runClone(at.repository, at.issue), {
-        recursive: true,
-        force: true,
-      });
+    } else discardRunClone(at);
+  }
+
+  // A failed removal neither fails the pass nor escapes a launch's exit. The
+  // issue is closed or no longer open, so the retained-clone scan retries it.
+  function discardRunClone(at: { repository: string; issue: number }) {
+    try {
+      removeRunCloneDirectory(runClone(at.repository, at.issue));
+    } catch (error) {
+      report(
+        `${at.repository}#${at.issue} run clone was not removed; a later pass retries it: ${error}`,
+      );
+    }
   }
 
   // The host stops holding the run.
@@ -1660,7 +1674,7 @@ export function createHost(
       })
       .finally(() => {
         cloneUsers.delete(run);
-        if (run.removeClone) rmSync(checkout, { recursive: true, force: true });
+        if (run.removeClone) discardRunClone(run);
         pending.delete(run.finished);
       });
     pending.add(run.finished);

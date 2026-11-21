@@ -1,6 +1,12 @@
 // The shared clone follows the remote default branch. Each claim gets its
 // own run clone, including its Git directory and objects.
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import {
   appendFile,
   cp,
@@ -164,6 +170,19 @@ export async function prepareRunClone(
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+}
+
+// Move the clone aside before deleting it, so an interrupted removal leaves
+// only a temporary sibling, never a partial clone a later launch would reuse.
+// Synchronous, so no preparation of the same clone can interleave.
+export function removeRunClone(clone: string): void {
+  if (!existsSync(dirname(clone))) return;
+  if (existsSync(clone))
+    renameSync(clone, join(mkdtempSync(`${clone}-`), "clone"));
+  const prefix = `${basename(clone)}-`;
+  for (const entry of readdirSync(dirname(clone)))
+    if (entry.startsWith(prefix))
+      rmSync(join(dirname(clone), entry), { recursive: true, force: true });
 }
 
 // The paths under `prefixes` changed by commits on this branch that neither

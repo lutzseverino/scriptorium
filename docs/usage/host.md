@@ -1269,9 +1269,9 @@ without assuming broader App permissions are necessary. A later owner request
 can authorize reconstruction; the refusal itself cannot authorize a retry.
 
 The shared clone's `updateClone()` refreshes its default branch before a
-launch. The explicit Sandcastle branch strategy reuses an existing issue
-branch and preserves its dirty worktree; that refresh does not update the
-issue branch. Delivery Git operations belong to the implementation agent.
+launch. A relaunch reuses the issue's run clone on its existing branch and
+preserves its dirty working tree; that refresh does not update the issue
+branch. Delivery Git operations belong to the implementation agent.
 The host's history-aware restricted-path detection runs after an ended run or
 claim, not as a pre-push gate. The exact Git operations behind the reported
 [workflow-permission refusals in #49](https://github.com/lutzseverino/scriptorium/issues/49)
@@ -1345,8 +1345,12 @@ after host restart. Removal always waits for any sandbox still running in the
 clone to exit. Failed or inconclusive platform reads keep the clone.
 
 An interrupted clone creation can leave a temporary `issue-<n>-<suffix>/`
-directory; the next launch of that claim removes it. A leftover
-`issue-<n>/` directory without its Git directory is replaced on that launch.
+directory; the next launch of that claim removes it, as does a host pass that
+observes the issue closed or no longer open. A leftover `issue-<n>/` directory
+without its Git directory is replaced on that launch. Removal first moves the
+clone into such a temporary directory, so an interrupted or failed removal
+never leaves a partial clone for a launch to reuse. A failed removal is
+reported, and each later successful host pass retries it.
 Legacy `clone/.sandcastle/` worktrees stay untouched after their first-launch
 copy, so upgraded hosts retain them for inspection.
 
@@ -1609,8 +1613,8 @@ deadline never counts from the restart and an overdue run relaunches without
 changes to its record or labels.
 
 An interrupted run launches again as the same attempt, with the same model,
-prompt and log, continuing its `factory/issue-<n>` branch and Sandcastle's
-worktree for it, and keeps its claim meanwhile. It takes its issue's turn in
+prompt and log, continuing its `factory/issue-<n>` branch in its run clone,
+and keeps its claim meanwhile. It takes its issue's turn in
 the queue and waits for its provider's cap, its provider's pause threshold and
 for its repository to resume; the drain threshold does not hold it. It continues as it would have without the restart, so a
 readiness change or a new blocker does not hold it; it releases its claim

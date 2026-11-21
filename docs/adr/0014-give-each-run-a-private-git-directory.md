@@ -1,16 +1,16 @@
 # Give each run a private Git directory
 
-Each run works in a run clone: a clone of the repository made for that run
-alone, without hardlinks to the shared clone's objects, in which its sandbox is
-launched directly. The sandbox sees no shared Git state, so Git commands inside
-it, temporary worktrees included, touch only the run's own clone. The clone
-belongs to the issue's claim and stays across retries, run kinds,
-pauses, interruptions, failures and owner stops. It is removed when the claim
-completes or the host observes that its issue is closed or no longer open,
-after any sandbox still running in it exits. This also covers retained clones
-with no live run record, including after host restart. An inconclusive read
-keeps the clone. Every Git command the host runs in a run clone treats it as untrusted: hooks are disabled and
-command-valued configuration is ignored.
+Each run works in a run clone: a clone of the repository made for its issue's
+claim alone, without hardlinks to the shared clone's objects, in which its
+sandbox is launched directly. The sandbox sees no shared Git state, so Git
+commands inside it, temporary worktrees included, touch only the run's own
+clone. The clone belongs to the issue's claim and stays across retries, run
+kinds, pauses, interruptions, failures and owner stops. It is removed when the
+claim completes or the host observes that its issue is closed or no longer
+open, after any sandbox still running in it exits. This also covers retained
+clones with no live run record, including after host restart. An inconclusive
+read keeps the clone. Every Git command the host runs in a run clone treats it
+as untrusted: hooks are disabled and command-valued configuration is ignored.
 
 Until now every sandbox mounted the shared clone's whole `.git` read-write. On
 2026-11-14 one review run's `git worktree prune` deleted every other run's
