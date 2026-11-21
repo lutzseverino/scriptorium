@@ -116,7 +116,10 @@ export async function prepareRunClone(
     : undefined;
   const temporary = await mkdtemp(`${clone}-`);
   try {
+    // Host Git refuses local transports; the shared clone is the host's own.
     await git(dirname(clone), [
+      "-c",
+      "protocol.file.allow=always",
       "clone",
       "--quiet",
       "--no-hardlinks",

@@ -55,8 +55,8 @@ checkout of one of those tags installs and starts from `factory/` instead. A
 host that updates on its own lists the releases of `lutzseverino/scriptorium`
 for newer versions, since later releases are published only there.
 
-The process needs stable Node.js 24 or 26 (24 is the default), Git and Docker
-on its `PATH`, and runs until it is stopped;
+The process needs stable Node.js 24 or 26 (24 is the default), Git 2.31 or
+later and Docker on its `PATH`, and runs until it is stopped;
 [restarts](#restarts) describes stopping it. It builds sandbox images with its
 own user's UID and GID, with the Docker daemon's own builder unless
 `imageBuilder` opts into the [factory builder](#the-factory-builder), which
@@ -1337,6 +1337,16 @@ Each sandbox mounts only its run clone's working tree and Git directory.
 Temporary `git worktree add`, `remove` and `prune` operations touch that clone
 alone. Its `origin` names the upstream repository, so fetches and delivery
 never write through the shared clone.
+
+The host treats a run clone's Git directory as untrusted, since its sandbox can
+write it. Every Git process the host starts, including Sandcastle's own calls
+in the run clone, carries command-line settings in its environment: hooks are
+disabled, `core.fsmonitor`, `core.sshCommand`, `core.askPass`,
+`core.alternateRefsCommand` and credential helpers are ignored, and the
+`file`, `ssh`, `git` and `ext` transports are refused, so a remote the sandbox
+repoints cannot run its upload-pack command on the host. The host still reaches
+GitHub over HTTPS and clones a run clone from the shared clone. Sandboxes
+receive none of these settings.
 
 Committed work remains on `factory/issue-<n>`. The host reuses the same run
 clone on retries, paused and interrupted relaunches, and review handoffs,
