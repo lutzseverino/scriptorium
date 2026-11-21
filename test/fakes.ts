@@ -35,7 +35,7 @@ export function fakePorts(overrides: Partial<ProviderPorts> = {}) {
       async run(options) {
         runs.push({ run: options, docker: docker! });
         return {
-          branch: request.branch,
+          branch: "factory/issue-7",
           iterations: [],
           commits: [],
           stdout: "",
@@ -58,7 +58,6 @@ export const request: LaunchRequest = {
   cwd: "/srv/factory/clones/owner/name",
   image: "factory-owner-name:abc",
   prompt: "/implement #7",
-  branch: "factory/issue-7",
   log: "/srv/factory/logs/issue-7.log",
   idleTimeoutSeconds: 3600,
 };

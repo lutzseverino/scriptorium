@@ -25,7 +25,7 @@ export async function launchAgent(
       ...(request.env && { env: request.env }),
     }),
     prompt: request.prompt,
-    branchStrategy: { type: "branch", branch: request.branch },
+    branchStrategy: { type: "head" },
     logging: { type: "file", path: request.log },
     idleTimeoutSeconds: request.idleTimeoutSeconds,
     signal: request.signal,

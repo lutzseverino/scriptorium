@@ -56,8 +56,7 @@ test("a Claude Code launch runs the model and effort with the token file's curre
   assert.deepEqual(second.docker, { imageName: request.image, mounts: [] });
   assert.equal(first.run.prompt, request.prompt);
   assert.deepEqual(first.run.branchStrategy, {
-    type: "branch",
-    branch: request.branch,
+    type: "head",
   });
   assert.deepEqual(first.run.logging, { type: "file", path: request.log });
   assert.equal(first.run.idleTimeoutSeconds, request.idleTimeoutSeconds);
@@ -86,7 +85,7 @@ test("a launch returns completion and recovery identities without raw output or 
   const ports = fakePorts();
   ports.ports.sandcastle.run = async () => ({
     completionSignal: "<promise>COMPLETE</promise>",
-    branch: request.branch,
+    branch: "factory/issue-7",
     preservedWorktreePath: "/srv/repo/.sandcastle/worktrees/factory-issue-7",
     iterations: [
       { sessionId: "session-7", sessionFilePath: "/srv/sessions/7.jsonl" },
@@ -97,7 +96,7 @@ test("a launch returns completion and recovery identities without raw output or 
   const { adapter } = claudeCode(t, ports);
   assert.deepEqual(await adapter.launch(request), {
     completionSignal: "<promise>COMPLETE</promise>",
-    branch: request.branch,
+    branch: "factory/issue-7",
     preservedWorktreePath: "/srv/repo/.sandcastle/worktrees/factory-issue-7",
     sessionId: "session-7",
     sessionFilePath: "/srv/sessions/7.jsonl",

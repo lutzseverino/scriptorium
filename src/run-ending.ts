@@ -51,6 +51,8 @@ export type EndingReads = {
   platform: Pick<RepositoryPlatform, "pullRequestObservation">;
   git: Git;
   clone: string;
+  // Private checkout for local work; freshness reads still use the shared clone.
+  recoveryClone?: string;
   configuration: FactoryConfiguration;
   paused: boolean;
   unpushablePaths: string[];
@@ -122,17 +124,32 @@ export async function observeEnding(
     mergeRelaunchHeads ?? [],
     held,
   );
-  const paths =
+  const inspectUnpushed =
     issue &&
     ["none", "closed"].includes(observation.state) &&
-    !isStopped(issue.labels, reads.configuration.labels)
-      ? await unpushedChanges(
-          reads.git,
-          reads.clone,
-          runBranch(issue.number),
-          reads.unpushablePaths,
-        )
-      : [];
+    !isStopped(issue.labels, reads.configuration.labels);
+  if (reads.recoveryClone && inspectUnpushed) {
+    await reads.git(reads.recoveryClone, [
+      "fetch",
+      "--quiet",
+      "--prune",
+      "origin",
+    ]);
+    await reads.git(reads.recoveryClone, [
+      "remote",
+      "set-head",
+      "origin",
+      "--auto",
+    ]);
+  }
+  const paths = inspectUnpushed
+    ? await unpushedChanges(
+        reads.git,
+        reads.recoveryClone ?? reads.clone,
+        runBranch(issue.number),
+        reads.unpushablePaths,
+      )
+    : [];
   return {
     facts: {
       pullRequest: observation.state,

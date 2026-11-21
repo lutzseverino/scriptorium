@@ -3,9 +3,11 @@ import { test, type TestContext } from "node:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeCode, codex, createWorktree } from "@ai-hero/sandcastle";
+import { claudeCode, codex, createWorktree, run } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { directory } from "./fakes.ts";
+import { launchAgent } from "../src/providers/launch.ts";
+import type { Mount } from "../src/providers.ts";
 
 function git(cwd: string, args: string[]) {
   return execFileSync("git", args, {
@@ -58,6 +60,63 @@ test("the pinned Sandcastle dependency constructs agents and a sandbox without l
   assert.equal(claudeCode("claude-sonnet-4-6").name, "claude-code");
   assert.equal(codex("gpt-6.1-sol").name, "codex");
   assert.equal(docker({ imageName: "factory-smoke-test" }).name, "docker");
+});
+
+test("the pinned Sandcastle launcher mounts only the run clone and its own Git directory", async (t) => {
+  const root = directory(t);
+  const shared = join(root, "shared");
+  const clone = join(root, "run-clone");
+  git(root, ["init", "--quiet", "--initial-branch=main", shared]);
+  git(shared, ["config", "user.name", "Fixture"]);
+  git(shared, ["config", "user.email", "fixture@example.test"]);
+  git(shared, ["commit", "--quiet", "--allow-empty", "-m", "base"]);
+  git(root, ["clone", "--quiet", "--no-hardlinks", shared, clone]);
+  git(clone, ["switch", "--quiet", "-c", "factory/issue-34"]);
+  let observed:
+    { worktreePath: string; hostRepoPath: string; mounts: Mount[] } | undefined;
+  // Stop at the provider seam, after the real dependency resolves Git mounts.
+  // No Docker daemon, agent process or credentials are needed.
+  const sandbox = {
+    name: "mount-probe",
+    env: {},
+    sandboxHomedir: "/home/agent",
+    tag: "bind-mount" as const,
+    async create(options: NonNullable<typeof observed>): Promise<never> {
+      observed = options;
+      throw new Error("mounts observed");
+    },
+  };
+  await assert.rejects(
+    launchAgent(
+      { run, docker: () => sandbox },
+      {
+        model: "fixture",
+        effort: "high",
+        name: "mount-probe",
+        cwd: clone,
+        image: "unused",
+        prompt: "fixture",
+        log: join(root, "agent.log"),
+        idleTimeoutSeconds: 10,
+      },
+      codex("fixture", { captureSessions: false }),
+    ),
+    /mounts observed/,
+  );
+  assert.ok(observed);
+  assert.equal(observed.hostRepoPath, clone);
+  assert.equal(observed.worktreePath, clone);
+  assert.deepEqual(
+    observed.mounts.map(({ hostPath }) => hostPath).sort(),
+    [clone, join(clone, ".git")].sort(),
+  );
+  assert.ok(
+    observed.mounts.every(({ hostPath }) => !hostPath.startsWith(shared)),
+  );
+  assert.equal(
+    git(clone, ["worktree", "list", "--porcelain"]).split("worktree ").length,
+    2,
+  );
 });
 
 test("pinned Sandcastle preserves and reuses committed, staged, unstaged and untracked recovery work", async (t) => {

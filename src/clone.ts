@@ -1,8 +1,24 @@
-// Each repository's clone in the state directory. Runs branch from it, and
-// Sandcastle keeps their worktrees in its `.sandcastle/` directory.
-import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+// The shared clone follows the remote default branch. Each claim gets its
+// own run clone, including its Git directory and objects.
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
+import {
+  appendFile,
+  cp,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+} from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 // Runs Git in `cwd` and resolves its standard output.
 export type Git = (cwd: string, args: string[]) => Promise<string>;
@@ -72,9 +88,106 @@ export async function updateClone(
   }
 }
 
+// Seam (deferred): host-owned run-clone storage; consumers: host (1); extract at 3.
+// Prepare once, then reuse without checkout/reset so every dirty layer and
+// agent-created branch survives a retry, pause or interruption. Publish the
+// directory only after initialization succeeds.
+export async function prepareRunClone(
+  git: Git,
+  shared: string,
+  clone: string,
+  url: string,
+  identity: { name: string; email: string },
+  branch: string,
+  recoverLegacy: boolean,
+): Promise<void> {
+  await mkdir(dirname(clone), { recursive: true });
+  // Only this claim can prepare its clone. A crash before publication can
+  // leave temporary copies, including beside an already initialized clone.
+  const prefix = `${basename(clone)}-`;
+  for (const entry of await readdir(dirname(clone)))
+    if (entry.startsWith(prefix))
+      await rm(join(dirname(clone), entry), { recursive: true, force: true });
+  if (existsSync(join(clone, ".git"))) return;
+  // A crash during removal can leave a directory with no Git state.
+  await rm(clone, { recursive: true, force: true });
+  const legacy = recoverLegacy
+    ? await readRecovery(git, shared, branch)
+    : undefined;
+  const temporary = await mkdtemp(`${clone}-`);
+  try {
+    await git(dirname(clone), [
+      "clone",
+      "--quiet",
+      "--no-hardlinks",
+      shared,
+      temporary,
+    ]);
+    // Fetches and delivery must reach the upstream, never the shared clone.
+    await git(temporary, ["remote", "set-url", "origin", url]);
+    await git(temporary, ["fetch", "--quiet", "--prune", "origin"]);
+    await git(temporary, ["remote", "set-head", "origin", "--auto"]);
+    await git(temporary, ["config", "user.name", identity.name]);
+    await git(temporary, ["config", "user.email", identity.email]);
+    const published = (
+      await git(temporary, [
+        "for-each-ref",
+        "--format=%(objectname)",
+        `refs/remotes/origin/${branch}`,
+      ])
+    ).trim();
+    const start = legacy?.head ?? published;
+    await git(temporary, [
+      "switch",
+      "--quiet",
+      "-c",
+      branch,
+      ...(start ? [start] : []),
+    ]);
+    const worktree = legacy?.worktree;
+    if (worktree) {
+      // Keep the old checkout untouched. Copy every working-tree layer,
+      // including deletions and ignored files, then its exact staging index.
+      for (const entry of await readdir(temporary))
+        if (entry !== ".git")
+          await rm(join(temporary, entry), { recursive: true, force: true });
+      await cp(worktree, temporary, {
+        recursive: true,
+        verbatimSymlinks: true,
+        filter: (source) => source !== join(worktree, ".git"),
+      });
+      const index = (
+        await git(worktree, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-path",
+          "index",
+        ])
+      ).trim();
+      await copyFile(index, join(temporary, ".git", "index"));
+    }
+    await rename(temporary, clone);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+// Move the clone aside before deleting it, so an interrupted removal leaves
+// only a temporary sibling, never a partial clone a later launch would reuse.
+// Synchronous, so no preparation of the same clone can interleave.
+export function removeRunClone(clone: string): void {
+  if (!existsSync(dirname(clone))) return;
+  if (existsSync(clone))
+    renameSync(clone, join(mkdtempSync(`${clone}-`), "clone"));
+  const prefix = `${basename(clone)}-`;
+  for (const entry of readdirSync(dirname(clone)))
+    if (entry.startsWith(prefix))
+      rmSync(join(dirname(clone), entry), { recursive: true, force: true });
+}
+
 // The paths under `prefixes` changed by commits on this branch that neither
 // the remote default branch nor its published run branch contains. The caller
-// refreshes origin and its default branch with updateClone before assessment.
+// refreshes origin and resolves its default branch before assessment.
 export async function unpushedChanges(
   git: Git,
   clone: string,

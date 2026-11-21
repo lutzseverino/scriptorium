@@ -25,7 +25,13 @@ import {
   type ConnectOptions,
   type ConnectionWithLinkAdditions,
 } from "@lutzseverino/postern";
-import { updateClone, readRecovery, type Git } from "./clone.ts";
+import {
+  updateClone,
+  prepareRunClone,
+  readRecovery,
+  removeRunClone as removeRunCloneDirectory,
+  type Git,
+} from "./clone.ts";
 import {
   enabledRunKinds,
   FactoryConfigurationError,
@@ -187,6 +193,10 @@ type HostRun = Run & {
   // PR/head pairs whose automatic merge recovery has already launched.
   mergeRelaunchHeads?: string[];
   launchResult?: LaunchResult;
+  // Completion or observed issue closure removes the clone after sandbox exit.
+  removeClone?: true;
+  // Durable evidence that first-launch legacy migration already happened.
+  privateClone?: true;
   // Keeps repository conventions available after restart if its config is invalid.
   configuration: FactoryConfiguration;
   base: string;
@@ -246,6 +256,7 @@ export function createHost(
   ports: HostPorts,
 ) {
   const runs: HostRun[] = [];
+  const cloneUsers = new Set<HostRun>();
   // Recovered endings that still need their first platform observation.
   const unobserved = new WeakSet<HostRun>();
   // A bad edit pauses pickup, but runs still settle with the last valid conventions.
@@ -475,12 +486,47 @@ export function createHost(
     );
     return {
       clone: join(root, "clone"),
+      runClones: join(root, "run-clones"),
       logs: join(root, "logs"),
       runs: join(root, "runs"),
       claims: join(root, "claims"),
       // Each running sandbox's private directory.
       sandboxes: join(root, "sandboxes"),
     };
+  }
+
+  function runClone(repository: string, issue: number) {
+    return join(directory(repository).runClones, `issue-${issue}`);
+  }
+
+  function recoveryReads(repository: string, issue: number) {
+    const clone = runClone(repository, issue);
+    return existsSync(join(clone, ".git")) ? { recoveryClone: clone } : {};
+  }
+
+  // Run records distinguish a first upgrade from a reopened claim, even if
+  // the agent renamed its branch. Legacy worktrees stay untouched.
+  function usedRunClone(repository: string, issue: number) {
+    const path = directory(repository).runs;
+    return (
+      existsSync(path) &&
+      readdirSync(path)
+        .filter(
+          (file) =>
+            file.startsWith(`issue-${issue}-attempt-`) &&
+            file.endsWith(".json"),
+        )
+        .some((file) => {
+          const recorded = JSON.parse(
+            readFileSync(join(path, file), "utf8"),
+          ) as Partial<HostRun>;
+          return (
+            recorded.privateClone === true ||
+            recorded.continuation?.recovery?.worktree ===
+              runClone(repository, issue)
+          );
+        })
+    );
   }
 
   async function read(name: string): Promise<Pass> {
@@ -665,13 +711,31 @@ export function createHost(
             .sort((a, b) => a.number - b.number)
             .map(({ number, title, url }) => ({ number, title, url })),
         };
-      const issues: Issue[] = [...open];
-      if (runKind(pass.configuration, "review"))
-        issues.push(
-          ...(await platform.readPullRequests(
-            new Set(readProvenance(name).map((record) => record.issue)),
-          )),
-        );
+      const root = directory(name).runClones;
+      // Temporary siblings from interrupted creation or removal count too.
+      const retained = existsSync(root)
+        ? [
+            ...new Set(
+              readdirSync(root).flatMap((entry) => {
+                const match = /^issue-(\d+)(?:-|$)/.exec(entry);
+                return match ? [Number(match[1])] : [];
+              }),
+            ),
+          ]
+        : [];
+      const reviews = runKind(pass.configuration, "review");
+      // The issue inventory excludes PRs. A clone missing from it can still
+      // belong to an open PR, including after review was disabled.
+      const pullRequests =
+        reviews ||
+        retained.some(
+          (number) => !open.some((issue) => issue.number === number),
+        )
+          ? await platform.readPullRequests(
+              new Set(readProvenance(name).map((record) => record.issue)),
+            )
+          : [];
+      const issues: Issue[] = [...open, ...(reviews ? pullRequests : [])];
       // A running worker can publish on another branch. Establish ownership
       // before admitting independent PRs, rather than waiting for its exit.
       if (issues.some((issue) => issue.pullRequest))
@@ -844,7 +908,11 @@ export function createHost(
           record(run);
           mark(run, "lastPublication");
         }
-        const ending = await observeEnding(reads, issue, ended);
+        const ending = await observeEnding(
+          { ...reads, ...recoveryReads(name, run.issue) },
+          issue,
+          ended,
+        );
         run.ownedPullRequests = ending.ownedPullRequests;
         run.mergeRelaunchHeads = ending.mergeRelaunchHeads;
         run.ended = {
@@ -878,6 +946,13 @@ export function createHost(
         ...(pass.gated !== undefined && { gated: pass.gated }),
         claims: await readClaims(name, platform, issues, reads),
       };
+      // Only a complete successful platform pass establishes absence. Scan
+      // retained clones too: failed/stopped claims may have no live record.
+      for (const number of retained)
+        if (
+          ![...open, ...pullRequests].some((issue) => issue.number === number)
+        )
+          removeRunClone({ repository: name, issue: number });
     } catch (error) {
       pause(`its platform reads failed: ${error}`, "host");
     }
@@ -980,13 +1055,17 @@ export function createHost(
           (label) => !released.includes(label),
         );
       }
-      const ending = await observeEnding(reads, issue, {
-        issue: number,
-        since: inputResume?.since,
-        continuation: {
-          target: inputResume?.review?.target ?? issue?.pullRequest?.target,
+      const ending = await observeEnding(
+        { ...reads, ...recoveryReads(name, number) },
+        issue,
+        {
+          issue: number,
+          since: inputResume?.since,
+          continuation: {
+            target: inputResume?.review?.target ?? issue?.pullRequest?.target,
+          },
         },
-      });
+      );
       const claim: Claim = {
         issue: number,
         ...(inputResume && {
@@ -1015,9 +1094,36 @@ export function createHost(
     );
   }
 
-  function forget(decision: { repository: string; issue: number }) {
+  function forget(
+    decision: { repository: string; issue: number },
+    removeClone = false,
+  ) {
     const run = find(decision);
+    if (removeClone) removeRunClone(decision);
     if (run) settle(run);
+  }
+
+  // Settlement can retire the record before the sandbox has exited. Keep
+  // its clone until the launch promise finishes, even on subsequent passes.
+  function removeRunClone(at: { repository: string; issue: number }) {
+    const users = [...cloneUsers].filter(
+      (run) => run.repository === at.repository && run.issue === at.issue,
+    );
+    if (users.length) {
+      for (const run of users) run.removeClone = true;
+    } else discardRunClone(at);
+  }
+
+  // A failed removal neither fails the pass nor escapes a launch's exit. The
+  // issue is closed or no longer open, so the retained-clone scan retries it.
+  function discardRunClone(at: { repository: string; issue: number }) {
+    try {
+      removeRunCloneDirectory(runClone(at.repository, at.issue));
+    } catch (error) {
+      report(
+        `${at.repository}#${at.issue} run clone was not removed; a later pass retries it: ${error}`,
+      );
+    }
   }
 
   // The host stops holding the run.
@@ -1290,7 +1396,17 @@ export function createHost(
       !mergeRelaunchHeads.includes(mergeHead(continuation.mergeRelaunch))
     )
       mergeRelaunchHeads.push(mergeHead(continuation.mergeRelaunch));
-    const recovery = await readRecovery(git, paths.clone, runBranch(issue));
+    const checkout = runClone(repository, issue);
+    await prepareRunClone(
+      git,
+      paths.clone,
+      checkout,
+      ports.remoteUrl(repository),
+      configuration.gitIdentity,
+      runBranch(issue),
+      !usedRunClone(repository, issue),
+    );
+    const recovery = await readRecovery(git, checkout, runBranch(issue));
     const controller = new AbortController();
     const startedAt = ports.now().toISOString();
     // A relaunch appends to its attempt's log. Triage and review runs keep
@@ -1349,6 +1465,7 @@ export function createHost(
       provenance,
       resultId: continuation.relaunch ? randomUUID() : provenance.id,
       configuration: pass.configuration!,
+      privateClone: true,
       repository,
       base,
       image: pass.image!,
@@ -1393,6 +1510,7 @@ export function createHost(
       throw error;
     }
     runs.push(run);
+    cloneUsers.add(run);
     if (decision.diversity === "unavailable")
       report(
         `${repository}#${issue} review runs on ${run.provider}, the provider of the implement attempt it reviews: provider diversity was unavailable`,
@@ -1402,7 +1520,7 @@ export function createHost(
         model: run.model,
         effort: run.effort,
         name: `${repository}#${issue}`,
-        cwd: paths.clone,
+        cwd: checkout,
         image: pass.image!,
         prompt: prompt(run.continuation, {
           invocation: registry.providers
@@ -1437,7 +1555,6 @@ export function createHost(
             ? "Use only the supplied credentials for their documented purposes; never discover or switch to other identities. FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE names the read-only file containing the supplied attachment-upload credential. Use it only for GitHub attachment uploads; keep the installation token for every other GitHub operation. Never put the upload token in the environment, logs or run result."
             : "Use only the supplied credentials; never discover or switch identities.",
         }),
-        branch: runBranch(issue),
         log: raw,
         idleTimeoutSeconds: settings.timeLimitMinutes * 60,
         mounts: [
@@ -1476,11 +1593,7 @@ export function createHost(
         // Establish all repositories' holds before any later admission.
         await quota.probe();
         try {
-          const recovery = await readRecovery(
-            git,
-            paths.clone,
-            runBranch(issue),
-          );
+          const recovery = await readRecovery(git, checkout, runBranch(issue));
           if (recovery) run.continuation.recovery = recovery;
           else delete run.continuation.recovery;
         } catch (error) {
@@ -1559,7 +1672,11 @@ export function createHost(
           );
         }
       })
-      .finally(() => pending.delete(run.finished));
+      .finally(() => {
+        cloneUsers.delete(run);
+        if (run.removeClone) discardRunClone(run);
+        pending.delete(run.finished);
+      });
     pending.add(run.finished);
     await tell(
       pass,
@@ -1616,7 +1733,7 @@ export function createHost(
         const run = find(decision);
         if (run && !run.exited)
           run.controller.abort(new Error("its parent issue is closed"));
-        forget(decision);
+        forget(decision, true);
         return;
       }
       case "complete":
@@ -1626,7 +1743,7 @@ export function createHost(
           final: true,
         });
         await platform.complete(decision.issue);
-        forget(decision);
+        forget(decision, true);
         return;
       case "claim":
         // Before the claim, so a refused write leaves the PR unclaimed.
@@ -1803,7 +1920,7 @@ export function createHost(
             );
         }
         await platform.transition(decision.issue, "release");
-        if (!stop) forget(decision);
+        if (!stop) forget(decision, !issue);
         // Retire the attempt; its continuation is on the issue.
         else if (previous) settle(previous);
         return;

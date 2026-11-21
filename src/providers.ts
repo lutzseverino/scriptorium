@@ -27,7 +27,6 @@ export type LaunchRequest = {
   cwd: string;
   image: string;
   prompt: string;
-  branch: string;
   log: string;
   idleTimeoutSeconds: number;
   mounts?: Mount[];
