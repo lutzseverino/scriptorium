@@ -409,7 +409,7 @@ export async function publishContract(
       ...state.published,
       intake: { author: intake.author, writerRun: intake.writerRun },
     };
-    const evidenceBody = `${post.triage.disclaimer}\n\nTriage evidence for the exact body revision.\n<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->\n<!-- repo-canon:triage-attestation ${JSON.stringify(payload)} -->`;
+    const evidenceBody = `Triage evidence for the exact body revision.\n\n${post.triage.footer}\n<!-- ${triage.marker} ${JSON.stringify({ run: post.triage.run })} -->\n<!-- repo-canon:triage-attestation ${JSON.stringify(payload)} -->`;
     await evidenceComment(
       connection,
       number,
