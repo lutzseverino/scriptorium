@@ -1342,11 +1342,13 @@ The host treats a run clone's Git directory as untrusted, since its sandbox can
 write it. Every Git process the host starts, including Sandcastle's own calls
 in the run clone, carries command-line settings in its environment: hooks are
 disabled, `core.fsmonitor`, `core.sshCommand`, `core.askPass`,
-`core.alternateRefsCommand` and credential helpers are ignored, and the
-`file`, `ssh`, `git` and `ext` transports are refused, so a remote the sandbox
-repoints cannot run its upload-pack command on the host. The host still reaches
-GitHub over HTTPS and clones a run clone from the shared clone. Sandboxes
-receive none of these settings.
+`core.alternateRefsCommand` and credential helpers are ignored, and
+`GIT_ALLOW_PROTOCOL` allows the HTTPS transport alone. A remote the sandbox
+repoints, gives a `vcs` helper or rewrites with `insteadOf` therefore cannot
+run an upload-pack command or remote helper on the host, whatever protocol
+policy the clone configures. The host still reaches GitHub over HTTPS; only
+its copy of the shared clone into a new run clone allows the local `file`
+transport. Sandboxes receive none of these settings.
 
 Committed work remains on `factory/issue-<n>`. The host reuses the same run
 clone on retries, paused and interrupted relaunches, and review handoffs,

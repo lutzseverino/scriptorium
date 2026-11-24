@@ -20,8 +20,14 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-// Runs Git in `cwd` and resolves its standard output.
-export type Git = (cwd: string, args: string[]) => Promise<string>;
+// Runs Git in `cwd` and resolves its standard output. Host Git reaches remotes
+// over HTTPS alone; a `local` call reads a local repository the host owns,
+// never a run clone.
+export type Git = (
+  cwd: string,
+  args: string[],
+  options?: { local?: boolean },
+) => Promise<string>;
 
 export type Recovery = { branch: string; head: string; worktree?: string };
 
@@ -116,16 +122,12 @@ export async function prepareRunClone(
     : undefined;
   const temporary = await mkdtemp(`${clone}-`);
   try {
-    // Host Git refuses local transports; the shared clone is the host's own.
-    await git(dirname(clone), [
-      "-c",
-      "protocol.file.allow=always",
-      "clone",
-      "--quiet",
-      "--no-hardlinks",
-      shared,
-      temporary,
-    ]);
+    // The shared clone is the host's own, so this one call may read it.
+    await git(
+      dirname(clone),
+      ["clone", "--quiet", "--no-hardlinks", shared, temporary],
+      { local: true },
+    );
     // Fetches and delivery must reach the upstream, never the shared clone.
     await git(temporary, ["remote", "set-url", "origin", url]);
     await git(temporary, ["fetch", "--quiet", "--prune", "origin"]);

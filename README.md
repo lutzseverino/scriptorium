@@ -19,7 +19,7 @@ conventions this repository follows, where Scriptorium lived until
 
 ## Installation
 
-On a Linux host with Node.js 24 or 26, pnpm 11, Git, the GitHub CLI and Docker, check
+On a Linux host with Node.js 24 or 26, pnpm 11, Git 2.31 or later, the GitHub CLI and Docker, check
 out the latest release and start the process with the host configuration's path:
 
 ```sh

@@ -140,8 +140,15 @@ export type HostPorts = {
   // throwing a `PlatformError` with reason `unsupported` for a remote no
   // platform adapter serves.
   connect(remote: string, options: ConnectOptions): ConnectionWithLinkAdditions;
-  // Runs Git in `cwd`, authenticating to GitHub as the token's holder.
-  git(token: string, cwd: string, args: string[]): Promise<string>;
+  // Runs Git in `cwd`, authenticating to GitHub as the token's holder, and
+  // reaching remotes over HTTPS alone unless `local` reads a local repository
+  // the host owns.
+  git(
+    token: string,
+    cwd: string,
+    args: string[],
+    options?: { local?: boolean },
+  ): Promise<string>;
   // Runs the host's token command for the repository, narrowed to the
   // permissions for a sandbox's token, and resolves the token it printed.
   token: TokenCommand;
@@ -277,8 +284,8 @@ export function createHost(
   // call takes the token as it stands, so a long pass outlives none.
   const hostGit =
     (repository: string): Git =>
-    async (cwd, args) =>
-      ports.git(await tokens.get(repository), cwd, args);
+    async (cwd, args, options) =>
+      ports.git(await tokens.get(repository), cwd, args, options);
   let started = false;
   let interrupting = false;
   // Why image retention last waited, reported once until it changes.

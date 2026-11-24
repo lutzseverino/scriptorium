@@ -13,17 +13,14 @@ const untrusted: [key: string, value: string][] = [
   ["core.askPass", ""],
   ["core.sshCommand", "ssh"],
   ["core.alternateRefsCommand", ""],
-  // A remote's `uploadPack` cannot be overridden, so the transports that run
-  // it or another command on the host are refused. The host reaches GitHub
-  // over HTTPS; its local clone from the shared clone allows `file` itself.
-  ["protocol.file.allow", "never"],
-  ["protocol.ssh.allow", "never"],
-  ["protocol.git.allow", "never"],
-  ["protocol.ext.allow", "never"],
 ];
 
-// The environment for every Git the host starts: it never prompts, and the
-// settings above follow any command-line configuration already present.
+// The environment for every Git the host starts: it never prompts, the
+// settings above follow any command-line configuration already present, and
+// it reaches remotes over HTTPS alone. A remote's `uploadPack`, `vcs` helper
+// or `insteadOf` rewrite cannot be overridden, and a planted
+// `protocol.<name>.allow` outranks configured protocol policy, so only the
+// environment's allow-list keeps a repointed remote from running a command.
 export function hostGitEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
@@ -41,5 +38,14 @@ export function hostGitEnvironment(
     ),
     GIT_CONFIG_COUNT: `${start + untrusted.length}`,
     GIT_TERMINAL_PROMPT: "0",
+    GIT_ALLOW_PROTOCOL: "https",
   };
+}
+
+// The environment for a host Git call that reads a local repository the host
+// owns, never a run clone: it allows the `file` transport alone.
+export function localGitEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return { ...environment, GIT_ALLOW_PROTOCOL: "file" };
 }

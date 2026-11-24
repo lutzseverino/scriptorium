@@ -10,8 +10,13 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
-import { readRecovery, unpushedChanges, type Git } from "../src/clone.ts";
-import { hostGitEnvironment } from "../src/git.ts";
+import {
+  prepareRunClone,
+  readRecovery,
+  unpushedChanges,
+  type Git,
+} from "../src/clone.ts";
+import { hostGitEnvironment, localGitEnvironment } from "../src/git.ts";
 import { directory } from "./fakes.ts";
 
 const base = {
@@ -76,12 +81,16 @@ async function plantedClone(t: TestContext) {
       chmodSync(join(directory, hook), 0o755);
     }
   }
-  const executable = (name: string) => {
-    const path = join(clone, ".git", name);
+  const executable = (name: string, directory = join(clone, ".git")) => {
+    const path = join(directory, name);
     writeFileSync(path, script(name));
     chmodSync(path, 0o755);
     return path;
   };
+  // A remote helper in the working tree, which Git runs from the clone's root
+  // as `git-remote-x/../vcs-helper` for a remote's `vcs` naming it.
+  mkdirSync(join(clone, "git-remote-x"));
+  executable("vcs-helper", clone);
   // The upstream's objects stand in for an alternate the sandbox added.
   mkdirSync(join(clone, ".git", "objects", "info"), { recursive: true });
   writeFileSync(
@@ -102,6 +111,16 @@ async function plantedClone(t: TestContext) {
     ["remote.planted.uploadpack", command("uploadpack")],
     ["protocol.ext.allow", "always"],
     ["remote.extended.url", `ext::${executable("ext")}`],
+    // HTTPS remotes that a helper's `vcs` or a URL rewrite turn into a
+    // command, with a protocol policy allowing it.
+    ["protocol.x/../vcs-helper.allow", "always"],
+    ["remote.helped.url", "https://helped.invalid/repository.git"],
+    ["remote.helped.vcs", "x/../vcs-helper"],
+    [
+      `url.ext::${executable("url-helper")}.insteadOf`,
+      "https://rewritten.invalid/",
+    ],
+    ["remote.rewritten.url", "https://rewritten.invalid/"],
   ])
     await git(clone, ["config", key, value]);
   writeFileSync(join(clone, "c.txt"), "c\n");
@@ -110,7 +129,7 @@ async function plantedClone(t: TestContext) {
 
 // What the host runs in a run clone: its recovery reads and delivery checks,
 // Sandcastle's own host calls around a head-strategy run, and calls that
-// reach each planted hook and command-valued setting.
+// reach each planted hook, command-valued setting and remote.
 async function hostCalls(git: Git, upstreamGit: Git, clone: string) {
   const recovery = await readRecovery(git, clone, "factory/issue-4");
   // The fixture's local upstream stands in for GitHub's HTTPS remote.
@@ -126,7 +145,6 @@ async function hostCalls(git: Git, upstreamGit: Git, clone: string) {
   await git(clone, ["config", "user.name"]);
   const head = (await git(clone, ["rev-parse", "HEAD"])).trim();
   await git(clone, ["rev-list", `${head}~1..HEAD`, "--count"]);
-  await git(clone, ["merge", "factory/issue-4"]);
   await git(clone, ["status", "--porcelain"]);
   await git(clone, ["add", "c.txt"]);
   await git(clone, ["commit", "--quiet", "-m", "more"]);
@@ -135,6 +153,8 @@ async function hostCalls(git: Git, upstreamGit: Git, clone: string) {
   await git(clone, ["fetch", "--quiet", "planted"]);
   await git(clone, ["ls-remote", "extended"]);
   await git(clone, ["ls-remote", "ssh://planted.invalid/repository.git"]);
+  await git(clone, ["fetch", "--quiet", "helped"]);
+  await git(clone, ["ls-remote", "rewritten"]);
   await git(clone, ["credential", "fill"]);
   return {
     recovery,
@@ -152,6 +172,8 @@ const planted = [
   "core.alternateRefsCommand",
   "uploadpack",
   "ext",
+  "vcs-helper",
+  "url-helper",
 ];
 
 function ran(marker: string): Set<string> {
@@ -174,7 +196,7 @@ test("a run clone's planted hooks and command-valued configuration never run in 
   const environment = hostGitEnvironment(base);
   const calls = await hostCalls(
     gitWith(environment),
-    gitWith(environment, ["-c", "protocol.file.allow=always"]),
+    gitWith(localGitEnvironment(environment)),
     clone,
   );
   // The calls themselves succeed; only what the sandbox planted is ignored.
@@ -185,20 +207,68 @@ test("a run clone's planted hooks and command-valued configuration never run in 
   for (const name of planted) assert.ok(!observed.has(name), name);
 });
 
-test("host Git refuses a run clone's local, SSH, Git and command transports", async (t) => {
-  const { clone, upstream } = await plantedClone(t);
-  const git = gitWith(hostGitEnvironment(base));
+test("host Git reaches a run clone's remotes over HTTPS alone, whatever the command line allows", async (t) => {
+  const { clone, upstream, marker } = await plantedClone(t);
+  const git = gitWith(hostGitEnvironment(base), [
+    "-c",
+    "protocol.allow=always",
+  ]);
   for (const remote of [
     upstream,
     "ssh://planted.invalid/repository.git",
     "git://planted.invalid/repository.git",
     "ext::true",
+    "helped",
+    "rewritten",
   ])
     assert.match(
       await git(clone, ["ls-remote", remote]),
-      /transport '\w+' not allowed/,
+      /transport '[^']+' not allowed/,
       remote,
     );
+  assert.deepEqual(ran(marker), new Set());
+});
+
+test("only the run clone's copy of the host's shared clone reads a local repository", async (t) => {
+  const root = directory(t);
+  const upstream = join(root, "upstream.git");
+  const shared = join(root, "shared");
+  const git = gitWith(base);
+  await git(root, ["init", "--quiet", "--bare", "-b", "main", upstream]);
+  await git(root, ["clone", "--quiet", upstream, shared]);
+  writeFileSync(join(shared, "a.txt"), "a\n");
+  await git(shared, ["add", "a.txt"]);
+  await git(shared, ["commit", "--quiet", "-m", "base"]);
+  await git(shared, ["push", "--quiet", "origin", "main"]);
+  const environment = hostGitEnvironment(base);
+  assert.match(
+    await gitWith(environment)(root, ["clone", "--quiet", shared, "refused"]),
+    /transport 'file' not allowed/,
+  );
+  assert.ok(!existsSync(join(root, "refused")));
+  // The fixture's local upstream stands in for GitHub's HTTPS remote, so the
+  // recorded calls run without the host's transport limit.
+  const local: string[][] = [];
+  await prepareRunClone(
+    async (cwd, args, options) => {
+      if (options?.local) {
+        local.push(args);
+        return gitWith(localGitEnvironment(environment))(cwd, args);
+      }
+      return git(cwd, args);
+    },
+    shared,
+    join(root, "clones", "issue-4"),
+    upstream,
+    { name: "Fixture", email: "fixture@example.test" },
+    "factory/issue-4",
+    false,
+  );
+  assert.deepEqual(
+    local.map((args) => args[0]),
+    ["clone"],
+  );
+  assert.ok(existsSync(join(root, "clones", "issue-4", "a.txt")));
 });
 
 test("host Git keeps the environment's own command-line configuration and never prompts", async (t) => {
@@ -241,5 +311,9 @@ test("every Git the host starts, its own and Sandcastle's, inherits the host's s
   );
   assert.ok(applied > 0);
   assert.ok(applied < main.indexOf("createHost("));
-  assert.match(main, /env: \{ \.\.\.process\.env, FACTORY_GITHUB_TOKEN/);
+  // Only a call the host asks to read a local repository allows `file`.
+  assert.match(
+    main,
+    /\.\.\.\(options\?\.local \? localGitEnvironment\(process\.env\) : process\.env\),\s*FACTORY_GITHUB_TOKEN/,
+  );
 });
