@@ -46,6 +46,44 @@ function read(path: string) {
   return { configuration, warnings };
 }
 
+test("the optional runner names served repositories and the runner account's token command", (t) => {
+  const path = join(directory(t), "host.json");
+  const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  const [served] = base.repositories;
+  assert.equal(read(fixture("valid")).configuration.runner, undefined);
+  const runner = {
+    repositories: [served.toUpperCase()],
+    tokenCommand: ["/usr/local/bin/runner-token"],
+  };
+  writeFileSync(path, JSON.stringify({ ...base, runner }));
+  assert.deepEqual(read(path).configuration.runner, runner);
+  for (const [value, problem] of [
+    [
+      { repositories: ["acme/unserved"], tokenCommand: ["token"] },
+      'runner.repositories[0]: "acme/unserved" is not one of repositories',
+    ],
+    [
+      { repositories: [served, served], tokenCommand: ["token"] },
+      `runner.repositories[1]: repeats "${served}"`,
+    ],
+    [
+      { repositories: [served], tokenCommand: [] },
+      "runner.tokenCommand: is empty",
+    ],
+    [{ repositories: [served] }, "runner.tokenCommand: is missing"],
+    [
+      { repositories: [served], tokenCommand: ["token"], token: "secret" },
+      "runner.token: is not a host configuration field",
+    ],
+  ] as const) {
+    writeFileSync(path, JSON.stringify({ ...base, runner: value }));
+    assert.ok(
+      refused(path).includes(`- ${problem}`),
+      `${JSON.stringify(value)} names ${problem}`,
+    );
+  }
+});
+
 test("the optional attachment-upload credential names exactly one command or absolute file", (t) => {
   const path = join(directory(t), "host.json");
   const base = JSON.parse(readFileSync(fixture("valid"), "utf8"));

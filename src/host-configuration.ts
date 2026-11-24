@@ -45,9 +45,17 @@ export type HostConfiguration = {
   // The host-written, non-secret credential observations document the
   // factory reads on each pass, or absent when the host writes none.
   credentialObservations?: string;
+  // The repositories whose named runner this host is, and the command that
+  // prints the runner account's token for one of them.
+  runner?: RunnerSettings;
   // Host-owned user token source, supplied only to implement runs for uploads.
   // Seam (deferred): attachment-upload credential source; consumers: 1; extract at 3.
   attachmentUploadCredential?: AttachmentUploadCredential;
+};
+
+export type RunnerSettings = {
+  repositories: string[];
+  tokenCommand: string[];
 };
 
 export type AttachmentUploadCredential =
@@ -390,6 +398,21 @@ function hostConfigurationProblems(value: unknown): string[] {
         ["cachePath"],
       ),
       credentialObservations: text(isAbsolute, "is not an absolute path"),
+      runner: object({
+        repositories: list(
+          text(
+            (name) =>
+              ((given.repositories as unknown[] | undefined) ?? []).some(
+                (served) =>
+                  typeof served === "string" &&
+                  served.toLowerCase() === name.toLowerCase(),
+              ),
+            "is not one of repositories",
+          ),
+          { unique: (name) => name.toLowerCase() },
+        ),
+        tokenCommand: list(text(), { nonEmpty: true }),
+      }),
       attachmentUploadCredential: (source, path, problems) => {
         if (
           !valid(
@@ -426,6 +449,7 @@ function hostConfigurationProblems(value: unknown): string[] {
       "imageRetention",
       "imageStorage",
       "credentialObservations",
+      "runner",
       "attachmentUploadCredential",
       ...(shorthand ? ["platforms"] : ["readiness", "github"]),
     ],

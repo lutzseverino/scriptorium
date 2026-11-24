@@ -146,6 +146,7 @@ names every run kind and label role, including the optional carried state:
 | `runKinds.<kind>.arguments`         | A string of skill arguments. Every `{issue}` expands to the issue number and every `{pullRequest}` to the PR number the run works on; triage has no PR and refuses it.      |
 | `runKinds.review.differentProvider` | Optional boolean: whether review asks for a provider other than its implement attempt's; see [provider diversity](host.md#provider-diversity).                              |
 | `comments`                          | As in version 2; see [comment templates](#comment-templates).                                                                                                               |
+| `checkCommand`                      | As in version 2; see [check command](#check-command).                                                                                                                       |
 
 Model values are not configuration here: the host's defaults and the
 repository's optional [model policy](host.md#repository-model-policy) choose
@@ -416,6 +417,7 @@ values are invalid.
 | `skill`                 | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
 | `arguments`             | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
 | `comments`              | Optional object with optional `run`, `action` and `close` comment templates, each a non-empty string, and optional `mention` logins.            |
+| `checkCommand`          | Optional non-empty trimmed string: the repository's one check command, which a runner host runs. See [check command](#check-command).           |
 
 Version 1 configurations, the old `prompt` field, and version 2
 configurations without `contractResult` are refused, each with the fields at
@@ -515,6 +517,18 @@ contract Markdown. [Body-backed triage contracts](body-contracts.md) explains
 publication mode, automatic freshness reevaluation and migration recovery. A result in another format, including an earlier line without
 `format`, holds the issue with a hold comment until the validator and the
 factory share a format.
+
+## Check command
+
+`checkCommand` is Scriptorium's copy of the one check command the repository's
+development guide declares in prose, such as `"pnpm validate"`. It is optional
+and has no default. Only a host that is the repository's
+[runner](host.md#runner-event-delivery) reads it, from the same default-branch
+commit as the entry points it runs, and never from a pull request head. That
+host runs it on each pull request head it observes, inside the repository's
+sandbox image, through Repo Canon's check-command entry point with the
+`runner` role. Without it, a runner host still builds the sandbox image for
+each head but runs no check command.
 
 ## Factory hold
 

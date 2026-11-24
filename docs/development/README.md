@@ -176,6 +176,13 @@ over real publication fixtures, covering stable identity, presentation edits,
 later results and publication into an existing report; host tests also cover
 report-publication retries across restart, and a failed report write held at
 its run while sibling endings settle.
+`test/runner.test.ts` drives runner delivery over `test/runner-world.ts`, an
+in-memory GitHub behind Postern's real adapter, with a real Git remote and
+clone: the first pass and its catch-up, every issue and comment event with its
+fields, pull request events and heads, forks, restarts, lane serialization and
+the pinned default-branch commit. Two of its cases run Repo Canon's installed
+validator in process over that world. One case runs the check container and an
+image build under Docker and skips without it.
 `test/run-result.test.ts` covers the run-result interface, its containment and its
 frame. `test/run-comment.test.ts` drives the one writer of the run, action and
 close comments over a fake tracker: passes, final-write retries, actions told

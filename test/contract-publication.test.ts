@@ -1268,3 +1268,23 @@ for (const boundary of [
     assert.equal(s.fixture.result!.status, "approved");
     assert.equal(s.checkpoint?.readyRequested, true);
   });
+
+test("a runner host's evaluation requests replace the workflow dispatch, on retry too", async () => {
+  const s = setup();
+  const requested: number[] = [];
+  const progress = (): PublicationProgress => ({
+    ...s.resume(),
+    evaluate(issue) {
+      requested.push(issue);
+      s.fixture.evaluate();
+    },
+  });
+  let link: string | null = null;
+  for (let pass = 0; pass < 5 && !link; pass++)
+    link = await s.platform().postResult(4, post(), progress());
+  assert.match(link!, /github.com/);
+  await s.platform().postResult(4, post(), progress());
+  assert.equal(s.fixture.writes.includes("dispatch"), false);
+  assert.ok(requested.length >= 2);
+  assert.ok(requested.every((issue) => issue === 4));
+});

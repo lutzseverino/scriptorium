@@ -140,6 +140,12 @@ import {
   type RunUpdate,
 } from "./run-comment.ts";
 import { createEvents, providerStatus } from "./events.ts";
+import {
+  createRunner,
+  type EntryPointRequest,
+  type EntryPointResult,
+} from "./runner.ts";
+import { githubRunnerReads } from "./runner-github.ts";
 
 export type HostPorts = {
   // Connects to the hosting platform of the repository at the remote URL,
@@ -179,6 +185,11 @@ export type HostPorts = {
   launch(provider: string, request: LaunchRequest): Promise<LaunchResult>;
   // Removes every sandbox container on the host before it returns.
   stopSandboxes(): void;
+  // Prints the runner account's token for a repository this host is the
+  // runner of, and runs one of Repo Canon's entry points with it. Required
+  // when the host configuration names runner repositories.
+  runnerToken?(repository: string): Promise<string>;
+  runEntryPoint?(request: EntryPointRequest): Promise<EntryPointResult>;
   now(): Date;
   // Writes a line to the process log.
   report(line: string): void;
@@ -286,12 +297,48 @@ export function createHost(
       )
     : undefined;
   const report = (line: string) => ports.report(redactor.redact(line));
+  const runnerTokens = githubTokens(
+    async (repository) => {
+      if (!ports.runnerToken) throw new Error("the host has no runner token");
+      return ports.runnerToken(repository);
+    },
+    ports.now,
+    redactor,
+  );
   // Git as the repository's own token holder, a token no sandbox gets. Each
   // call takes the token as it stands, so a long pass outlives none.
   const hostGit =
     (repository: string): Git =>
     async (cwd, args, options) =>
       ports.git(await tokens.get(repository), cwd, args, options);
+  const runnerRepositories = new Set(
+    (configuration.runner?.repositories ?? []).map((name) =>
+      name.toLowerCase(),
+    ),
+  );
+  const isRunner = (name: string) => runnerRepositories.has(name.toLowerCase());
+  const runner = createRunner({
+    stateDirectory: configuration.stateDirectory,
+    repositories: configuration.runner?.repositories ?? [],
+    git: hostGit,
+    remoteUrl: ports.remoteUrl,
+    token: (repository) => runnerTokens.get(repository),
+    run: async (request) => {
+      if (!ports.runEntryPoint)
+        throw new Error("the host cannot run entry points");
+      return ports.runEntryPoint(request);
+    },
+    timeoutMs: configuration.timeLimitMinutes * 60_000,
+    now: ports.now,
+    report,
+    track(work) {
+      const tracked = work.catch((error) =>
+        report(`runner delivery stopped: ${error}`),
+      );
+      pending.add(tracked);
+      void tracked.finally(() => pending.delete(tracked));
+    },
+  });
   let started = false;
   let interrupting = false;
   // Why image retention last waited, reported once until it changes.
@@ -658,12 +705,30 @@ export function createHost(
       pause(served.refused, "host");
       return pass;
     }
+    const observed = quota.observe(name, served.connection);
     const platform = repositoryPlatform(
-      quota.observe(name, served.connection),
+      observed,
       pass.configuration,
       ports.now,
     );
     pass.platform = platform;
+    // Runner delivery reads count toward the repository's quota hold.
+    if (!isRunner(name)) runner.disable(name);
+    else if (observed.repository.platform !== "github")
+      report(
+        `${name} runner delivery waits: it serves GitHub repositories only`,
+      );
+    else
+      try {
+        await runner.observe(name, githubRunnerReads(observed), {
+          clone,
+          commit: (await git(clone, ["rev-parse", "HEAD"])).trim(),
+          image: pass.image,
+          validator: pass.configuration.contractResult.author,
+        });
+      } catch (error) {
+        report(`${name} runner delivery waits for a later pass: ${error}`);
+      }
     try {
       await platform.createStateLabels();
     } catch (error) {
@@ -853,6 +918,9 @@ export function createHost(
               link = await platform.postResult(run.issue, post, {
                 state: run.publication,
                 now: ports.now,
+                ...(isRunner(name) && {
+                  evaluate: (issue: number) => runner.request(name, issue),
+                }),
                 save(publication) {
                   run.publication = publication;
                   record(run);

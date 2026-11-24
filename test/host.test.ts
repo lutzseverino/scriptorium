@@ -44,6 +44,7 @@ import {
   type ImageStorageStatus,
 } from "../src/image-storage.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
+import type { EntryPointRequest } from "../src/runner.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
 import type { Retention } from "../src/image-retention.ts";
 import { createRegistry } from "../src/providers.ts";
@@ -1269,6 +1270,8 @@ function host(
   const retentions: { current: string[]; running: string[] }[] = [];
   let prunes = 0;
   const gitCalls: { cwd: string; args: string[] }[] = [];
+  // Each entry point run, with the input file it read.
+  const entryPointRuns: (EntryPointRequest & { input: any })[] = [];
   const ports: HostPorts = {
     connect(remote, options) {
       const name = Object.keys(remotes).find(
@@ -1340,6 +1343,14 @@ function host(
       events.push("stop sandboxes");
       for (const launch of launched) launch.removed = true;
     },
+    runnerToken: async (repository) => `runner_${repository.replace("/", "_")}`,
+    async runEntryPoint(request) {
+      entryPointRuns.push({
+        ...request,
+        input: JSON.parse(readFileSync(request.args[0]!, "utf8")),
+      });
+      return { code: 0, output: "" };
+    },
     now: () => clock.now,
     report: (line) => reports.push(line),
   };
@@ -1385,6 +1396,7 @@ function host(
     sandcastle: fake.control,
     events,
     gitCalls,
+    entryPointRuns,
     github,
     launched,
     builds,
@@ -14437,5 +14449,101 @@ test("an exited run a restart recovers before its result is posted stays among t
         `${startedAt} ${phase}`,
     ),
     ["2026-10-09T17:05:00.000Z running"],
+  );
+});
+
+// GitHub's answers to runner delivery's reads: the open issues the platform
+// fake holds, with no comments, changes or pull requests.
+function runnerReads(
+  connection: ConnectionWithLinkAdditions,
+): ConnectionWithLinkAdditions {
+  return {
+    ...connection,
+    access: {
+      ...connection.access,
+      async request(options) {
+        const query = (options.body as { query?: string } | undefined)?.query;
+        const name = query && /query (Runner\w+)/.exec(query)?.[1];
+        if (!name) return connection.access.request(options);
+        const page = (nodes: unknown[]) => ({
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+        });
+        const data =
+          name === "RunnerFactoryAccount"
+            ? { viewer: { __typename: "Bot", login: "factory" } }
+            : name === "RunnerIssues"
+              ? {
+                  repository: {
+                    issues: page(
+                      (await connection.issueTracker.issues()).map((issue) => ({
+                        number: issue.number,
+                        createdAt: issue.createdAt,
+                        author: null,
+                      })),
+                    ),
+                  },
+                }
+              : name === "RunnerPullRequests"
+                ? { repository: { pullRequests: page([]) } }
+                : name === "RunnerIssueComments"
+                  ? { repository: { issue: { comments: page([]) } } }
+                  : {
+                      repository: {
+                        issue: {
+                          createdAt: "2026-10-01T00:00:00Z",
+                          userContentEdits: { nodes: [] },
+                          timelineItems: page([]),
+                        },
+                      },
+                    };
+        return { status: 200, headers: {}, data: { data } };
+      },
+    },
+  };
+}
+
+test("only a repository naming this host as its runner gets deliveries, under the runner account's token", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: [] }],
+      "acme/gadgets": [{ number: 5, labels: [] }],
+    },
+    remotes: {
+      "acme/widgets": remote(t, factoryFiles),
+      "acme/gadgets": remote(t, factoryFiles),
+    },
+    configuration: {
+      runner: { repositories: ["acme/widgets"], tokenCommand: ["unused"] },
+    },
+    wrapConnection: runnerReads,
+  });
+  await run.tick();
+  await run.drain();
+  assert.deepEqual(
+    run.entryPointRuns.map((request) => [
+      request.token,
+      request.input.kind,
+      request.input.event.issue,
+    ]),
+    [["runner_acme_widgets", "issue-contract", 4]],
+  );
+  const [delivery] = run.entryPointRuns;
+  assert.equal(
+    delivery!.script,
+    join(
+      run.state,
+      "repositories",
+      "acme",
+      "widgets",
+      "runner",
+      "trusted",
+      git(run.clone("acme/widgets"), ["rev-parse", "HEAD"]).trim(),
+      "vendor/repo-canon/validate.mjs",
+    ),
+  );
+  assert.equal(
+    existsSync(join(run.state, "repositories", "acme", "gadgets", "runner")),
+    false,
   );
 });

@@ -71,7 +71,7 @@ host configuration itself.
 
 The host configuration is one JSON file. Every field is required except
 `providers.claude-code.usageCredential`, `implement`, `imageBuilder`, `imageRetention`, `imageStorage`,
-`credentialObservations` and the fields whose default the table below gives. Unknown fields are refused,
+`credentialObservations`, `runner` and the fields whose default the table below gives. Unknown fields are refused,
 and nothing comes from environment variables.
 
 ```json
@@ -161,6 +161,8 @@ and nothing comes from environment variables.
 | `imageStorage.resumeBytes`              | Positive whole-byte recovery threshold, strictly greater than the reserve; required to release a storage hold.                                                                                                                                       |
 | `credentialObservations`                | Optional absolute path of the non-secret credential observations document the host writes and the factory only reads. See [credential health](#credential-health).                                                                                   |
 | `attachmentUploadCredential`            | Optional host-owned user token source for implement runs' GitHub attachment uploads: exactly one `command` argument array or absolute `file` path. See [attachment-upload credential](#attachment-upload-credential).                                |
+| `runner.repositories`                   | Optional list of distinct served `repositories` this host is the named runner of, ignoring case. See [runner event delivery](#runner-event-delivery).                                                                                                |
+| `runner.tokenCommand`                   | The executable and leading arguments that print the runner account's token for one of `runner.repositories`, appended as `<owner>/<name>`. Required with `runner`.                                                                                   |
 
 A model is `<slug>` or `<provider>/<slug>`, optionally followed by
 `@<effort>`, and must resolve to a configured provider; the
@@ -829,6 +831,127 @@ report link times, the repository's issue-contract trigger removes readiness
 when a ticket links to a ready parent. A missed event leaves stale readiness
 in place; that weaker guarantee is accepted.
 
+## Runner event delivery
+
+When this host is a repository's named runner, the factory delivers that
+repository's events to the entry points Repo Canon installs, under the runner
+account's token, so `runner` results appear without manual runs. Name the
+repository in `runner.repositories` and give `runner.tokenCommand`:
+
+```json
+"runner": {
+  "repositories": ["acme/widgets"],
+  "tokenCommand": ["/usr/local/bin/runner-token"]
+}
+```
+
+The command follows the [token command](#token-command)'s contract, without a
+permission-set argument, and prints a token of the runner's dedicated
+account. That token needs the permissions Repo Canon's entry points document,
+such as issues and contents write for the issue-contract validator and commit
+status write with pull request read for the PR metadata, check-command and
+sandbox image entry points. It is redacted like every token and reaches only
+those entry points, never a sandbox, a check command or an image build. The
+repository's own token still makes the factory's reads and Git operations.
+Delivery needs a Repo Canon release that installs the off-Actions entry points
+`vendor/repo-canon/validate.mjs` with check-command input and
+`vendor/repo-canon/sandbox-image.mjs`; Repo Canon v0.31.0 has neither.
+
+The repository sets the trust precondition, as Repo Canon's adoption guidance
+says: its `REPO_CANON_RUNNER_ACCOUNT` variable names the runner account, and
+its factory configuration's [`contractResult.author`](factory-configuration.md#contract-result)
+names the same account, so the factory reads the runner's results. The
+factory documents this but never reads that variable. The check command is the
+repository configuration's [`checkCommand`](factory-configuration.md#check-command).
+
+### Polling
+
+There is no inbound endpoint. On each pass, after its clone update and image
+build, the factory reads each runner repository from that repository's durable
+cursor in the [state directory](#state-directory), with the repository's own
+token. These reads count toward its [quota hold](#github-quota-holds), and a
+held repository is not polled. A result can therefore arrive up to one
+`pollSeconds` after its event. Each pass reads back five minutes before the
+previous one started, so an event GitHub records late is still observed, and
+delivers nothing it has delivered already.
+
+Delivery covers what the platform still records at the pass:
+
+- **Issues.** `opened`, `edited` (body or title), `reopened`, `closed`,
+  `labeled` and `unlabeled`, rebuilt from the issue's timeline and edit
+  history, and issue comment `created`, `edited` and `deleted`, found by
+  comparing each issue's comments with the copies the factory stores: their
+  id, node id and last body. A deletion carries that stored copy. Each event
+  keeps its own `kind`, `actor`, `label`, `comment`, `bodyChanged` and
+  `openingLabels` as far as they were observed, and goes to the
+  issue-contract entry point as its own run. A comment created or edited and
+  then deleted between passes is not delivered; nor is any event whose actor
+  is `contractResult.author`, the validator itself, as GitHub starts no
+  workflow for its workflow token's events. Pull requests and their comments
+  never get an issue-contract run.
+- **Pull requests.** An `opened`, `edited`, `synchronize`, `reopened` or
+  `ready_for_review` change runs the PR metadata entry point once on the
+  pull request's current state, which several changes between passes share.
+- **Heads.** Each new current head of an open pull request whose head is in
+  the repository itself runs the sandbox image build entry point, with that
+  head as the Dockerfile's source and the entry point's own change detection,
+  then the check-command entry point with the `runner` role. A head pushed
+  and replaced between two passes gets no run. A head from a fork gets the PR
+  metadata run only: its `Runner checks` status stays missing until someone
+  with write access pushes the change to a branch in the repository or runs
+  the entry point by hand, so the host runs code only from accounts with
+  write access.
+
+Repo Canon-sent dispatches, such as an operator's cutoff `evaluate` or
+`activate`, are not delivered at `runner`; run Repo Canon's off-Actions
+validator entry point for an evaluation. The factory's own evaluation
+requests after contract publication, including retries, go through the same
+serialized issue-contract path instead of a `repo-canon-issue-contract`
+dispatch, with the synthesized `edited` event the dispatch adapter uses.
+
+### First pass
+
+When a repository first names this host as its runner, or names it again after
+`runner` stopped naming it, the first pass delivers no historical event. It
+records the cursor, the current heads and the comment copies of open issues,
+then catches up once: it runs the PR metadata entry point on each open pull
+request, the image build and check command on each open same-repository head,
+and sends one evaluation request per open issue. Closed issues and pull
+requests get no request. The reads count toward the quota hold like any
+others. A repository removed from `runner.repositories` loses its cursor,
+copies and pending deliveries at the next pass or restart.
+
+### Deliveries
+
+Each repository has three delivery lanes, for issue contracts, PR metadata
+and heads. Each runs its deliveries one at a time, in the order passes
+observed them, so runs for one issue never overlap and none cancels an
+earlier one. Every validator run reads the platform after the events it
+delivers were observed. Pending deliveries survive a restart and run again
+from the start if a restart interrupted them. A delivery whose preparation
+fails, such as a token command failure or a head the clone cannot fetch,
+waits for a later pass and is dropped after three attempts, naming why in the
+process log. An entry point's nonzero exit, such as a failing check, is its
+result: the process log names it with the end of its output.
+
+Every entry point and the check command come from one default-branch commit
+pinned for the delivery: the commit the latest pass reset the clone to, in a
+checkout of its own. A head that edits an installed entry point or the check
+command changes neither what runs nor what it posts. The head checkout is a
+private copy, with no objects linked to the clone, and serves only as the check
+command's working tree and the Dockerfile's source; the image build runs
+before the check command writes to it.
+
+An entry point runs with only `PATH`, `HOME`, `TMPDIR`, Docker's client
+variables and `POSTERN_TOKEN`, the runner account's token. The check command
+runs inside the repository's [sandbox image](sandbox-image.md), the image the
+factory builds from the default branch's `.scriptorium/Dockerfile`, through
+`docker run` with the head checkout as its only mount and no token, host
+configuration or credential in its environment. The image build is Docker's
+context-free `docker build -`, so its steps see no host file or variable.
+Each entry point may run for `timeLimitMinutes`, and the check command's
+container stops itself at that limit.
+
 ## Sandbox GitHub access
 
 At launch the factory mints a token narrowed to the run's
@@ -1089,6 +1212,7 @@ The process owns everything under `stateDirectory`:
 | `requests/`                                         | The resume requests the `resume` command queued and the running factory has not yet applied, one JSON file each, named by when it was queued.                                                                                                                                                                                                                                                                                                     |
 | `repositories/<owner>/<name>/runs/`                 | Each run's record, `issue-<n>-attempt-<a>.json`: its repository configuration, provider, model, effort, attempt, start, log, base commit, whether it exited or was interrupted, the pause a stop at the pause threshold fixed, its pause's cause, reset, time and deadline, its run result as read and whether its comment and labels landed, and whether the host settled it. What the issue was told lives in its [run comment](#run-comments). |
 | `repositories/<owner>/<name>/sandboxes/`            | The private directories of runs whose agents are still running: each run's token directory, result directory and raw log.                                                                                                                                                                                                                                                                                                                         |
+| `repositories/<owner>/<name>/runner/`               | A [runner](#runner-event-delivery) repository's `state.json`, holding its delivery cursor, its stored comment copies, its pull request heads and its pending deliveries, with the pinned default-branch checkouts, head checkouts and inputs its deliveries use. A repository that stops naming the host loses it.                                                                                                                                |
 
 Scriptorium v4 reads no `repositories/<owner>/<name>/claims/` directory, which
 earlier releases kept for awaiting-merge notices and stop continuations, and an
