@@ -902,9 +902,9 @@ Delivery covers what the platform still records at the pass:
   the entry point by hand, so the host runs code only from accounts with
   write access.
 - **Heads without a default-branch image.** When the default branch's
-  `.scriptorium/Dockerfile` is missing or fails to build, a head observed
-  then, including at the first pass's catch-up, gets its image build but no
-  check command, and the process log says why. Its `Runner checks` status
+  `.scriptorium/Dockerfile` is missing or fails to build at the commit pinned
+  for a head's delivery, including at the first pass's catch-up, that head
+  gets its image build but no check command, and the process log says why. Its `Runner checks` status
   stays missing, as a fork head's does, even once the default branch builds;
   the next push observed after that build gets its check. So the head lane
   never stalls, and the image build of a pull request that fixes the
@@ -968,7 +968,9 @@ its steps see no host file or variable. The check command's `docker` client
 stops at `timeLimitMinutes`, and each entry point may run 2 minutes longer, so
 it can still post a timed-out command's failure. Its container is named for the
 delivery and removed once the entry point ends, even when the command ignores
-the stop.
+the stop. Each head checkout is removed after its delivery, and a stopped
+process's at the next start; one the check command left impossible to empty
+stays where it is, named in the process log, and never holds a delivery.
 
 ## Sandbox GitHub access
 

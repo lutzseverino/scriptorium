@@ -219,14 +219,27 @@ export function createRunner(ports: RunnerPorts) {
     for (const owner of directories(repositories))
       for (const name of directories(join(repositories, owner)))
         if (!runner.has(`${owner}/${name}`.toLowerCase()))
-          rmSync(root(`${owner}/${name}`), { recursive: true, force: true });
+          drop(`${owner}/${name}`);
         // Checkouts and inputs a stopped process left behind.
         else
           for (const work of ["heads", "inputs", "trusted"])
-            rmSync(join(root(`${owner}/${name}`), work), {
-              recursive: true,
-              force: true,
-            });
+            discard(join(root(`${owner}/${name}`), work));
+  }
+
+  // Drops the cursor first, so a directory left behind still catches up.
+  function drop(repository: string) {
+    rmSync(statePath(repository), { force: true });
+    discard(root(repository));
+  }
+
+  // Head code can leave a directory the host cannot empty. Every checkout
+  // path is new, so what is left only takes space, and the host goes on.
+  function discard(path: string) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch (error) {
+      ports.report(`runner directory ${path} was not removed: ${error}`);
+    }
   }
 
   function load(repository: string): State | null {
@@ -429,10 +442,10 @@ export function createRunner(ports: RunnerPorts) {
   // Drops the repository's cursor, copies and pending deliveries when this
   // host is not its runner.
   function disable(repository: string): void {
-    if (load(repository) === null && !existsSync(root(repository))) return;
+    if (load(repository) === null) return;
     states.set(repository, null);
     pins.delete(repository);
-    rmSync(root(repository), { recursive: true, force: true });
+    drop(repository);
   }
 
   function drive(repository: string) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -545,6 +546,29 @@ test("a restarted runner removes leftover checkouts only once it starts", async 
   s.runner.start();
   assert.equal(existsSync(join(runner, "heads")), false);
   assert.equal(existsSync(join(runner, "state.json")), true);
+});
+
+test("a leftover checkout the host cannot remove is reported, not fatal", async (t) => {
+  if (process.getuid?.() === 0) return t.skip("root removes any directory");
+  const s = setup(t);
+  await s.pass();
+  const runner = join(s.root, "state", "repositories", repository, "runner");
+  // Head code may leave a directory its owner can no longer empty.
+  const locked = join(runner, "heads", "pull-1-left", "locked");
+  mkdirSync(locked, { recursive: true });
+  writeFileSync(join(locked, "file"), "");
+  chmodSync(locked, 0o500);
+  s.restart();
+  assert.match(s.reports.at(-1)!, /runner\/heads was not removed/);
+
+  // The same holds when the host stops naming the repository: its cursor
+  // still goes, so naming it again catches up.
+  s.runner.disable(repository);
+  assert.equal(existsSync(join(runner, "state.json")), false);
+  s.restart([]);
+  assert.equal(existsSync(join(runner, "state.json")), false);
+  assert.match(s.reports.at(-1)!, /widgets\/runner was not removed/);
+  chmodSync(locked, 0o700);
 });
 
 test("a delivery whose preparation keeps failing is never dropped, but a head's ends once its pull request moves on", async (t) => {
