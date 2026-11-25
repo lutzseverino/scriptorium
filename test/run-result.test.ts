@@ -423,7 +423,12 @@ test("the result body leads, followed by the disclosure footer and unchanged mar
     attempt: 1,
   };
   for (const kind of ["triage", "implement"] as const) {
-    for (const disclosure of [undefined, "Written by the factory"] as const) {
+    for (const configured of [false, true]) {
+      const disclosure = configured
+        ? kind === "triage"
+          ? "Triaged by the factory"
+          : "Written by the factory"
+        : undefined;
       const result: RunResult = {
         outcome: "failed",
         reason: "no access",
@@ -431,10 +436,12 @@ test("the result body leads, followed by the disclosure footer and unchanged mar
       };
       const configuration = {
         ...(kind === "triage" ? v3 : v2),
-        comments: {
-          disclaimer: disclosure,
-          triageDisclaimer: disclosure,
-        },
+        comments: configured
+          ? {
+              disclaimer: "Written by the factory",
+              triageDisclaimer: "Triaged by the factory",
+            }
+          : {},
       };
       const post = resultPost(result, { ...run, kind }, configuration);
       const [body, footerAndMarker] = post.comment.split(

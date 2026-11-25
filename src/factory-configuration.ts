@@ -27,7 +27,7 @@ type Common = {
     run?: string;
     action?: string;
     close?: string;
-    // The disclaimers that start the frame of a run result, and of a triage
+    // The disclosures in the footer of a run result's frame, and of a triage
     // run's result.
     disclaimer?: string;
     triageDisclaimer?: string;
