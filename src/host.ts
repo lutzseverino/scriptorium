@@ -31,6 +31,7 @@ import {
   readRecovery,
   removeRunClone as removeRunCloneDirectory,
   type Git,
+  type GitOptions,
 } from "./clone.ts";
 import {
   enabledRunKinds,
@@ -147,7 +148,7 @@ export type HostPorts = {
     token: string,
     cwd: string,
     args: string[],
-    options?: { local?: boolean },
+    options?: GitOptions,
   ): Promise<string>;
   // Runs the host's token command for the repository, narrowed to the
   // permissions for a sandbox's token, and resolves the token it printed.

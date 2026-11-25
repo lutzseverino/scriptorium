@@ -26,8 +26,10 @@ import { basename, dirname, join } from "node:path";
 export type Git = (
   cwd: string,
   args: string[],
-  options?: { local?: boolean },
+  options?: GitOptions,
 ) => Promise<string>;
+
+export type GitOptions = { local?: boolean };
 
 export type Recovery = { branch: string; head: string; worktree?: string };
 

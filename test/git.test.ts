@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
+import { deflateSync } from "node:zlib";
 import {
   prepareRunClone,
   readRecovery,
@@ -97,6 +100,19 @@ async function plantedClone(t: TestContext) {
     join(clone, ".git", "objects", "info", "alternates"),
     `${join(upstream, "objects")}\n`,
   );
+  // Old unreachable loose objects in `objects/17`, enough for a `gc.auto` of
+  // 1 to start the `gc` that a fetch's automatic maintenance runs.
+  const loose = join(clone, ".git", "objects", "17");
+  mkdirSync(loose, { recursive: true });
+  for (let n = 0, found = 0; found < 2; n++) {
+    const content = `loose ${n}\n`;
+    const object = Buffer.from(`blob ${content.length}\0${content}`);
+    const id = createHash("sha1").update(object).digest("hex");
+    if (!id.startsWith("17")) continue;
+    writeFileSync(join(loose, id.slice(2)), deflateSync(object));
+    utimesSync(join(loose, id.slice(2)), 0, 0);
+    found++;
+  }
   const command = (name: string) => `echo ${name} >> "${marker}"; false`;
   for (const [key, value] of [
     ["core.hooksPath", planted],
@@ -105,6 +121,11 @@ async function plantedClone(t: TestContext) {
     ["core.askPass", executable("core.askPass")],
     ["credential.helper", `!${command("credential.helper")}`],
     ["core.alternateRefsCommand", command("core.alternateRefsCommand")],
+    // Git 2.56's default maintenance strategy leaves `gc` out unless enabled.
+    ["maintenance.gc.enabled", "true"],
+    ["gc.auto", "1"],
+    ["gc.autoDetach", "false"],
+    ["gc.recentObjectsHook", command("gc.recentObjectsHook")],
     // A local remote whose upload-pack command runs on the host.
     ["protocol.file.allow", "always"],
     ["remote.planted.url", upstream],
@@ -170,6 +191,7 @@ const planted = [
   "core.askPass",
   "credential.helper",
   "core.alternateRefsCommand",
+  "gc.recentObjectsHook",
   "uploadpack",
   "ext",
   "vcs-helper",

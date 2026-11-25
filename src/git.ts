@@ -13,6 +13,9 @@ const untrusted: [key: string, value: string][] = [
   ["core.askPass", ""],
   ["core.sshCommand", "ssh"],
   ["core.alternateRefsCommand", ""],
+  // A fetch starts automatic maintenance, whose `gc` runs the clone's
+  // `gc.recentObjectsHook` commands, a list no value can empty.
+  ["maintenance.auto", "false"],
 ];
 
 // The environment for every Git the host starts: it never prompts, the
@@ -44,6 +47,7 @@ export function hostGitEnvironment(
 
 // The environment for a host Git call that reads a local repository the host
 // owns, never a run clone: it allows the `file` transport alone.
+// Seam (deferred): host Git transport carve-outs; consumers: prepareRunClone (1); extract at 3.
 export function localGitEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
