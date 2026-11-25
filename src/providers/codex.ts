@@ -1,6 +1,7 @@
 // Codex: its credential is the host's copy of a Codex login (`auth.json`),
 // which the host keeps renewing.
 import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,25 @@ export function codexAdapter(
         request,
         codex(request.model, { effort: request.effort as Effort }),
         [{ hostPath: credential, sandboxPath: sandboxLogin, readonly: true }],
+        (event) => {
+          if (event.type !== "raw") return;
+          let error;
+          try {
+            error = JSON.parse(event.line);
+          } catch {
+            return;
+          }
+          const message =
+            error?.type === "error"
+              ? error.message
+              : error?.type === "turn.failed"
+                ? error.error?.message
+                : undefined;
+          // Keep only provider errors, synchronously and in arrival order.
+          // The existing run-log follower redacts them before publication.
+          if (typeof message === "string")
+            appendFileSync(request.log, `${message}\n`);
+        },
       );
     },
     readUsage: () => readCodexUsage(credential, ports.codexExecutable),

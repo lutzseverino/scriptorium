@@ -1,4 +1,4 @@
-import type { AgentProvider } from "@ai-hero/sandcastle";
+import type { AgentProvider, AgentStreamEvent } from "@ai-hero/sandcastle";
 import {
   completionSignal,
   type LaunchRequest,
@@ -14,6 +14,7 @@ export async function launchAgent(
   request: LaunchRequest,
   agent: AgentProvider,
   credentialMounts: Mount[] = [],
+  onAgentStreamEvent?: (event: AgentStreamEvent) => void,
 ): Promise<LaunchResult> {
   const result = await sandcastle.run({
     name: request.name,
@@ -26,7 +27,11 @@ export async function launchAgent(
     }),
     prompt: request.prompt,
     branchStrategy: { type: "head" },
-    logging: { type: "file", path: request.log },
+    logging: {
+      type: "file",
+      path: request.log,
+      ...(onAgentStreamEvent && { onAgentStreamEvent }),
+    },
     idleTimeoutSeconds: request.idleTimeoutSeconds,
     signal: request.signal,
     maxIterations: 1,
