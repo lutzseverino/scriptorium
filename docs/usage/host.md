@@ -962,13 +962,16 @@ installed comment rules'
 and no checkboxes:
 
 - a lead line, a heading with the pass's marker and state, such as
-  `### 🔄 Implementing`, and for a paused pass its cause and reset, such as
-  `### ⏸️ Paused: usage limit, resumes at 18:00Z`;
+  `### 🔄 Implementing`, and for a paused pass its cause and, when it has
+  one, its reset, such as `### ⏸️ Paused: usage limit, resumes at 18:00Z`
+  or `### ⏸️ Paused: pause threshold`;
 - a pipeline line of each phase's marker and name, such as
   `✅ Triage → 🔄 Implement → ⬜ Review → ⬜ Merge`;
 - an outcome line for each phase with a run result or a reason, such as
   `**Triage:** <summary> · [result](<link>)`, with the lead line of its
-  latest result and a link to it, rather than a copy;
+  latest result and a link to it, rather than a copy; a phase whose result
+  was linked before the comment kept lead lines reads it from that result's
+  comment;
 - a `<sub>` footer with the latest written phase's run facts: its provider,
   model and effort, the chosen model and reason when it ran as a stand-in,
   its attempt and review round, and the time of the comment's latest change.

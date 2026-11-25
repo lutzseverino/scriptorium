@@ -25,6 +25,7 @@ const names = {
     "status",
     "failure",
     "updated",
+    "pause",
     "triage",
     "implement",
     "review",
@@ -57,7 +58,7 @@ const outcome = (name: string, title: string) =>
   `{#${name}}{#outcome}\n**${title}:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/${name}}`;
 
 const defaults = {
-  run: `### {icon} {status}{#reset}: {reason}, resumes at {reset}{/reset}\n{#failure}\n> [!CAUTION]\n> {failure}\n{#unpushable}> - Unpushable: \`{unpushable}\`\n{/unpushable}{/failure}\n{#triage}{icon} Triage → {/triage}{#implement}{icon} Implement{/implement}{#review} → {icon} Review{/review} → {#merge}{icon} Merge{/merge}\n${outcome("triage", "Triage")}${outcome("implement", "Implement")}${outcome("review", "Review")}${outcome("merge", "Merge")}\n<sub>Factory run, edited in place{#provider} · \`{provider}/{model}@{effort}\`{#standIn}, {standIn}{/standIn}, attempt {attempt}{#round}, round {round}{/round}{/provider} · updated {updated}</sub>`,
+  run: `### {icon} {status}{#pause}: {pause}{/pause}\n{#failure}\n> [!CAUTION]\n> {failure}\n{#unpushable}> - Unpushable: \`{unpushable}\`\n{/unpushable}{/failure}\n{#triage}{icon} Triage → {/triage}{#implement}{icon} Implement{/implement}{#review} → {icon} Review{/review} → {#merge}{icon} Merge{/merge}\n${outcome("triage", "Triage")}${outcome("implement", "Implement")}${outcome("review", "Review")}${outcome("merge", "Merge")}\n<sub>Factory run, edited in place{#provider} · \`{provider}/{model}@{effort}\`{#standIn}, {standIn}{/standIn}, attempt {attempt}{#round}, round {round}{/round}{/provider} · updated {updated}</sub>`,
   action:
     "{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link}).",
   close:

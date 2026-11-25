@@ -145,7 +145,7 @@ test("the default run comment is the published one: lead line, pipeline line, ou
   ].join("\n");
   assert.equal(renderComment("run", undefined, values), rendered);
   assert.equal(renderComment("run", publishedRun, values), rendered);
-  // A paused pass gives its cause and reset; a failure adds a caution alert.
+  // A paused pass gives its pause; a failure adds a caution alert.
   assert.equal(
     renderComment("run", undefined, {
       icon: "❌",
@@ -171,17 +171,17 @@ test("the default run comment is the published one: lead line, pipeline line, ou
       "<sub>Factory run, edited in place · updated 13:19Z</sub>",
     ].join("\n"),
   );
-  assert.match(
-    renderComment("run", publishedRun, {
-      icon: "⏸️",
-      status: "Paused",
-      reason: "usage limit",
-      reset: "18:00Z",
-      implement: { icon: "⏸️" },
-      merge: { icon: "⬜" },
-    }),
-    /^### ⏸️ Paused: usage limit, resumes at 18:00Z\n/,
-  );
+  for (const pause of ["usage limit, resumes at 18:00Z", "pause threshold"])
+    assert.equal(
+      renderComment("run", publishedRun, {
+        icon: "⏸️",
+        status: "Paused",
+        pause,
+        implement: { icon: "⏸️" },
+        merge: { icon: "⬜" },
+      }).split("\n")[0],
+      `### ⏸️ Paused: ${pause}`,
+    );
 });
 
 test("the default action comment names its occasion's label in one line linking the run comment", () => {

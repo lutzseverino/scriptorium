@@ -74,18 +74,21 @@ function standInText(facts: PhaseFacts): string | undefined {
   return `stand-in for \`${chosen}\`: ${standInReason(reason)}`;
 }
 
-// A run result's lead line: the first line with text once its heading
-// markers are removed, cut to 100 characters.
+// A run result's lead line: the first line with text once a heading's
+// markers, opening and closing, are removed, cut to 100 characters.
 export function summaryLine(body: string): string | undefined {
   const line = contain(body)
     .split(/\r\n?|\n/)
-    .map((text) =>
-      text
-        .trim()
-        .replace(/^#{1,6}(?:\s+|$)/, "")
-        .replace(/\s+#+$/, "")
-        .trim(),
-    )
+    .map((text) => {
+      const trimmed = text.trim();
+      const heading = /^#{1,6}(?:\s+|$)/.exec(trimmed);
+      return heading
+        ? trimmed
+            .slice(heading[0].length)
+            .replace(/(?:^|\s+)#+$/, "")
+            .trim()
+        : trimmed;
+    })
     .find((text) => text !== "");
   if (line === undefined) return undefined;
   const characters = [...line];
@@ -134,6 +137,18 @@ function look(
     case "failed":
       return shown("❌", "Failed");
   }
+}
+
+// A run result comment's body without the factory's frame: its footer, or
+// before footers its leading disclaimer and closing `Run:` line.
+function resultBody(comment: string): string | undefined {
+  const lines = comment.split(/\r\n?|\n/);
+  if (!lines.at(-1)?.startsWith("<!-- ") || lines.at(-3) !== "")
+    return undefined;
+  if (lines.at(-2)!.startsWith("<sub>")) return lines.slice(0, -3).join("\n");
+  if (lines.at(-2)!.startsWith("Run: ") && lines[1] === "")
+    return lines.slice(2, -3).join("\n");
+  return undefined;
 }
 
 // The time of day a write shows, in UTC.
@@ -366,6 +381,12 @@ export function issueComments(
       ...values(phase),
       ...look(phase, current, configuration.labels, false),
       failure: current?.state === "failed" ? current.reason : undefined,
+      pause:
+        current?.state === "paused"
+          ? [current.reason, current.reset && `resumes at ${current.reset}`]
+              .filter(Boolean)
+              .join(", ") || undefined
+          : undefined,
       updated,
       ...Object.fromEntries(shown.map((name) => [name, values(name)])),
       result: result && `${bodyStart}${result}${bodyEnd}`,
@@ -396,14 +417,25 @@ export function issueComments(
       const results = [...(pass?.state.results ?? [])];
       const withdrawn = new Set(pass?.state.withdrawnResults ?? []);
       if (update.result?.withdrawn) withdrawn.add(update.result.withdrawn);
+      // A phase whose result was linked before summaries were kept reads its
+      // summary from that result's comment.
+      const phasesBefore = Object.fromEntries(
+        Object.entries(pass?.state.phases ?? {}).map(([name, facts]) => {
+          if (facts.link === undefined || facts.summary !== undefined)
+            return [name, facts];
+          const linked = comments.find((comment) => comment.url === facts.link);
+          const body = linked && resultBody(linked.body);
+          return [name, { ...facts, summary: body && summaryLine(body) }];
+        }),
+      );
       const terminal = update.result?.terminal;
       if (terminal && !results.some((entry) => entry.run === terminal.run))
         results.push(terminal);
       const state: State = {
         phases: {
-          ...pass?.state.phases,
+          ...phasesBefore,
           [update.phase]: {
-            ...pass?.state.phases[update.phase],
+            ...phasesBefore[update.phase],
             reason: undefined,
             reset: undefined,
             waits: undefined,
