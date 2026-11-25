@@ -930,8 +930,9 @@ earlier one. Every validator run reads the platform after the events it
 delivers were observed. Pending deliveries survive a restart and run again
 from the start if a restart interrupted them. A delivery whose preparation
 fails, such as a token command failure or a head the clone cannot fetch,
-waits for a later pass and is dropped after three attempts, naming why in the
-process log. An entry point's nonzero exit, such as a failing check, is its
+waits for a later pass, naming why in the process log, and holds its lane
+until it succeeds. A head's delivery ends instead once its pull request is
+closed or has a later head. An entry point's nonzero exit, such as a failing check, is its
 result: the process log names it with the end of its output.
 
 Every entry point and the check command come from one default-branch commit
@@ -950,7 +951,9 @@ factory builds from the default branch's `.scriptorium/Dockerfile`, through
 configuration or credential in its environment. The image build is Docker's
 context-free `docker build -`, so its steps see no host file or variable.
 Each entry point may run for `timeLimitMinutes`, and the check command's
-container stops itself at that limit.
+`docker` client stops at that limit. Its container is named for the delivery
+and removed once the entry point ends, even when the command ignores the
+stop.
 
 ## Sandbox GitHub access
 

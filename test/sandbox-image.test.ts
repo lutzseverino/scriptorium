@@ -6,6 +6,7 @@ import {
   AGENT_LAYER_VERSION,
   buildkitImage,
   buildSandboxImage,
+  removeContainer,
   sandboxImageTag,
   type DockerRun,
   type ImageBuilder,
@@ -312,4 +313,19 @@ test("an admitted factory pair builds toolchain and agent targets under separate
     beforeBuild[1] > beforeBuild[0],
     "agent target requires a new filesystem observation",
   );
+});
+
+test("a container is removed by its exact name, and a missing one is no error", async () => {
+  const calls: string[][] = [];
+  const run = (listed: string) => async (args: string[]) => {
+    calls.push(args);
+    return args[0] === "ps" ? listed : "";
+  };
+  await removeContainer(run("c0ffee\n"), "scriptorium-check-1");
+  await removeContainer(run(""), "scriptorium-check-2");
+  assert.deepEqual(calls, [
+    ["ps", "--all", "--quiet", "--filter", "name=^scriptorium-check-1$"],
+    ["rm", "--force", "c0ffee"],
+    ["ps", "--all", "--quiet", "--filter", "name=^scriptorium-check-2$"],
+  ]);
 });

@@ -190,6 +190,8 @@ export type HostPorts = {
   // when the host configuration names runner repositories.
   runnerToken?(repository: string): Promise<string>;
   runEntryPoint?(request: EntryPointRequest): Promise<EntryPointResult>;
+  // Removes the named container, running or not, if there is one.
+  removeContainer?(name: string): Promise<void>;
   now(): Date;
   // Writes a line to the process log.
   report(line: string): void;
@@ -327,6 +329,11 @@ export function createHost(
       if (!ports.runEntryPoint)
         throw new Error("the host cannot run entry points");
       return ports.runEntryPoint(request);
+    },
+    removeContainer: async (name) => {
+      if (!ports.removeContainer)
+        throw new Error("the host cannot remove containers");
+      return ports.removeContainer(name);
     },
     timeoutMs: configuration.timeLimitMinutes * 60_000,
     now: ports.now,

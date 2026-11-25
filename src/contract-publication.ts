@@ -682,7 +682,6 @@ async function acceptContract(
   return state.evidence!.url;
 }
 
-// Canon rejects same-second notice/acceptance. A later host pass retries.
 // Asks for the validator's evaluation of the issue: through the runner's
 // serialized delivery where the host is the repository's runner, otherwise by
 // dispatching the installed workflow.
@@ -702,6 +701,7 @@ async function evaluate(
   });
 }
 
+// Canon rejects same-second notice/acceptance. A later host pass retries.
 function afterNoticeSecond(
   progress: PublicationProgress,
   noticedAt: number,

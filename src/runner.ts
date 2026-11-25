@@ -44,10 +44,6 @@ const checkWorkdir = "/home/agent/workspace";
 // so the container's own stop lets it post the command's failure.
 const graceMs = 2 * 60_000;
 
-// A preparation that fails this many times, such as a head no longer
-// fetchable, drops its delivery rather than holding its lane.
-const attemptLimit = 3;
-
 // An account the platform no longer knows, as GitHub names it.
 const ghost: Account = { login: "ghost", bot: false };
 
@@ -129,6 +125,8 @@ export type RunnerPorts = {
   // The runner account's token for the repository.
   token(repository: string): Promise<string>;
   run(request: EntryPointRequest): Promise<EntryPointResult>;
+  // Removes the named container, running or not, if there is one.
+  removeContainer(name: string): Promise<void>;
   // How long one entry point may run.
   timeoutMs: number;
   now(): Date;
@@ -155,7 +153,7 @@ type Copy = {
   author: string | null;
 };
 
-type Delivery = { id: string; attempts?: number } & (
+type Delivery = { id: string } & (
   | { lane: "contract"; event: IssueEvent; requested?: true }
   | { lane: "metadata"; pullRequest: number }
   | { lane: "head"; pullRequest: number; head: string; base: string }
@@ -450,17 +448,16 @@ export function createRunner(ports: RunnerPorts) {
       try {
         await deliver(repository, delivery);
       } catch (error) {
-        const attempts = (delivery.attempts ?? 0) + 1;
-        if (attempts < attemptLimit) {
-          delivery.attempts = attempts;
-          if (load(repository) === state) save(repository, state);
+        // A failed preparation never loses an observed event: the delivery
+        // waits, unless it is of a head its pull request no longer has.
+        if (!superseded(state, delivery)) {
           ports.report(
             `${repository} runner ${describe(delivery)} waits for a later pass: ${error}`,
           );
           return;
         }
         ports.report(
-          `${repository} runner ${describe(delivery)} dropped after ${attempts} attempts: ${error}`,
+          `${repository} runner ${describe(delivery)} ended: its pull request is closed or has a later head (${error})`,
         );
       }
       if (load(repository) !== state) return;
@@ -474,12 +471,12 @@ export function createRunner(ports: RunnerPorts) {
     if (!pin) throw new Error("no pass has pinned a default-branch commit");
     const trusted = await pinned(repository, pin);
     const inputs = join(root(repository), "inputs");
-    await mkdir(inputs, { recursive: true });
     const input = join(inputs, `${delivery.id}.json`);
     // The entry points reach the platform through Postern, by this URL.
     const url = `https://github.com/${repository}`;
     const script = (path: string) => join(trusted, path);
     try {
+      await mkdir(inputs, { recursive: true });
       const token = await ports.token(repository);
       const validate = async (value: object) => {
         await writeFile(input, JSON.stringify(value));
@@ -541,33 +538,60 @@ export function createRunner(ports: RunnerPorts) {
             ports.report(
               `${repository} runner has no sandbox image from the default branch; #${delivery.pullRequest} at ${delivery.head} gets no check-command run`,
             );
-          else
-            outcome(
-              repository,
-              delivery,
-              await validate({
-                kind: "check-command",
-                repository: url,
-                head: delivery.head,
-                checkout,
-                command: checkContainer(
-                  pin.image,
+          else {
+            // The container outlives a stopped `docker` client, so the
+            // delivery removes it by name, and one an interrupted earlier
+            // attempt left.
+            const container = `scriptorium-check-${delivery.id}`;
+            await ports.removeContainer(container);
+            try {
+              outcome(
+                repository,
+                delivery,
+                await validate({
+                  kind: "check-command",
+                  repository: url,
+                  head: delivery.head,
                   checkout,
-                  command,
-                  ports.timeoutMs,
-                ),
-                role: "runner",
-              }),
-              "check command",
-            );
+                  command: checkContainer(
+                    pin.image,
+                    checkout,
+                    command,
+                    ports.timeoutMs,
+                    container,
+                  ),
+                  role: "runner",
+                }),
+                "check command",
+              );
+            } finally {
+              // Its result is posted already, so a failure here only leaves
+              // the container to the host's sandbox cleanup.
+              await ports
+                .removeContainer(container)
+                .catch((error) =>
+                  ports.report(
+                    `${repository} runner container ${container} was not removed: ${error}`,
+                  ),
+                );
+            }
+          }
         } finally {
           await remove(checkout);
         }
       }
     } finally {
-      await rm(input, { force: true });
       using.set(trusted, using.get(trusted)! - 1);
+      await rm(input, { force: true });
     }
+  }
+
+  // Whether a head delivery's pull request is closed or has a later head.
+  function superseded(state: State, delivery: Delivery): boolean {
+    return (
+      delivery.lane === "head" &&
+      state.pullRequests[delivery.pullRequest]?.head !== delivery.head
+    );
   }
 
   function outcome(
@@ -772,12 +796,23 @@ function issueEvents(
     const stored = copies.get(comment.id);
     if (!stored) {
       // A comment the host never copied is new only when it was created in
-      // the window; on an issue it never observed, older ones are history.
+      // the window; on an issue it never observed, an older one is history
+      // unless it was edited in the window.
       if (after(comment.createdAt, known ? since : window))
         add(
           `created:${comment.id}`,
           comment.createdAt,
           event("commentCreated", comment.author, fields(copy(comment))),
+        );
+      else if (!known && after(comment.editedAt, window))
+        add(
+          `edited:${comment.id}:${comment.editedAt}`,
+          comment.editedAt,
+          event(
+            "commentEdited",
+            comment.editor ?? comment.author,
+            fields(copy(comment)),
+          ),
         );
     } else if (stored.body !== comment.body)
       add(
@@ -843,14 +878,15 @@ function describe(delivery: Delivery): string {
 
 // The command the check-command entry point runs: the repository's check
 // command inside its sandbox image, with the head checkout as its only mount
-// and no credential, host configuration or token in its environment. It
-// stops itself at the delivery's time limit, so its container never
-// outlives the entry point.
+// and no credential, host configuration or token in its environment. Its
+// `docker` client stops at the delivery's time limit; the container, named
+// so, is removed after the entry point ends.
 export function checkContainer(
   image: string,
   checkout: string,
   command: string,
   timeoutMs: number,
+  name: string,
 ): string {
   return [
     "timeout",
@@ -859,6 +895,8 @@ export function checkContainer(
     "docker",
     "run",
     "--rm",
+    "--name",
+    name,
     "--pull=never",
     "--volume",
     `${checkout}:${checkWorkdir}`,

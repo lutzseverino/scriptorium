@@ -111,6 +111,8 @@ function setup(
   const world = runnerWorld();
   const runs: Run[] = [];
   const reports: string[] = [];
+  // The containers removed, in order.
+  const removed: string[] = [];
   const pending = new Set<Promise<void>>();
   const state = { token: async () => "runner-token" as string };
   const runner = (repositories = [repository]) =>
@@ -135,6 +137,9 @@ function setup(
         runs.push(run);
         return respond(run, world);
       },
+      async removeContainer(name) {
+        removed.push(name);
+      },
       timeoutMs: 60_000,
       now: world.now,
       report: (line) => reports.push(line),
@@ -158,6 +163,7 @@ function setup(
     world,
     runs,
     reports,
+    removed,
     state,
     get runner() {
       return instance;
@@ -480,6 +486,87 @@ test("the cursor, comment copies and waiting deliveries survive a restart", asyn
   );
 });
 
+test("a delivery whose preparation keeps failing is never dropped, but a head's ends once its pull request moves on", async (t) => {
+  const s = setup(t);
+  const issue = s.world.openIssue();
+  const first = s.commit("feature", { "feature.txt": "1" });
+  const pull = s.world.openPull({ head: first, base: s.main() });
+  await s.pass();
+  s.runs.length = 0;
+
+  s.state.token = async () => {
+    throw new Error("the token command failed");
+  };
+  s.world.label(issue.number, "state:ready", "maintainer");
+  const second = s.commit("feature", { "feature.txt": "2" });
+  s.world.push(pull.number, second);
+  for (let pass = 0; pass < 5; pass++) await s.pass();
+  assert.deepEqual(s.runs, []);
+  assert.doesNotMatch(s.reports.join("\n"), /dropped|ended/);
+
+  // A later head ends the waiting head's delivery at its next attempt.
+  const third = s.commit("feature", { "feature.txt": "3" });
+  s.world.push(pull.number, third);
+  await s.pass();
+  assert.match(
+    s.reports.join("\n"),
+    new RegExp(`#${pull.number} at ${second} ended`),
+  );
+
+  s.state.token = async () => "runner-token";
+  await s.pass();
+  assert.deepEqual(kinds(s.runs).sort(), [
+    `check-command #${third}`,
+    `contract #${issue.number} labeled`,
+    `image ${third}`,
+    `pr-metadata #${pull.number}`,
+    `pr-metadata #${pull.number}`,
+  ]);
+});
+
+test("a pinned checkout a failed preparation used is still retired", async (t) => {
+  const s = setup(t);
+  const issue = s.world.openIssue();
+  await s.pass();
+  const runner = join(s.root, "state", "repositories", repository, "runner");
+  // The inputs directory cannot be created.
+  rmSync(join(runner, "inputs"), { recursive: true, force: true });
+  writeFileSync(join(runner, "inputs"), "");
+  s.world.label(issue.number, "state:ready", "maintainer");
+  await s.pass();
+  assert.match(s.reports.at(-1)!, /waits for a later pass/);
+
+  rmSync(join(runner, "inputs"));
+  const after = s.advance({ "next.txt": "1" });
+  s.runs.length = 0;
+  await s.pass();
+  assert.deepEqual(kinds(s.runs), [`contract #${issue.number} labeled`]);
+  assert.deepEqual(readdirSync(join(runner, "trusted")), [after]);
+});
+
+test("an issue observed for the first time delivers the edit of an older comment", async (t) => {
+  const s = setup(t);
+  const issue = s.world.openIssue();
+  const old = s.world.comment(issue.number, "Before.", "reporter");
+  s.world.close(issue.number, "maintainer");
+  await s.pass();
+  s.runs.length = 0;
+
+  s.world.editComment(issue.number, old.id, "After.", "maintainer");
+  await s.pass();
+  assert.deepEqual(
+    events(s.runs).map((event) => [
+      event.kind,
+      event.actor.login,
+      event.comment?.body,
+    ]),
+    [["commentEdited", "maintainer", "After."]],
+  );
+  s.runs.length = 0;
+  await s.pass();
+  assert.deepEqual(s.runs, []);
+});
+
 test("runs for one issue never overlap, merge or cancel one another", async (t) => {
   let release!: () => void;
   let running = 0;
@@ -542,6 +629,7 @@ test("pull request events run the metadata entry point, and each observed head i
   assert.deepEqual(image!.args, [s.main(), first, repository]);
   assert.equal(image!.head, first);
   assert.equal(check!.head, first);
+  const [, container] = /--name (\S+)/.exec(check!.input!.command)!;
   assert.deepEqual(check!.input, {
     kind: "check-command",
     repository: `https://github.com/${repository}`,
@@ -552,9 +640,13 @@ test("pull request events run the metadata entry point, and each observed head i
       check!.input!.checkout,
       "pnpm validate",
       60_000,
+      container!,
     ),
     role: "runner",
   });
+  // Its container is the delivery's own, removed before and after its run.
+  assert.match(container!, /^scriptorium-check-[\w-]+$/);
+  assert.deepEqual(s.removed, [container, container]);
   assert.equal(check!.token, "runner-token");
   // The head checkout is the delivery's own and goes with it.
   assert.equal(existsSync(check!.input!.checkout), false);
@@ -686,13 +778,18 @@ test("the check container mounts only the head checkout and an entry point gets 
       "/state/heads/pull-3-x",
       "pnpm install && pnpm validate",
       90_000,
+      "scriptorium-check-1",
     ),
-    "timeout --kill-after=30 90 docker run --rm --pull=never --volume /state/heads/pull-3-x:/home/agent/workspace --workdir /home/agent/workspace --entrypoint /usr/bin/tini factory-sandbox:abc -- sh -c 'pnpm install && pnpm validate'",
+    "timeout --kill-after=30 90 docker run --rm --name scriptorium-check-1 --pull=never --volume /state/heads/pull-3-x:/home/agent/workspace --workdir /home/agent/workspace --entrypoint /usr/bin/tini factory-sandbox:abc -- sh -c 'pnpm install && pnpm validate'",
   );
   assert.equal(
-    checkContainer("image", "/checkout", "echo 'quoted'", 1000).endsWith(
-      `sh -c 'echo '"'"'quoted'"'"''`,
-    ),
+    checkContainer(
+      "image",
+      "/checkout",
+      "echo 'quoted'",
+      1000,
+      "scriptorium-check-1",
+    ).endsWith(`sh -c 'echo '"'"'quoted'"'"''`),
     true,
   );
   assert.deepEqual(
@@ -933,9 +1030,20 @@ test(
     const checkout = join(root, "checkout");
     mkdirSync(checkout);
     const probe = `{ for file in ${files}; do cat "$file"; done; env; } > probe.txt 2>&1`;
-    execFileSync("sh", ["-c", checkContainer(image, checkout, probe, 60_000)], {
-      env: environment,
-    });
+    execFileSync(
+      "sh",
+      [
+        "-c",
+        checkContainer(
+          image,
+          checkout,
+          probe,
+          60_000,
+          `scriptorium-runner-probe-${process.pid}`,
+        ),
+      ],
+      { env: environment },
+    );
     const inside = readFileSync(join(checkout, "probe.txt"), "utf8");
     assert.match(inside, /No such file or directory/);
     assert.deepEqual(leaked(inside), []);
