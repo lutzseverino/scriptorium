@@ -637,6 +637,9 @@ export function createHost(
       return pass;
     }
     const git = hostGit(name);
+    // Why the default branch's Dockerfile gives no image, when it is missing
+    // or did not build.
+    let imageProblem: string | null = null;
     try {
       await updateClone(
         git,
@@ -688,7 +691,7 @@ export function createHost(
         }
       const dockerfile = join(clone, dockerfilePath);
       if (pass.paused === null && !existsSync(dockerfile))
-        pause(`it has no ${dockerfilePath}`, "repository-input");
+        imageProblem = pause(`it has no ${dockerfilePath}`, "repository-input");
       else if (pass.paused === null)
         try {
           pass.image = await ports.buildImage(
@@ -697,7 +700,7 @@ export function createHost(
         } catch (error) {
           if (error instanceof ImageStorageHold) pause(error.message, "host");
           else
-            pause(
+            imageProblem = pause(
               `its sandbox image did not build from ${dockerfilePath}: ${error}`,
               "repository-input",
             );
@@ -731,6 +734,7 @@ export function createHost(
           clone,
           commit: (await git(clone, ["rev-parse", "HEAD"])).trim(),
           image: pass.image,
+          imageProblem,
           validator: pass.configuration.contractResult.author,
         });
       } catch (error) {
@@ -1292,12 +1296,14 @@ export function createHost(
     }
   }
 
-  // Before anything else, the first pass removes the sandboxes an earlier
-  // process left and recovers unsettled runs: interrupted and paused ones
+  // Before anything else, the first pass removes the sandboxes and runner
+  // check containers an earlier process left, then the runner checkouts they
+  // could write to, and recovers unsettled runs: interrupted and paused ones
   // relaunch, and so does one the earlier process was stopping at the pause
   // threshold, as paused, while orphans settle through the outcome table.
   function start() {
     ports.stopSandboxes();
+    runner.start();
     passHealth = readPassHealth(statusPath);
     const recovered: HostRun[] = [];
     for (const name of configuration.repositories) {

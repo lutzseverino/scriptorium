@@ -44,7 +44,7 @@ import {
   type ImageStorageStatus,
 } from "../src/image-storage.ts";
 import { createHost, type HostPorts } from "../src/host.ts";
-import type { EntryPointRequest } from "../src/runner.ts";
+import { entryPoints, type EntryPointRequest } from "../src/runner.ts";
 import type { HostConfiguration } from "../src/host-configuration.ts";
 import type { Retention } from "../src/image-retention.ts";
 import { createRegistry } from "../src/providers.ts";
@@ -1347,10 +1347,14 @@ function host(
     async runEntryPoint(request) {
       entryPointRuns.push({
         ...request,
-        input: JSON.parse(readFileSync(request.args[0]!, "utf8")),
+        // The image build takes its commits as arguments, not an input.
+        input: request.script.endsWith(entryPoints.validate)
+          ? JSON.parse(readFileSync(request.args[0]!, "utf8"))
+          : null,
       });
       return { code: 0, output: "" };
     },
+    async removeContainer() {},
     now: () => clock.now,
     report: (line) => reports.push(line),
   };
@@ -14453,9 +14457,10 @@ test("an exited run a restart recovers before its result is posted stays among t
 });
 
 // GitHub's answers to runner delivery's reads: the open issues the platform
-// fake holds, with no comments, changes or pull requests.
+// fake holds, with no comments or changes, and the open pull requests given.
 function runnerReads(
   connection: ConnectionWithLinkAdditions,
+  pullRequests: unknown[] = [],
 ): ConnectionWithLinkAdditions {
   return {
     ...connection,
@@ -14485,7 +14490,7 @@ function runnerReads(
                   },
                 }
               : name === "RunnerPullRequests"
-                ? { repository: { pullRequests: page([]) } }
+                ? { repository: { pullRequests: page(pullRequests) } }
                 : name === "RunnerIssueComments"
                   ? { repository: { issue: { comments: page([]) } } }
                   : {
@@ -14547,3 +14552,89 @@ test("only a repository naming this host as its runner gets deliveries, under th
     false,
   );
 });
+
+for (const [cause, files, imageFailures, skipped] of [
+  [
+    "a missing default-branch Dockerfile",
+    { ...factoryFiles, ".scriptorium/Dockerfile": undefined },
+    [],
+    /it has no \.scriptorium\/Dockerfile/,
+  ],
+  [
+    "a default-branch Dockerfile that does not build",
+    factoryFiles,
+    [new Error("apt-get exited with 100")],
+    /did not build from \.scriptorium\/Dockerfile: Error: apt-get exited with 100/,
+  ],
+  ["an image storage hold", factoryFiles, "hold", null],
+] as const)
+  test(`a runner head without an image for ${cause} ${skipped ? "skips its check" : "waits for the image"}`, async (t) => {
+    const hold = new ImageStorageHold({
+      held: true,
+      reason: "low storage",
+      observedAt: "2026-10-09T12:00:00Z",
+      reserveBytes: 15,
+      resumeBytes: 17,
+      filesystems: [],
+      reclamation: { pressure: true, freed: null, error: null },
+    });
+    const bare = remote(
+      t,
+      Object.fromEntries(
+        Object.entries({
+          ...files,
+          ".scriptorium/config.json": JSON.stringify({
+            ...conventions,
+            checkCommand: "pnpm validate",
+          }),
+        }).filter((entry): entry is [string, string] => entry[1] !== undefined),
+      ),
+    );
+    const head = git(bare, ["rev-parse", "main"]).trim();
+    const run = host(t, {
+      repositories: { "acme/widgets": [] },
+      remotes: { "acme/widgets": bare },
+      configuration: {
+        runner: { repositories: ["acme/widgets"], tokenCommand: ["unused"] },
+      },
+      imageFailures: imageFailures === "hold" ? [hold] : [...imageFailures],
+      wrapConnection: (connection) =>
+        runnerReads(connection, [
+          {
+            number: 7,
+            title: "Feature",
+            body: "",
+            isDraft: false,
+            headRefOid: head,
+            baseRefOid: head,
+            baseRefName: "main",
+            isCrossRepository: false,
+          },
+        ]),
+    });
+    const ran = () =>
+      run.entryPointRuns.map((request) =>
+        request.input ? request.input.kind : "image build",
+      );
+    await run.tick();
+    await run.drain();
+    if (skipped) {
+      assert.deepEqual(ran().sort(), ["image build", "pr-metadata"]);
+      assert.match(
+        run.reports.join("\n"),
+        new RegExp(
+          `no sandbox image: .*${skipped.source}.*; #7 at ${head} gets no check-command run`,
+        ),
+      );
+      return;
+    }
+    assert.deepEqual(ran(), ["pr-metadata"]);
+    assert.match(
+      run.reports.join("\n"),
+      new RegExp(`#7 at ${head} waits for a later pass`),
+    );
+    run.clock.now = new Date("2026-10-09T12:05:00Z");
+    await run.tick();
+    await run.drain();
+    assert.deepEqual(ran(), ["pr-metadata", "image build", "check-command"]);
+  });

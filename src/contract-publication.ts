@@ -455,8 +455,9 @@ export async function publishContract(
     !same(record!.publication?.attestation, publication.attestation)
   )
     await persist({ ...record!, migrated: true, retired: true, publication });
-  // Dispatch on retries too: persistence may have succeeded after the evidence
-  // comment's workflow already ran. No polling delay or synthetic approval.
+  // Request evaluation on retries too: persistence may have succeeded after
+  // the validator already evaluated the evidence comment, through its
+  // workflow or runner delivery. No polling delay or synthetic approval.
   await evaluate(connection, number, progress);
   const proofNotice = await decide();
   const association = proofNotice?.result.factoryTriage;

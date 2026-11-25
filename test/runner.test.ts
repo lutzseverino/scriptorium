@@ -165,7 +165,9 @@ function setup(
         void work.finally(() => pending.delete(work));
       },
     });
+  // A runner starts as the host starts it, once its sandbox cleanup is done.
   let instance = runner();
+  instance.start();
   const reads = githubRunnerReads(
     connect(`https://github.com/${repository}`, {
       credential: "factory-token",
@@ -185,18 +187,25 @@ function setup(
     get runner() {
       return instance;
     },
-    restart(repositories?: string[]) {
+    restart(repositories?: string[], start = true) {
       instance = runner(repositories);
+      if (start) instance.start();
     },
     drain,
-    // One pass: the host's clone follows the default branch first.
-    async pass(image: string | null = "factory-sandbox:test") {
+    // One pass: the host's clone follows the default branch first. A pass
+    // without an image names the default branch's Dockerfile problem, or
+    // none for a host cause.
+    async pass(
+      image: string | null = "factory-sandbox:test",
+      imageProblem: string | null = null,
+    ) {
       git(clone, ["fetch", "--quiet", "origin"]);
       git(clone, ["reset", "--quiet", "--hard", "origin/main"]);
       await instance.observe(repository, reads, {
         clone,
         commit: git(clone, ["rev-parse", "HEAD"]).trim(),
         image,
+        imageProblem,
         validator,
       });
       await drain();
@@ -411,6 +420,26 @@ test("each recorded issue and comment event is delivered with its own fields, in
   await s.pass();
   assert.deepEqual(s.runs, []);
 
+  // A comment created and then edited between passes keeps both events, each
+  // with the body observed.
+  const revised = s.world.comment(issue.number, "Draft.", "reporter");
+  s.world.editComment(issue.number, revised.id, "Revised.", "maintainer");
+  await s.pass();
+  assert.deepEqual(
+    events(s.runs).map((event) => [
+      event.kind,
+      event.actor.login,
+      event.comment?.body,
+    ]),
+    [
+      ["commentCreated", "reporter", "Revised."],
+      ["commentEdited", "maintainer", "Revised."],
+    ],
+  );
+  s.runs.length = 0;
+  await s.pass();
+  assert.deepEqual(s.runs, []);
+
   // A deletion carries the stored copy, even of a comment edited and then
   // deleted between passes; a comment created and deleted unseen is never
   // delivered.
@@ -501,6 +530,21 @@ test("the cursor, comment copies and waiting deliveries survive a restart", asyn
       ["commentDeleted", "Copied."],
     ],
   );
+});
+
+test("a restarted runner removes leftover checkouts only once it starts", async (t) => {
+  const s = setup(t);
+  await s.pass();
+  const runner = join(s.root, "state", "repositories", repository, "runner");
+  // A check container the stopped process left may still write here.
+  const leftover = join(runner, "heads", "pull-1-left", "file");
+  mkdirSync(dirname(leftover), { recursive: true });
+  writeFileSync(leftover, "");
+  s.restart(undefined, false);
+  assert.equal(existsSync(leftover), true);
+  s.runner.start();
+  assert.equal(existsSync(join(runner, "heads")), false);
+  assert.equal(existsSync(join(runner, "state.json")), true);
 });
 
 test("a delivery whose preparation keeps failing is never dropped, but a head's ends once its pull request moves on", async (t) => {
@@ -775,17 +819,58 @@ test("a repository without a check command gets the image build only", async (t)
   assert.match(s.reports.join("\n"), /no checkCommand/);
 });
 
-test("a head still gets its image build when the default branch's sandbox image did not build", async (t) => {
+test("a head skips its check but still gets its image build while the default branch's Dockerfile does not build", async (t) => {
   const s = setup(t);
-  await s.pass(null);
+  const broken = "its sandbox image did not build from .scriptorium/Dockerfile";
+  await s.pass(null, broken);
   const head = s.commit("fix-image", { ".scriptorium/Dockerfile": "FROM x\n" });
-  s.world.openPull({ head, base: s.main() });
-  await s.pass(null);
+  const pull = s.world.openPull({ head, base: s.main() });
+  await s.pass(null, broken);
   assert.deepEqual(kinds(s.runs).sort(), [`image ${head}`, "pr-metadata #1"]);
   assert.match(
     s.reports.join("\n"),
-    /no sandbox image from the default branch/,
+    new RegExp(
+      `no sandbox image: ${broken}; #${pull.number} at ${head} gets no check-command run`,
+    ),
   );
+
+  // The skipped head's check stays missing once the default branch builds;
+  // a push observed after that gets its check.
+  s.runs.length = 0;
+  await s.pass();
+  assert.deepEqual(s.runs, []);
+  const pushed = s.commit("fix-image", { "feature.txt": "1" });
+  s.world.push(pull.number, pushed);
+  await s.pass();
+  assert.deepEqual(kinds(s.runs).sort(), [
+    `check-command #${pushed}`,
+    `image ${pushed}`,
+    "pr-metadata #1",
+  ]);
+});
+
+test("a head waits, image build included, while a host cause leaves the pass without an image", async (t) => {
+  const s = setup(t);
+  await s.pass();
+  const head = s.commit("feature", { "feature.txt": "1" });
+  const pull = s.world.openPull({ head, base: s.main() });
+  for (let pass = 0; pass < 2; pass++) await s.pass(null);
+  assert.deepEqual(kinds(s.runs), ["pr-metadata #1"]);
+  assert.match(
+    s.reports.at(-1)!,
+    new RegExp(
+      `#${pull.number} at ${head} waits for a later pass: .*no sandbox image`,
+    ),
+  );
+
+  // Meanwhile the other lanes keep delivering.
+  const issue = s.world.openIssue();
+  await s.pass(null);
+  assert.deepEqual(kinds(s.runs).at(-1), `contract #${issue.number} opened`);
+
+  s.runs.length = 0;
+  await s.pass();
+  assert.deepEqual(kinds(s.runs), [`image ${head}`, `check-command #${head}`]);
 });
 
 test("the check container mounts only the head checkout and an entry point gets only the runner token", () => {
@@ -809,6 +894,8 @@ test("the check container mounts only the head checkout and an entry point gets 
     ).endsWith(`sh -c 'echo '"'"'quoted'"'"''`),
     true,
   );
+  // Host Git's own settings reach every Git an entry point starts; the
+  // host's other command-line configuration does not.
   assert.deepEqual(
     entryPointEnvironment("runner-token", {
       PATH: "/usr/bin",
@@ -818,11 +905,16 @@ test("the check container mounts only the head checkout and an entry point gets 
       GITHUB_TOKEN: "ghs_other",
       ANTHROPIC_API_KEY: "sk-provider",
       POSTERN_TOKEN: "stale",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.extraHeader",
+      GIT_CONFIG_VALUE_0: "Authorization: bearer ghs_host",
     }),
     {
-      PATH: "/usr/bin",
-      HOME: "/home/factory",
-      DOCKER_HOST: "unix:///run/docker.sock",
+      ...hostGitEnvironment({
+        PATH: "/usr/bin",
+        HOME: "/home/factory",
+        DOCKER_HOST: "unix:///run/docker.sock",
+      }),
       POSTERN_TOKEN: "runner-token",
     },
   );
@@ -993,6 +1085,35 @@ test("an entry point runs in its own process with only the runner token, and sto
   });
   assert.notEqual(stopped.code, 0);
   assert.match(stopped.output, /time limit/);
+});
+
+test("Git an entry point starts ignores what a checkout plants in its Git directory", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "entry-point-git-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const checkout = join(root, "checkout");
+  git(root, ["init", "--quiet", checkout]);
+  // What head code could write into a checkout the check container mounts.
+  const marker = join(root, "planted");
+  const monitor = join(root, "monitor.sh");
+  writeFileSync(monitor, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  git(checkout, ["config", "core.fsmonitor", monitor]);
+  const script = join(root, "entry.mjs");
+  writeFileSync(
+    script,
+    `import { execFileSync } from "node:child_process"; execFileSync("git", ["status"], { cwd: ${JSON.stringify(checkout)}, stdio: "ignore" });`,
+  );
+  const result = await runEntryPoint({
+    script,
+    args: [],
+    cwd: checkout,
+    token: "runner-token",
+    timeoutMs: 30_000,
+  });
+  assert.equal(result.code, 0, result.output);
+  assert.equal(existsSync(marker), false);
+  // The plant runs under Git's own settings.
+  git(checkout, ["status"]);
+  assert.equal(existsSync(marker), true);
 });
 
 const docker =

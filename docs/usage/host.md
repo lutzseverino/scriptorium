@@ -901,6 +901,18 @@ Delivery covers what the platform still records at the pass:
   with write access pushes the change to a branch in the repository or runs
   the entry point by hand, so the host runs code only from accounts with
   write access.
+- **Heads without a default-branch image.** When the default branch's
+  `.scriptorium/Dockerfile` is missing or fails to build, a head observed
+  then, including at the first pass's catch-up, gets its image build but no
+  check command, and the process log says why. Its `Runner checks` status
+  stays missing, as a fork head's does, even once the default branch builds;
+  the next push observed after that build gets its check. So the head lane
+  never stalls, and the image build of a pull request that fixes the
+  Dockerfile still runs. When the pass has no image for a host cause
+  instead, such as a clone that did not update, an
+  [image storage hold](#image-build-storage-admission) or a pause that
+  skipped the build, the head's delivery, its image build included, waits
+  for a pass that has the image.
 
 Repo Canon-sent dispatches, such as an operator's cutoff `evaluate` or
 `activate`, are not delivered at `runner`; run Repo Canon's off-Actions
@@ -944,17 +956,19 @@ command's working tree and the Dockerfile's source; the image build runs
 before the check command writes to it.
 
 An entry point runs with only `PATH`, `HOME`, `TMPDIR`, Docker's client
-variables and `POSTERN_TOKEN`, the runner account's token. The check command
-runs inside the repository's [sandbox image](sandbox-image.md), the image the
-factory builds from the default branch's `.scriptorium/Dockerfile`, through
-`docker run` with the head checkout as its only mount and no token, host
-configuration or credential in its environment. The image build is Docker's
-context-free `docker build -`, so its steps see no host file or variable.
-The check command's `docker` client stops at `timeLimitMinutes`, and each
-entry point may run 2 minutes longer, so it can still post a timed-out
-command's failure. Its container is named for the delivery
-and removed once the entry point ends, even when the command ignores the
-stop.
+variables, the command-line Git settings every host Git process carries, and
+`POSTERN_TOKEN`, the runner account's token. Every Git it starts in a head
+checkout, which the check command can write, therefore ignores that checkout's
+hooks and configured commands. The check command runs inside the repository's
+[sandbox image](sandbox-image.md), the image the factory builds from the
+default branch's `.scriptorium/Dockerfile`, through `docker run` with the head
+checkout as its only mount and no token, host configuration or credential in
+its environment. The image build is Docker's context-free `docker build -`, so
+its steps see no host file or variable. The check command's `docker` client
+stops at `timeLimitMinutes`, and each entry point may run 2 minutes longer, so
+it can still post a timed-out command's failure. Its container is named for the
+delivery and removed once the entry point ends, even when the command ignores
+the stop.
 
 ## Sandbox GitHub access
 
@@ -1507,16 +1521,17 @@ never write through the shared clone.
 
 The host treats a run clone's Git directory as untrusted, since its sandbox can
 write it. Every Git process the host starts, including Sandcastle's own calls
-in the run clone, carries command-line settings in its environment. Hooks are
-disabled. `core.fsmonitor`, `core.sshCommand`, `core.askPass`,
+in the run clone and those of [runner](#runner-event-delivery) entry points,
+carries command-line settings in its environment. Hooks are disabled.
+`core.fsmonitor`, `core.sshCommand`, `core.askPass`,
 `core.alternateRefsCommand` and credential helpers are ignored. Automatic
 maintenance never starts, since its `gc` would run a clone's
 `gc.recentObjectsHook`, so Git no longer compacts the host's clones on its own.
 `GIT_ALLOW_PROTOCOL` allows the HTTPS transport alone. A remote the sandbox
 repoints, gives a `vcs` helper or rewrites with `insteadOf` therefore cannot
 run an upload-pack command or remote helper on the host, whatever protocol
-policy the clone configures. The host still reaches GitHub over HTTPS; only
-its copies of the shared clone, into a new run clone or a
+policy the clone configures. The host still reaches GitHub over HTTPS; only its
+copies of the shared clone, into a new run clone or a
 [runner](#runner-event-delivery) checkout, allow the local `file` transport.
 Sandboxes receive none of these settings.
 

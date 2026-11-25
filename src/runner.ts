@@ -24,6 +24,7 @@ import {
   factoryConfigurationPath,
   readFactoryConfiguration,
 } from "./factory-configuration.ts";
+import { hostGitEnvironment } from "./git.ts";
 
 // Repo Canon's installed entry points, by their repository paths. Scriptorium
 // invokes them; Repo Canon reads nothing Scriptorium owns.
@@ -141,6 +142,10 @@ export type RunnerPin = {
   clone: string;
   commit: string;
   image: string | null;
+  // Why the pass has no image when the default branch's Dockerfile is
+  // missing or did not build. Without either, a host cause kept the pass
+  // from building it.
+  imageProblem: string | null;
   // The account the validator posts as, which the repository names in
   // `contractResult.author`: the runner account itself.
   validator: string;
@@ -200,25 +205,29 @@ export function createRunner(ports: RunnerPorts) {
     join(root(repository), "state.json");
 
   // A repository that stopped naming this host, even while it was down,
-  // loses its cursor, so naming it again catches up once more.
-  const repositories = join(ports.stateDirectory, "repositories");
-  const directories = (path: string) =>
-    existsSync(path)
-      ? readdirSync(path, { withFileTypes: true }).flatMap((entry) =>
-          entry.isDirectory() ? [entry.name] : [],
-        )
-      : [];
-  for (const owner of directories(repositories))
-    for (const name of directories(join(repositories, owner)))
-      if (!runner.has(`${owner}/${name}`.toLowerCase()))
-        rmSync(root(`${owner}/${name}`), { recursive: true, force: true });
-      // Checkouts and inputs a stopped process left behind.
-      else
-        for (const work of ["heads", "inputs", "trusted"])
-          rmSync(join(root(`${owner}/${name}`), work), {
-            recursive: true,
-            force: true,
-          });
+  // loses its cursor, so naming it again catches up once more. The host
+  // calls this once the containers a stopped process left are gone, as one
+  // may still write into its head checkout.
+  function start() {
+    const repositories = join(ports.stateDirectory, "repositories");
+    const directories = (path: string) =>
+      existsSync(path)
+        ? readdirSync(path, { withFileTypes: true }).flatMap((entry) =>
+            entry.isDirectory() ? [entry.name] : [],
+          )
+        : [];
+    for (const owner of directories(repositories))
+      for (const name of directories(join(repositories, owner)))
+        if (!runner.has(`${owner}/${name}`.toLowerCase()))
+          rmSync(root(`${owner}/${name}`), { recursive: true, force: true });
+        // Checkouts and inputs a stopped process left behind.
+        else
+          for (const work of ["heads", "inputs", "trusted"])
+            rmSync(join(root(`${owner}/${name}`), work), {
+              recursive: true,
+              force: true,
+            });
+  }
 
   function load(repository: string): State | null {
     if (!states.has(repository)) {
@@ -509,6 +518,12 @@ export function createRunner(ports: RunnerPorts) {
           }),
         );
       else {
+        // A pass whose image is missing for a host cause holds the head,
+        // its image build included, for a pass that has the image.
+        if (pin.image === null && pin.imageProblem === null)
+          throw new Error(
+            "the latest pass has no sandbox image from the default branch",
+          );
         // The check command comes from the same pinned commit as the entry
         // points, never from the head.
         const command = readFactoryConfiguration(
@@ -534,9 +549,11 @@ export function createRunner(ports: RunnerPorts) {
             ports.report(
               `${repository} runner has no checkCommand in ${factoryConfigurationPath}; #${delivery.pullRequest} at ${delivery.head} gets no check-command run`,
             );
+          // The head's check is skipped for good, as a fork's is, so the
+          // lane never stalls behind the default branch's Dockerfile.
           else if (pin.image === null)
             ports.report(
-              `${repository} runner has no sandbox image from the default branch; #${delivery.pullRequest} at ${delivery.head} gets no check-command run`,
+              `${repository} runner has no sandbox image: ${pin.imageProblem}; #${delivery.pullRequest} at ${delivery.head} gets no check-command run`,
             );
           else {
             // The container outlives a stopped `docker` client, so the
@@ -699,7 +716,7 @@ export function createRunner(ports: RunnerPorts) {
     }
   }
 
-  return { observe, request, disable };
+  return { start, observe, request, disable };
 }
 
 export type Runner = ReturnType<typeof createRunner>;
@@ -800,14 +817,19 @@ function issueEvents(
     if (!stored) {
       // A comment the host never copied is new only when it was created in
       // the window; on an issue it never observed, an older one is history
-      // unless it was edited in the window.
-      if (after(comment.createdAt, known ? since : window))
+      // unless it was edited in the window. A new one edited since keeps
+      // that edit as its own event, both carrying the body observed.
+      const created = after(comment.createdAt, known ? since : window);
+      if (created)
         add(
           `created:${comment.id}`,
           comment.createdAt,
           event("commentCreated", comment.author, fields(copy(comment))),
         );
-      else if (!known && after(comment.editedAt, window))
+      if (
+        (created && comment.editedAt !== comment.createdAt) ||
+        (!created && !known && after(comment.editedAt, window))
+      )
         add(
           `edited:${comment.id}:${comment.editedAt}`,
           comment.editedAt,
@@ -924,8 +946,9 @@ function quote(argument: string): string {
 }
 
 // The host environment an entry point gets: what Node.js and Docker need,
-// and the runner account's token, never the host's own tokens, keys or
-// configuration.
+// host Git's settings for every Git it starts, as its checkouts are
+// untrusted, and the runner account's token, never the host's own tokens,
+// keys or configuration.
 const passed = [
   "PATH",
   "HOME",
@@ -941,11 +964,13 @@ export function entryPointEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
   return {
-    ...Object.fromEntries(
-      passed.flatMap((name) =>
-        environment[name] === undefined ? [] : [[name, environment[name]!]],
+    ...(hostGitEnvironment(
+      Object.fromEntries(
+        passed.flatMap((name) =>
+          environment[name] === undefined ? [] : [[name, environment[name]!]],
+        ),
       ),
-    ),
+    ) as Record<string, string>),
     POSTERN_TOKEN: token,
   };
 }
