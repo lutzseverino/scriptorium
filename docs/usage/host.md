@@ -1274,7 +1274,8 @@ login's API key and tokens. It redacts them from:
 
 - the process log;
 - each run's log, which it copies line by line from the raw log Sandcastle
-  writes into the run's private directory;
+  writes into the run's private directory, where a Codex run also records the
+  message of each Codex `error` and `turn.failed` event as it arrives;
 - the status file's reasons.
 
 A restarted process redacts the tokens it printed itself; the earlier
