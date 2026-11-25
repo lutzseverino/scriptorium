@@ -100,7 +100,13 @@ export function repositoryPlatform(
     configuration.contractResult,
     isRunComment,
   );
-  const comments = issueComments(issueTracker, configuration, evidenceIds, now);
+  const comments = issueComments(
+    issueTracker,
+    configuration,
+    evidenceIds,
+    now,
+    repositoryOwner,
+  );
   // An issue as the decision core identifies it: its number in this
   // repository, or `<path>#<n>` in another.
   const id = (linked: IssueReference): IssueId =>
@@ -156,6 +162,51 @@ export function repositoryPlatform(
         "Comment deletion history could not be read",
       );
     return nodes.length === 0 ? null : (nodes[0].createdAt as string);
+  }
+
+  // The login of the repository's owner when that owner is a user, and
+  // nothing for an organization or another platform. A read that fails
+  // rejects, so nobody is guessed.
+  // https://docs.github.com/en/graphql/reference/interfaces#repositoryowner
+  let owner: Promise<string | undefined> | undefined;
+  function repositoryOwner(): Promise<string | undefined> {
+    if (connection.repository.platform !== "github")
+      return Promise.resolve(undefined);
+    owner ??= (async () => {
+      const [login, name] = path.split("/");
+      const response = await access.request({
+        method: "POST",
+        path: "/graphql",
+        body: {
+          query: `query FactoryRepositoryOwner($owner: String!, $name: String!) {
+            repository(owner: $owner, name: $name) { owner { __typename login } }
+          }`,
+          variables: { owner: login, name },
+        },
+      });
+      const result = response.data as {
+        errors?: unknown;
+        data?: {
+          repository?: { owner?: { __typename?: unknown; login?: unknown } };
+        };
+      } | null;
+      const found = result?.data?.repository?.owner;
+      if (
+        result?.errors ||
+        typeof found?.login !== "string" ||
+        !found.login.trim() ||
+        (found.__typename !== "User" && found.__typename !== "Organization")
+      )
+        throw new PlatformError(
+          "invalidResponse",
+          "The repository's owner could not be read",
+        );
+      return found.__typename === "User" ? found.login : undefined;
+    })().catch((error: unknown) => {
+      owner = undefined;
+      throw error;
+    });
+    return owner;
   }
 
   // The validator's decision on a ready issue, checked against the issue's

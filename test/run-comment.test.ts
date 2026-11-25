@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Comment, IssueTracker } from "@lutzseverino/postern";
+import type { Account, Comment, IssueTracker } from "@lutzseverino/postern";
 import {
   isFactoryComment,
   issueComments,
@@ -10,14 +10,21 @@ import {
 import { parseRunResult } from "../src/run-result.ts";
 
 // The run comment writer over a fake issue tracker that keeps one issue's
-// comments, written by the factory's bot account, and fails the writes the
-// test asks it to.
+// comments, written by the factory's bot account, and its author, and fails
+// the writes the test asks it to.
 function tracker(existing: Comment[] = []) {
   const comments = [...existing];
   const writes: string[] = [];
   const failing = new Set<string>();
+  const issue: { author: Account | null | Error } = {
+    author: { login: "reporter", bot: false },
+  };
   let next = 100;
   const fake = {
+    async issue() {
+      if (issue.author instanceof Error) throw issue.author;
+      return { author: issue.author };
+    },
     async comments() {
       return comments.map((comment) => ({ ...comment }));
     },
@@ -44,7 +51,7 @@ function tracker(existing: Comment[] = []) {
       return { ...comment };
     },
   } as unknown as IssueTracker;
-  return { tracker: fake, comments, writes, failing };
+  return { tracker: fake, comments, writes, failing, issue };
 }
 
 const configuration = {
@@ -189,7 +196,7 @@ test("a pass through every phase leaves one run comment, edited in place, and ac
   assert.equal(fake.comments.filter(action).length, 1);
   assert.match(
     fake.comments.find(action)!.body,
-    /^The factory waits in `reporter` for an answer\. See \[the run comment\]\(https:\/\/platform\.test\/c\/100\)\.\n/,
+    /^👤 The factory waits in `reporter` for an answer\. See \[the run comment\]\(https:\/\/platform\.test\/c\/100\)\.\n/,
   );
   const body = fake.comments.find(run)!.body;
   assert.equal(lead(body), "### ✅ Merged");
@@ -206,6 +213,160 @@ test("a pass through every phase leaves one run comment, edited in place, and ac
     body,
     /\n<sub>Factory run, edited in place · updated \d\d:\d\dZ<\/sub>\n<!-- scriptorium:run /,
   );
+});
+
+test("a person who must act is mentioned in the run comment's lead line and alert and in the action", async () => {
+  // A stop that asks the owner, after its run left a result.
+  const stop = async (
+    write: ReturnType<typeof issueComments>["write"],
+    mention: RunUpdate["mention"],
+    key: string,
+  ) => {
+    await write(4, {
+      phase: "triage",
+      facts: { ...facts, state: "running" },
+    });
+    await write(4, {
+      phase: "triage",
+      facts: { link: "https://platform.test/r/1" },
+      result: { body: "## Should the client call v2?\n\nDetails." },
+    });
+    await write(
+      4,
+      {
+        phase: "triage",
+        facts: { state: "stopped", reason: "waits in `owner`", waits: "owner" },
+        mention,
+      },
+      { key, stopped: "owner" },
+    );
+  };
+  const configured = {
+    ...configuration,
+    labels: { ...configuration.labels, owner: "owner" },
+  };
+  // A user owner by default.
+  const owned = tracker();
+  const { write } = issueComments(
+    owned.tracker,
+    configured,
+    undefined,
+    undefined,
+    async () => "octo",
+  );
+  await stop(write, "maintainers", "stop:a");
+  const body = owned.comments.find(run)!.body;
+  assert.equal(lead(body), "### 👤 Waiting for an answer · @octo must act");
+  assert.equal(
+    body.split("\n").slice(1, 5).join("\n"),
+    "\n> [!IMPORTANT]\n> @octo: Should the client call v2?\n",
+  );
+  // The action leads with its marker, mention and summary, keeps its answer
+  // sentence and ends with the run comment's link.
+  assert.equal(
+    owned.comments.find(action)!.body.split("\n")[0],
+    "👤 **@octo, Should the client call v2?** The factory waits in `owner` for an answer. See [the run comment](https://platform.test/c/100).",
+  );
+  // Once work resumes, nobody must act.
+  await write(4, {
+    phase: "implement",
+    facts: { ...facts, state: "running" },
+  });
+  const resumed = owned.comments.find(run)!.body;
+  assert.equal(lead(resumed), "### 🔄 Implementing");
+  assert.doesNotMatch(resumed, /@octo|\[!IMPORTANT\]/);
+
+  // Configured logins replace the owner, on one line.
+  const listed = tracker();
+  await stop(
+    issueComments(
+      listed.tracker,
+      { ...configured, comments: { mention: ["alice", "@bob"] } },
+      undefined,
+      undefined,
+      async () => "octo",
+    ).write,
+    "maintainers",
+    "stop:a",
+  );
+  assert.match(
+    listed.comments.find(action)!.body,
+    /^👤 \*\*@alice, @bob, Should the client call v2\?\*\* /,
+  );
+  assert.equal(
+    lead(listed.comments.find(run)!.body),
+    "### 👤 Waiting for an answer · @alice, @bob must act",
+  );
+
+  // A reporter stop mentions the issue's author, never a bot.
+  const reported = tracker();
+  await stop(
+    issueComments(
+      reported.tracker,
+      configured,
+      undefined,
+      undefined,
+      async () => "octo",
+    ).write,
+    "author",
+    "stop:a",
+  );
+  assert.match(reported.comments.find(action)!.body, /^👤 \*\*@reporter, /);
+  const filed = tracker();
+  filed.issue.author = { login: "factory[bot]", bot: true };
+  await stop(
+    issueComments(
+      filed.tracker,
+      configured,
+      undefined,
+      undefined,
+      async () => "octo",
+    ).write,
+    "author",
+    "stop:a",
+  );
+  assert.match(filed.comments.find(action)!.body, /^👤 The factory waits in /);
+
+  // An organization owner, an empty list, a failed read or nobody asked:
+  // no mention and no alert.
+  for (const [owner, comments, mention, read] of [
+    [async () => undefined, undefined, "maintainers", undefined],
+    [async () => "octo", { mention: [] }, "maintainers", undefined],
+    [
+      async () => {
+        throw new Error("owner read failed");
+      },
+      undefined,
+      "maintainers",
+      undefined,
+    ],
+    [async () => "octo", undefined, "author", new Error("issue read failed")],
+    [async () => "octo", undefined, undefined, undefined],
+  ] as const) {
+    const nobody = tracker();
+    if (read) nobody.issue.author = read;
+    await stop(
+      issueComments(
+        nobody.tracker,
+        {
+          ...configured,
+          ...(comments && { comments: { mention: [...comments.mention] } }),
+        },
+        undefined,
+        undefined,
+        owner,
+      ).write,
+      mention,
+      "stop:a",
+    );
+    const unmentioned = nobody.comments.find(run)!.body;
+    assert.equal(lead(unmentioned), "### 👤 Waiting for an answer");
+    assert.doesNotMatch(unmentioned, /@(?!high)|\[!IMPORTANT\]/);
+    assert.match(
+      nobody.comments.find(action)!.body,
+      /^👤 The factory waits in `owner` for an answer\. See /,
+    );
+  }
 });
 
 test("outside a phase a custom template reads the written phase's facts, which no other phase shows as its own", async () => {
@@ -473,7 +634,7 @@ test("a write after a final one starts the next pass, and a retried final write 
   assert.equal(lead(fake.comments[0].body), "### ❌ Failed");
   assert.match(
     fake.comments[1].body,
-    /^The factory run failed: no pull request\. Remove `failed` to run it again\. See \[the run comment\]\(https:\/\/platform\.test\/c\/100\)\.\n/,
+    /^❌ The factory run failed: no pull request\. Remove `failed` to run it again\. See \[the run comment\]\(https:\/\/platform\.test\/c\/100\)\.\n/,
   );
   // Removing the failed label to retry starts a new pass, and a new action.
   await write(4, { phase: "implement", facts: { ...facts, state: "running" } });

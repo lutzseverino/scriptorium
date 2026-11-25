@@ -560,6 +560,40 @@ test("a run kind's result label families and the run result frame's disclaimers 
   );
 });
 
+test("comments.mention is an optional list of logins in either version", (t) => {
+  const path = join(directory(t), "config.json");
+  const v2 = JSON.parse(readFileSync(fixture("valid"), "utf8"));
+  for (const base of [v2, implementOnly])
+    for (const mention of [["octo", "@hubot"], []]) {
+      const configured = { ...base, comments: { mention } };
+      writeFileSync(path, JSON.stringify(configured));
+      assert.deepEqual(readFactoryConfiguration(path), configured);
+    }
+  for (const base of [v2, implementOnly]) {
+    invalid(t, { ...base, comments: { mention: "octo" } }, [
+      "comments.mention: is not an array",
+    ]);
+    invalid(t, { ...base, comments: { mention: ["octo", "", 3, " hubot"] } }, [
+      "comments.mention[1]: is not a non-empty trimmed string",
+      "comments.mention[2]: is not a non-empty trimmed string",
+      "comments.mention[3]: is not a non-empty trimmed string",
+    ]);
+  }
+});
+
+test("the comment templates guide's example is a valid configuration", (t) => {
+  const guide = readFileSync(
+    new URL("../docs/usage/factory-configuration.md", import.meta.url),
+    "utf8",
+  );
+  const example = /\n## Comment templates\n[^]*?\n```json\n([^]*?)\n```\n/.exec(
+    guide,
+  )![1];
+  const path = join(directory(t), "config.json");
+  writeFileSync(path, example);
+  assert.deepEqual(readFactoryConfiguration(path), JSON.parse(example));
+});
+
 test("arguments expand {issue}, and in version 3 {pullRequest}, which a launch without one cannot use", () => {
   const configuration = readFactoryConfiguration(fixture("version-3"));
   assert.equal(launchArguments(configuration, "review", 4, 42), "#42");

@@ -415,7 +415,7 @@ values are invalid.
 | `modelLabelPrefix`      | The prefix of model labels. With this example, `agent:gpt-5.5@high` resolves against the host's configured provider registry.                   |
 | `skill`                 | The skill name as a non-empty trimmed string, without the provider's invocation prefix.                                                         |
 | `arguments`             | A string of skill arguments. Every `{issue}` expands to the issue number; other text and whitespace are preserved. An empty string is valid.    |
-| `comments`              | Optional object with optional `run`, `action` and `close` comment templates. Each supplied entry is a non-empty string.                         |
+| `comments`              | Optional object with optional `run`, `action` and `close` comment templates, each a non-empty string, and optional `mention` logins.            |
 
 Version 1 configurations, the old `prompt` field, and version 2
 configurations without `contractResult` are refused, each with the fields at
@@ -602,13 +602,28 @@ run and parent-close comments:
 ```
 
 Omitting `comments`, supplying `"comments": {}`, or omitting an individual
-entry uses the relevant default, in either version. Supplied entries must be
+entry uses the relevant default, in either version. Supplied templates must be
 non-empty JSON strings; whitespace and newlines are preserved. Encode a
 newline as `\n` in JSON. No placeholder is required, so a fixed comment is
 valid. No disclaimer is injected; put any repository-required disclaimer in
 each template. Scriptorium v4 replaced the `pause`, `failure` and
 `awaitingMerge` templates with `run` and `action`, and refuses the old names
 in both versions: remove them, or move their wording to the new templates.
+
+`comments.mention` lists the logins the run and action comments mention when
+a person other than a reporter must act: a stop in the grill or owner state,
+a failure, or a gate that review stopped at. It is optional in either version, and
+each entry is a non-empty trimmed string, a login with or without its leading
+`@`. A reporter stop always mentions the issue's author, unless a bot filed
+it. Without `comments.mention`, the factory mentions the repository's owner
+when that owner is a user, and nobody for an organization, on a platform
+other than GitHub, or when it cannot read the owner. An empty list mentions
+nobody. A stop in the triage state, a carried stop and a pass where nobody
+must act mention nobody. For example:
+
+```json
+"comments": { "mention": ["octocat", "hubot"] }
+```
 
 A [run result](host.md#run-results)'s frame is not a template: its body comes
 first, followed by a `<sub>` footer with the disclosure and run facts, then
@@ -652,11 +667,11 @@ phase inserted directly inserts nothing; use a section to supply per-item or
 per-phase formatting. Inserted values are text, never parsed as more template
 syntax. These are the only names for each comment:
 
-| Comment  | Names                                                                                                                                                                                                                                                                         |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`    | `status`, `icon`, `failure`, `updated`, `pause`, `triage`, `implement`, `review`, `merge`, `result`, and within a phase `icon`, `check`, `state`, `reason`, `reset`, `provider`, `model`, `effort`, `standIn`, `attempt`, `round`, `link`, `summary`, `outcome`, `unpushable` |
-| `action` | `failed`, `stopped`, `owner`, `reporter`, `grill`, `ready`, `resume`, `triage`, `carried`, `gate`, `reason`, `unpushable`, `link`                                                                                                                                             |
-| `close`  | `tickets`                                                                                                                                                                                                                                                                     |
+| Comment  | Names                                                                                                                                                                                                                                                                                    |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`    | `status`, `icon`, `failure`, `updated`, `pause`, `mention`, `triage`, `implement`, `review`, `merge`, `result`, and within a phase `icon`, `check`, `state`, `reason`, `reset`, `provider`, `model`, `effort`, `standIn`, `attempt`, `round`, `link`, `summary`, `outcome`, `unpushable` |
+| `action` | `failed`, `stopped`, `mention`, `summary`, `owner`, `reporter`, `grill`, `ready`, `resume`, `triage`, `carried`, `gate`, `reason`, `unpushable`, `link`                                                                                                                                  |
+| `close`  | `tickets`                                                                                                                                                                                                                                                                                |
 
 For `run`, `status` is the pass's state, as the latest written phase leaves
 it: `Triaging`, `Implementing`, `Reviewing` or `Merging` while that phase
@@ -676,7 +691,10 @@ only when the pass failed; `updated` is the time of the comment's latest
 change, such as `13:19Z`, in UTC, which a write that changes nothing keeps;
 and `pause` is a paused pass's cause, followed by `, resumes at <reset>` when
 it has a reset, such as `usage limit, resumes at 18:00Z` or `pause
-threshold`, present only while the pass is paused.
+threshold`, present only while the pass is paused. `mention` is whoever must
+act, as [`comments.mention`](#comment-templates) describes: their `@login`s,
+joined by `, ` on one line, such as `@octocat, @hubot`, present only when a
+person must act and the factory can name them.
 
 Each phase, `triage`, `implement`, `review` and `merge`, is present while it
 shows: implement and merge always, review once the repository turns it on,
@@ -716,7 +734,9 @@ new trusted triage trigger answers it: `no new trusted triage trigger`. For a
 failure, `reason` is the failure, `triage` is the triage label
 only when a triage run failed in a repository that runs triage, and
 `unpushable` the code-formatted unpushable paths, joined with commas, present
-only when at least one exists. `link` is the run comment's
+only when at least one exists. `mention` is whoever must act, as for `run`,
+and `summary` the lead line of the stopped or failed phase's latest run
+result, as the run comment's `summary`. `link` is the run comment's
 URL. `tickets` contains closed-ticket references such as `#4` or
 `owner/repo#4`.
 
@@ -739,13 +759,13 @@ comment's four outcome-line sections differ only in their names and titles.
 Run:
 
 ```json
-"### {icon} {status}{#pause}: {pause}{/pause}\n{#failure}\n> [!CAUTION]\n> {failure}\n{#unpushable}> - Unpushable: `{unpushable}`\n{/unpushable}{/failure}\n{#triage}{icon} Triage → {/triage}{#implement}{icon} Implement{/implement}{#review} → {icon} Review{/review} → {#merge}{icon} Merge{/merge}\n{#triage}{#outcome}\n**Triage:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/triage}{#implement}{#outcome}\n**Implement:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/implement}{#review}{#outcome}\n**Review:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/review}{#merge}{#outcome}\n**Merge:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/merge}\n<sub>Factory run, edited in place{#provider} · `{provider}/{model}@{effort}`{#standIn}, {standIn}{/standIn}, attempt {attempt}{#round}, round {round}{/round}{/provider} · updated {updated}</sub>"
+"### {icon} {status}{#pause}: {pause}{/pause}{#mention} · {mention} must act{/mention}\n{#failure}\n> [!CAUTION]\n> {failure}\n{#unpushable}> - Unpushable: `{unpushable}`\n{/unpushable}{/failure}{#mention}{#summary}\n> [!IMPORTANT]\n> {mention}: {summary}\n{/summary}{/mention}\n{#triage}{icon} Triage → {/triage}{#implement}{icon} Implement{/implement}{#review} → {icon} Review{/review} → {#merge}{icon} Merge{/merge}\n{#triage}{#outcome}\n**Triage:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/triage}{#implement}{#outcome}\n**Implement:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/implement}{#review}{#outcome}\n**Review:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/review}{#merge}{#outcome}\n**Merge:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/merge}\n<sub>Factory run, edited in place{#provider} · `{provider}/{model}@{effort}`{#standIn}, {standIn}{/standIn}, attempt {attempt}{#round}, round {round}{/round}{/provider} · updated {updated}</sub>"
 ```
 
 Action:
 
 ```json
-"{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}`{#triage} and apply `{triage}` again, removing it first if the issue carries it,{/triage} to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#reason} With {reason}, a person must remove and re-apply `{triage}` to triage it again. An edit or a comment alone starts nothing.{/reason}{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
+"{#failed}❌{/failed}{#stopped}👤{/stopped}{#gate}👤{/gate}{#mention} **{mention}{#summary}, {summary}{/summary}**{/mention} {#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}`{#triage} and apply `{triage}` again, removing it first if the issue carries it,{/triage} to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#reason} With {reason}, a person must remove and re-apply `{triage}` to triage it again. An edit or a comment alone starts nothing.{/reason}{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
 ```
 
 Parent close:

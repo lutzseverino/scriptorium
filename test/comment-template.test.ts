@@ -105,14 +105,16 @@ test("an object's section renders once with its facts in scope, and inserts noth
   );
 });
 
-// The published default, as the docs list it.
+// The published defaults, as the docs list them.
+const guide = readFileSync(
+  new URL("../docs/usage/factory-configuration.md", import.meta.url),
+  "utf8",
+);
 const publishedRun = JSON.parse(
-  /\nRun:\n\n```json\n(".*")\n```/.exec(
-    readFileSync(
-      new URL("../docs/usage/factory-configuration.md", import.meta.url),
-      "utf8",
-    ),
-  )![1],
+  /\nRun:\n\n```json\n(".*")\n```/.exec(guide)![1],
+);
+const publishedAction = JSON.parse(
+  /\nAction:\n\n```json\n(".*")\n```/.exec(guide)![1],
 );
 
 test("the default run comment is the published one: lead line, pipeline line, outcome lines and footer", () => {
@@ -192,7 +194,7 @@ test("the default action comment names its occasion's label in one line linking 
       reason: "the run ended without an open pull request",
       link,
     }),
-    "The factory run failed: the run ended without an open pull request. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
+    "❌ The factory run failed: the run ended without an open pull request. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     renderComment("action", undefined, {
@@ -201,7 +203,7 @@ test("the default action comment names its occasion's label in one line linking 
       unpushable: "`a.yml`, `b.yml`",
       link,
     }),
-    "The factory run failed: its branch changes paths the factory can't push. A person with permission to push `a.yml`, `b.yml` must deliver the change. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
+    "❌ The factory run failed: its branch changes paths the factory can't push. A person with permission to push `a.yml`, `b.yml` must deliver the change. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
   );
   // A failed triage run's trigger is consumed, so it names the triage state.
   assert.equal(
@@ -211,15 +213,124 @@ test("the default action comment names its occasion's label in one line linking 
       triage: "state:triage",
       link,
     }),
-    "The factory run failed: the run left no run result. Remove `broken` and apply `state:triage` again, removing it first if the issue carries it, to run it again. See [the run comment](https://platform.test/c/9).",
+    "❌ The factory run failed: the run left no run result. Remove `broken` and apply `state:triage` again, removing it first if the issue carries it, to run it again. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     renderComment("action", undefined, { stopped: "state:owner", link }),
-    "The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     renderComment("action", undefined, { gate: "gate:owner-review", link }),
-    "Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/c/9).",
+    "👤 Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/c/9).",
+  );
+});
+
+test("the default comments address whoever must act: run comment lead line and alert, action lead", () => {
+  const phases = { implement: { icon: "👤" }, merge: { icon: "⬜" } };
+  const waiting = {
+    icon: "👤",
+    status: "Waiting for an answer",
+    summary: "Publish a patch now, or in the next release?",
+    updated: "13:19Z",
+    ...phases,
+  };
+  const mentioned = renderComment("run", publishedRun, {
+    ...waiting,
+    mention: "@owner",
+  });
+  assert.equal(
+    renderComment("run", undefined, { ...waiting, mention: "@owner" }),
+    mentioned,
+  );
+  assert.deepEqual(mentioned.split("\n").slice(0, 6), [
+    "### 👤 Waiting for an answer · @owner must act",
+    "",
+    "> [!IMPORTANT]",
+    "> @owner: Publish a patch now, or in the next release?",
+    "",
+    "👤 Implement → ⬜ Merge",
+  ]);
+  // Nobody to mention: no mention and no alert.
+  assert.deepEqual(
+    renderComment("run", undefined, waiting).split("\n").slice(0, 3),
+    ["### 👤 Waiting for an answer", "", "👤 Implement → ⬜ Merge"],
+  );
+  // A failure keeps its caution alert apart from the important one.
+  assert.deepEqual(
+    renderComment("run", undefined, {
+      icon: "❌",
+      status: "Failed",
+      failure: "unpushable paths",
+      unpushable: ["a.yml"],
+      mention: "@alice, @bob",
+      summary: "The workflow edit needs a person.",
+      ...phases,
+    })
+      .split("\n")
+      .slice(0, 9),
+    [
+      "### ❌ Failed · @alice, @bob must act",
+      "",
+      "> [!CAUTION]",
+      "> unpushable paths",
+      "> - Unpushable: `a.yml`",
+      "",
+      "> [!IMPORTANT]",
+      "> @alice, @bob: The workflow edit needs a person.",
+      "",
+    ],
+  );
+
+  const link = "https://platform.test/c/9";
+  const asked = {
+    stopped: "state:owner",
+    owner: "state:owner",
+    mention: "@owner",
+    summary: "Approved",
+    link,
+  };
+  assert.equal(
+    renderComment("action", publishedAction, asked),
+    renderComment("action", undefined, asked),
+  );
+  assert.equal(
+    renderComment("action", undefined, {
+      stopped: "state:owner",
+      owner: "state:owner",
+      triage: "state:triage",
+      mention: "@owner",
+      summary: "Publish a patch now, or in the next release?",
+      link,
+    }),
+    "👤 **@owner, Publish a patch now, or in the next release?** The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    renderComment("action", undefined, {
+      failed: "broken",
+      reason: "its branch changes paths the factory can't push",
+      unpushable: "`a.yml`",
+      mention: "@alice, @bob",
+      link,
+    }),
+    "❌ **@alice, @bob** The factory run failed: its branch changes paths the factory can't push. A person with permission to push `a.yml` must deliver the change. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    renderComment("action", undefined, {
+      gate: "gate:owner-review",
+      mention: "@owner",
+      summary: "Approved",
+      link,
+    }),
+    "👤 **@owner, Approved** Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/c/9).",
+  );
+  // Without a mention, the summary is left to the run comment.
+  assert.equal(
+    renderComment("action", undefined, {
+      stopped: "state:owner",
+      summary: "Publish a patch now, or in the next release?",
+      link,
+    }),
+    "👤 The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/c/9).",
   );
 });
 
@@ -254,26 +365,26 @@ test("every default stop comment names the states that answer it", () => {
   for (const resume of ["implement", "review"] as const)
     assert.equal(
       stop("state:owner", { triage: true, resume }),
-      `The factory waits in \`state:owner\` for an answer. To answer, apply \`state:ready\` at the unchanged approved contract to resume the stopped ${resume} run, \`state:triage\` to triage it again, \`state:carried\` to hold the request, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).`,
+      `👤 The factory waits in \`state:owner\` for an answer. To answer, apply \`state:ready\` at the unchanged approved contract to resume the stopped ${resume} run, \`state:triage\` to triage it again, \`state:carried\` to hold the request, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).`,
     );
   // A triage run's owner stop leaves no work to resume.
   assert.equal(
     stop("state:owner", { triage: true }),
-    "The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, `state:carried` to hold the request, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, `state:carried` to hold the request, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
   );
   // Without triage or a carried state, neither is named.
   const { carried: _, ...uncarried } = labels;
   assert.equal(
     stop("state:owner", { triage: false, resume: "implement" }, uncarried),
-    "The factory waits in `state:owner` for an answer. To answer, apply `state:ready` at the unchanged approved contract to resume the stopped implement run, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:owner` for an answer. To answer, apply `state:ready` at the unchanged approved contract to resume the stopped implement run, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     stop("state:reporter", { triage: true, resume: "implement" }),
-    "The factory waits in `state:reporter` for an answer. The reporter answers by replying here. A person may instead apply `state:triage` to triage it again, or close the issue. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:reporter` for an answer. The reporter answers by replying here. A person may instead apply `state:triage` to triage it again, or close the issue. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     stop("state:grill", { triage: true }),
-    "The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:triage` to triage it again, `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:triage` to triage it again, `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
   );
   // A triage-state stop no trusted trigger answers names its re-application.
   assert.equal(
@@ -281,15 +392,15 @@ test("every default stop comment names the states that answer it", () => {
       triage: true,
       reason: "no new trusted triage trigger",
     }),
-    "The factory waits in `state:triage` for an answer. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again. An edit or a comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:triage` for an answer. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again. An edit or a comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     stop("state:triage", { triage: true }),
-    "The factory waits in `state:triage` for an answer. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:triage` for an answer. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     stop("state:grill", { triage: false }),
-    "The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+    "👤 The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
   );
 });
 

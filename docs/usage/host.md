@@ -964,7 +964,8 @@ and no checkboxes:
 - a lead line, a heading with the pass's marker and state, such as
   `### 🔄 Implementing`, and for a paused pass its cause and, when it has
   one, its reset, such as `### ⏸️ Paused: usage limit, resumes at 18:00Z`
-  or `### ⏸️ Paused: pause threshold`;
+  or `### ⏸️ Paused: pause threshold`, and when a person must act, who, such
+  as `### 👤 Waiting for an answer · @octocat must act`;
 - a pipeline line of each phase's marker and name, such as
   `✅ Triage → 🔄 Implement → ⬜ Review → ⬜ Merge`;
 - an outcome line for each phase with a run result or a reason, such as
@@ -976,7 +977,18 @@ and no checkboxes:
   model and effort, the chosen model and reason when it ran as a stand-in,
   its attempt and review round, and the time of the comment's latest change.
 
-A failed pass adds a `> [!CAUTION]` alert with the failure. Triage shows once
+A failed pass adds a `> [!CAUTION]` alert with the failure. When a person
+must act, an `> [!IMPORTANT]` alert follows with their mention and the lead
+line of the stopped or failed phase's latest run result, when it left one,
+such as
+`> @octocat: Should the client call v2?`. The factory mentions the issue's
+author for a reporter stop and, for a stop in the grill or owner state, a
+failure or a gate, the
+[`comments.mention`](factory-configuration.md#comment-templates) logins or,
+by default, the repository's owner when that owner is a user. A pass where
+nobody must act, a stop in the triage state, a carried stop, and a person the
+factory cannot name, such as an organization owner, get no mention and no
+alert. Triage shows once
 it ran in the pass, and Review once the repository turns review on. A phase
 that starts, and a merge, finishes an earlier phase left running, paused or
 stopped; a review whose round handed the pull request back shows 🔁 while
@@ -1022,8 +1034,12 @@ report write succeeds.
 An action comment is posted fresh, once per occasion, only when a person must
 act: when a run's stop leaves the issue in the reporter, grill or owner state,
 or in the triage state alone with no new trusted triage trigger, when review
-stops at a gate, and when the run fails. It is one line naming the
-label to act on, with a link to the run comment, and mentions nobody. A stop's
+stops at a gate, and when the run fails. It is one line: a marker, ❌ for a
+failure and 👤 otherwise, then whoever must act and the stopped or failed
+phase's run result lead line in bold, such as
+`👤 **@octocat, Should the client call v2?**`, when the factory can name them,
+then the label to act on and a link to the run comment. It mentions whoever
+the run comment mentions; a triage-state stop mentions nobody. A stop's
 action also names the states that
 [answer](factory-configuration.md#answers) it. A failed triage run's action,
 and a triage-state stop's, names the triage label's new application, since
