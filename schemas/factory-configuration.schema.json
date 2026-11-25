@@ -51,6 +51,12 @@
         },
         "triageDisclaimer": {
           "$ref": "#/definitions/text"
+        },
+        "mention": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/text"
+          }
         }
       }
     },

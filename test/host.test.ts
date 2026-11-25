@@ -237,6 +237,8 @@ function fakePlatform(
   const quotaHeaders: Record<string, Record<string, string>> = {};
   const graphqlQuotas: Record<string, { remaining: number; reset?: number }> =
     {};
+  // Each repository's owner, an organization unless a test makes it a user.
+  const owners: Record<string, { type: "User" | "Organization" } | Error> = {};
 
   const latest = (items: TimelineEvent[]) =>
     items
@@ -664,6 +666,25 @@ function fakePlatform(
             query: string;
             variables: { number: number };
           };
+          if (body.query.includes("FactoryRepositoryOwner")) {
+            await request("repositoryOwner");
+            const owner = owners[repository] ?? { type: "Organization" };
+            if (owner instanceof Error) throw owner;
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                data: {
+                  repository: {
+                    owner: {
+                      __typename: owner.type,
+                      login: repository.split("/")[0],
+                    },
+                  },
+                },
+              },
+            };
+          }
           if (body.query.includes("FactoryFilingAccount")) {
             await request("filingAccount");
             const viewer = viewers[repository] ?? account("factory[bot]");
@@ -969,6 +990,7 @@ function fakePlatform(
     quotas,
     quotaHeaders,
     graphqlQuotas,
+    owners,
     calls,
     labels,
     viewers,
@@ -3456,7 +3478,7 @@ test("a failed first run retries with its failure and log tail after the provide
   assert.equal(actions(issue).length, 1);
   assert.equal(
     actions(issue)[0].split("\n")[0],
-    "The factory run failed: the run ended without an open pull request. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
+    "❌ The factory run failed: the run ended without an open pull request. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
   );
   assert.deepEqual(run.github.find("acme/widgets", 4).labels, [
     "ready-for-agent",
@@ -3860,7 +3882,7 @@ test("an ended run awaiting merge shows it on its run comment across polls, labe
   assert.equal(actions(issue).length, 1);
   assert.match(
     actions(issue)[0],
-    /^The factory run failed: its pull request merged without closing the issue/,
+    /^❌ The factory run failed: its pull request merged without closing the issue/,
   );
 });
 
@@ -5694,7 +5716,7 @@ test("an orphaned second attempt with no interrupted record fails after startup 
   const issue = run.github.find("acme/widgets", 4);
   assert.match(runComment(issue), /\n❌ Implement → ⬜ Merge\n/);
   assert.match(footerOf(runComment(issue)), /, attempt 2 · /);
-  assert.match(actions(issue)[0], /^The factory run failed: no factory run/);
+  assert.match(actions(issue)[0], /^❌ The factory run failed: no factory run/);
   assert.equal(recordOf(run.state, 4, 2).settled, true);
 });
 
@@ -5749,7 +5771,7 @@ for (const override of [false, true])
           ]
         : [
             "### ❌ Failed\n\n> [!CAUTION]\n> the run's branch changes paths the factory's GitHub App can't push\n> - Unpushable: `.github/workflows/new.yml`\n> - Unpushable: `.github/workflows/other.yml`\n\n❌ Implement → ⬜ Merge\n\n**Implement:** the run's branch changes paths the factory's GitHub App can't push\n\n<sub>Factory run, edited in place · updated 12:00Z</sub>",
-            "The factory run failed: the run's branch changes paths the factory's GitHub App can't push. A person with permission to push `.github/workflows/new.yml`, `.github/workflows/other.yml` must deliver the change. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
+            "❌ The factory run failed: the run's branch changes paths the factory's GitHub App can't push. A person with permission to push `.github/workflows/new.yml`, `.github/workflows/other.yml` must deliver the change. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
           ],
     );
   });
@@ -9985,7 +10007,7 @@ test("a review stopped at a gate is released with its PR, and resumes review onc
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/comment).",
+      "👤 Review stopped at a gate (gate:owner-review); remove it from the issue and its pull request to merge. See [the run comment](https://platform.test/comment).",
     ],
   );
   assert.match(
@@ -10034,7 +10056,7 @@ test("a full pass leaves one run comment from triage to merge, and asks a person
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
+      "👤 The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
     ],
   );
   // The pass's state lives in its comment, so a restart neither asks again
@@ -10331,7 +10353,7 @@ test("a failed triage run asks for the triage state again, and only its new appl
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory run failed: the sandbox had no network. Remove `factory:failed` and apply `state:triage` again, removing it first if the issue carries it, to run it again. See [the run comment](https://platform.test/comment).",
+      "❌ The factory run failed: the sandbox had no network. Remove `factory:failed` and apply `state:triage` again, removing it first if the issue carries it, to run it again. See [the run comment](https://platform.test/comment).",
     ],
   );
   // Removing the failed label alone finds the trigger consumed.
@@ -10379,9 +10401,147 @@ test("a failed implement run in a repository that runs triage still asks only fo
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory run failed: the tests need a database the sandbox lacks. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
+      "❌ The factory run failed: the tests need a database the sandbox lacks. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
     ],
   );
+});
+
+test("an owner stop mentions the repository's user owner in the run comment and its action, until work resumes", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  run.github.owners["acme/widgets"] = { type: "User" };
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "Which API should the client call?",
+  });
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(
+    actions(issue).map((comment) => comment.split("\n")[0]),
+    [
+      "👤 **@acme, Which API should the client call?** The factory waits in `state:owner` for an answer. To answer, apply `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
+    ],
+  );
+  assert.equal(
+    leadOf(runComment(issue)),
+    "### 👤 Waiting for an answer · @acme must act",
+  );
+  assert.match(
+    runComment(issue),
+    /\n\n> \[!IMPORTANT\]\n> @acme: Which API should the client call\?\n\n/,
+  );
+  // Once the work resumes, nobody must act.
+  issue.labels = ["state:ready"];
+  issue.timeline.push({
+    event: "labeled",
+    label: "state:ready",
+    actor: "owner",
+    at: "2026-10-09T12:00:00Z",
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(leadOf(runComment(issue)), "### 🔄 Implementing");
+  assert.doesNotMatch(runComment(issue), /@acme|\[!IMPORTANT\]/);
+});
+
+test("a reporter stop mentions the issue's author, not the owner", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, author: "outsider", labels: ["state:triage"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  run.github.owners["acme/widgets"] = { type: "User" };
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:reporter",
+    body: "Which version shows it?",
+  });
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(issue.labels, ["state:reporter"]);
+  assert.match(
+    actions(issue)[0],
+    /^👤 \*\*@outsider, Which version shows it\?\*\* The factory waits in `state:reporter` for an answer\. The reporter answers by replying here\./,
+  );
+  assert.equal(
+    leadOf(runComment(issue)),
+    "### 👤 Waiting for an answer · @outsider must act",
+  );
+  assert.doesNotMatch(runComment(issue), /@acme/);
+});
+
+test("a failure mentions the configured logins instead of the owner", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: {
+      "acme/widgets": remote(t, {
+        ...kindsFiles,
+        ".scriptorium/config.json": JSON.stringify({
+          ...kindsConventions,
+          comments: { mention: ["alice", "@bob"] },
+        }),
+      }),
+    },
+  });
+  run.github.owners["acme/widgets"] = { type: "User" };
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  for (let attempt = 0; !issue.labels.includes("factory:failed"); attempt++) {
+    assert.ok(attempt < 3, "the implement run fails");
+    run.launched.at(-1)!.finish(undefined, undefined, {
+      outcome: "failed",
+      reason: "the tests need a database the sandbox lacks",
+      body: "I could not run the tests.",
+    });
+    await run.drain();
+    await run.tick();
+  }
+  assert.deepEqual(
+    actions(issue).map((comment) => comment.split("\n")[0]),
+    [
+      "❌ **@alice, @bob, I could not run the tests.** The factory run failed: the tests need a database the sandbox lacks. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
+    ],
+  );
+  assert.equal(
+    leadOf(runComment(issue)),
+    "### ❌ Failed · @alice, @bob must act",
+  );
+  assert.match(runComment(issue), /> \[!CAUTION\]\n> the tests need/);
+  assert.match(
+    runComment(issue),
+    /> \[!IMPORTANT\]\n> @alice, @bob: I could not run the tests\./,
+  );
+  assert.doesNotMatch(runComment(issue), /@acme/);
+});
+
+test("an unreadable repository owner is not guessed, so nobody is mentioned", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  run.github.owners["acme/widgets"] = new Error("owner read failed");
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "Which API should the client call?",
+  });
+  await run.drain();
+  await run.tick();
+  assert.match(actions(issue)[0], /^👤 The factory waits in `state:owner`/);
+  assert.equal(leadOf(runComment(issue)), "### 👤 Waiting for an answer");
+  assert.doesNotMatch(runComment(issue), /\[!IMPORTANT\]/);
 });
 
 // An implement run ending once a bot moved its issue to the triage state, as
@@ -10414,6 +10574,8 @@ async function stoppedInTriage(
 
 test("a stop in the triage state that no trusted trigger answers asks once for its new application", async (t) => {
   const { run, issue } = await stoppedInTriage(t);
+  // The triage state asks nobody, so even a user owner goes unmentioned.
+  run.github.owners["acme/widgets"] = { type: "User" };
   run.launched[0].finish();
   await run.drain();
   await run.tick();
@@ -10422,10 +10584,11 @@ test("a stop in the triage state that no trusted trigger answers asks once for i
     runComment(issue),
     /\*\*Implement:\*\* (?:.* · )?waits in `state:triage`/,
   );
+  assert.doesNotMatch(runComment(issue), /@acme|\[!IMPORTANT\]/);
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory waits in `state:triage` for an answer. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again. An edit or a comment alone starts nothing. See [the run comment](https://platform.test/comment).",
+      "👤 The factory waits in `state:triage` for an answer. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again. An edit or a comment alone starts nothing. See [the run comment](https://platform.test/comment).",
     ],
   );
   // A body edit starts nothing, and neither a later pass nor a restart asks
@@ -10743,7 +10906,7 @@ test("a review stop while the gate read fails asks for its stop, not a gate", as
   assert.deepEqual(
     actions(issue).map((comment) => comment.split("\n")[0]),
     [
-      "The factory waits in `state:owner` for an answer. To answer, apply `state:ready` at the unchanged approved contract to resume the stopped review run, `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
+      "👤 The factory waits in `state:owner` for an answer. To answer, apply `state:ready` at the unchanged approved contract to resume the stopped review run, `state:triage` to triage it again, or close the issue. A comment alone starts nothing. See [the run comment](https://platform.test/comment).",
     ],
   );
 });
@@ -11745,7 +11908,7 @@ test("a failed result fails with its reason, and a run without a valid result fa
     [
       "### ❌ Failed",
       "I could not run the tests.",
-      "The factory run failed: the run left no run result at /run/factory/result/result.json. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
+      "❌ The factory run failed: the run left no run result at /run/factory/result/result.json. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
     ],
   );
   assert.match(

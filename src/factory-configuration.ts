@@ -31,6 +31,9 @@ type Common = {
     // run's result.
     disclaimer?: string;
     triageDisclaimer?: string;
+    // The logins to mention when a person other than a reporter must act;
+    // absent, the repository's owner when that owner is a user.
+    mention?: string[];
   };
 };
 
@@ -290,10 +293,18 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
         "close",
         "disclaimer",
         "triageDisclaimer",
+        "mention",
       ]);
       for (const name of ["disclaimer", "triageDisclaimer"])
         if (comments && Object.hasOwn(comments, name))
           text(comments[name], `comments.${name}`);
+      if (comments && Object.hasOwn(comments, "mention"))
+        if (!Array.isArray(comments.mention))
+          problems.push("comments.mention: is not an array");
+        else
+          comments.mention.forEach((login, index) =>
+            text(login, `comments.mention[${index}]`),
+          );
       if (comments)
         for (const name of ["run", "action", "close"] as const) {
           if (!Object.hasOwn(comments, name)) continue;

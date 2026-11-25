@@ -1418,6 +1418,57 @@ test("removing a label the issue lacks succeeds, and a new state label is added 
   ]);
 });
 
+test("a failure mentions the repository's owner, read once through GraphQL, only when the owner is a user", async () => {
+  for (const [typename, mentioned] of [
+    ["User", "**@acme** "],
+    ["Organization", ""],
+  ] as const) {
+    const posted: string[] = [];
+    const { connection, requests } = github((request, body) => {
+      if (request === "FactoryRepositoryOwner") {
+        assert.deepEqual(body.variables, { owner: "acme", name: "widgets" });
+        return {
+          status: 200,
+          data: {
+            data: {
+              repository: { owner: { __typename: typename, login: "acme" } },
+            },
+          },
+        };
+      }
+      if (request === "GET /repos/acme/widgets/issues/4/comments")
+        return { status: 200, data: [] };
+      if (request === "POST /repos/acme/widgets/issues/4/comments") {
+        posted.push(body.body);
+        return created(4);
+      }
+      return undefined;
+    });
+    const platform = repositoryPlatform(connection, configuration);
+    for (const key of ["failed:a", "failed:b"])
+      await platform.comments.write(
+        4,
+        {
+          phase: "implement",
+          facts: { state: "failed", reason: "no pull request" },
+          final: true,
+          mention: "maintainers",
+        },
+        { key, failed: labels.failed, reason: "no pull request" },
+      );
+    assert.equal(
+      requests.filter((request) => request === "FactoryRepositoryOwner").length,
+      1,
+    );
+    assert.ok(
+      posted.some((body) =>
+        body.startsWith(`❌ ${mentioned}The factory run failed`),
+      ),
+      `${typename}: ${posted.join("\n---\n")}`,
+    );
+  }
+});
+
 test("a closing issue gets its comment, then closes", async () => {
   const { connection, requests } = github((request) =>
     request.endsWith("/comments") ? created(1) : { status: 200, data: {} },

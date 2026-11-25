@@ -1804,6 +1804,7 @@ export function createHost(
               unpushable: decision.unpushedChanges,
             },
             final: true,
+            mention: "maintainers",
           },
           {
             key: `failed:${run?.provenance?.id ?? "claim"}`,
@@ -1957,6 +1958,11 @@ export function createHost(
                   pullRequests: observation.pullRequests,
                   ...(review && { review }),
                 },
+                // A reporter answers for themself; a stop in the triage state
+                // or a carried stop asks nobody.
+                ...(gate || (asking && asking !== labels.reporter)
+                  ? { mention: "maintainers" as const }
+                  : asking && { mention: "author" as const }),
               },
               action,
             );

@@ -174,11 +174,13 @@ const timeOfDay = (date: Date) => `${date.toISOString().slice(11, 16)}Z`;
 // until replaced or cleared by an undefined fact, while its reason, reset and
 // unpushable paths and the stop label it waits in describe only its new
 // state; a run result just posted, whose lead line the comment shows and
-// whose body a template may insert; whether the pass ends; and a released
-// stop's continuation.
+// whose body a template may insert; whether the pass ends; a released
+// stop's continuation; and who must act now, if anyone: the issue's author,
+// or the repository's configured logins, by default its user owner.
 export type RunUpdate = {
   phase: Phase;
   facts: PhaseFacts;
+  mention?: "author" | "maintainers";
   result?: Pick<RunResult, "body"> & {
     terminal?: TerminalResult;
     withdrawn?: string;
@@ -241,6 +243,7 @@ export function stopAction(
 type State = {
   phases: Partial<Record<Phase, PhaseFacts>>;
   updated?: string;
+  mention?: string;
   results?: TerminalResult[];
   withdrawnResults?: string[];
   final?: true;
@@ -344,14 +347,37 @@ export function isFactoryComment(comment: Comment): boolean {
 }
 
 // The one writer of an issue's run, action and close comments, worded by the
-// repository's comment templates.
+// repository's comment templates. `repositoryOwner` reads the login of the
+// repository's owner when that owner is a user, and nothing otherwise.
 export function issueComments(
   tracker: IssueTracker,
   configuration: PlatformConventions,
   evidenceIds?: (issue: number, comments: Comment[]) => Promise<Set<string>>,
   now: () => Date = () => new Date(),
+  repositoryOwner?: () => Promise<string | undefined>,
 ) {
   const templates = configuration.comments;
+  // The `@login`s on one line, or nothing when nobody can be named: a bot
+  // author, an organization owner, or a read that failed.
+  async function mention(
+    issue: number,
+    who: RunUpdate["mention"],
+  ): Promise<string | undefined> {
+    if (!who) return undefined;
+    let logins: (string | undefined)[];
+    try {
+      if (who === "author") {
+        const { author } = await tracker.issue(issue);
+        logins = [author && !author.bot ? author.login : undefined];
+      } else logins = templates?.mention ?? [await repositoryOwner?.()];
+    } catch {
+      return undefined;
+    }
+    const named = logins.flatMap((login) =>
+      login ? [`@${login.replace(/^@/, "")}`] : [],
+    );
+    return named.length ? named.join(", ") : undefined;
+  }
   // Quota pauses can write the current run notice without another platform
   // read. These facts came from this writer's last successful observation.
   const remembered = new Map<
@@ -403,6 +429,7 @@ export function issueComments(
     return renderComment("run", templates?.run, {
       ...values(phase),
       ...look(phase, current, configuration.labels, false),
+      mention: state.mention,
       failure: current?.state === "failed" ? current.reason : undefined,
       pause:
         current?.state === "paused"
@@ -474,6 +501,8 @@ export function issueComments(
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };
+      const addressed = await mention(issue, update.mention);
+      if (addressed) state.mention = addressed;
       // A phase that starts, or a merge, finishes the earlier phases.
       if (update.facts.state === "running" || update.facts.state === "merged")
         for (const name of phases.slice(0, phases.indexOf(update.phase))) {
@@ -520,7 +549,12 @@ export function issueComments(
         return;
       await tracker.createComment(
         issue,
-        `${renderComment("action", templates?.action, { ...values, link: run.url })}\n${marker}`,
+        `${renderComment("action", templates?.action, {
+          ...values,
+          mention: state.mention,
+          summary: state.phases[update.phase]?.summary,
+          link: run.url,
+        })}\n${marker}`,
       );
     },
 
