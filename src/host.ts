@@ -8,7 +8,12 @@ import {
   ContractPublicationHold,
   ContractPublicationStop,
 } from "./contract-protocol.ts";
-import { trustedFinding, type Provenance } from "./triggers.ts";
+import {
+  noTriageTrigger,
+  trustedFinding,
+  triageTrigger,
+  type Provenance,
+} from "./triggers.ts";
 import {
   existsSync,
   mkdirSync,
@@ -1807,6 +1812,13 @@ export function createHost(
             unpushable: decision.unpushedChanges
               ?.map((path) => `\`${path}\``)
               .join(", "),
+            // A failed triage run consumed its trigger, so only the triage
+            // state's new application runs it again.
+            ...(run &&
+              phaseOf(run) === "triage" &&
+              enabledRunKinds(pass.configuration!).includes("triage") && {
+                triage: labels.triage,
+              }),
           },
         );
         await platform.transition(decision.issue, "fail");
@@ -1894,9 +1906,27 @@ export function createHost(
             stop === labels.triage
               ? previous.result.reason
               : undefined;
+          const asking = askLabels(labels).find((label) =>
+            issue.labels.includes(label),
+          );
+          const triage = enabledRunKinds(pass.configuration!).includes(
+            "triage",
+          );
+          // A stop in the triage state alone that no new trusted trigger
+          // answers waits on a person to apply that state again.
+          const untriggered =
+            !asking &&
+            triage &&
+            stop === labels.triage &&
+            stopLabels(labels).every(
+              (label) => label === stop || !issue.labels.includes(label),
+            ) &&
+            !triageTrigger(issue, labels, {
+              ready: labels.ready,
+              ...pass.read!.authorization,
+            });
           const asked =
-            askLabels(labels).find((label) => issue.labels.includes(label)) ??
-            (publicationStop ? stop : undefined);
+            asking ?? (publicationStop || untriggered ? stop : undefined);
           const action: Action | undefined =
             !previous && issue.continuation
               ? undefined
@@ -1904,10 +1934,9 @@ export function createHost(
                 ? { key: `gate:${id}`, gate }
                 : asked
                   ? stopAction(`stop:${id}`, asked, labels, {
-                      triage: enabledRunKinds(pass.configuration!).includes(
-                        "triage",
-                      ),
+                      triage,
                       resume: stoppedWork(previous),
+                      ...(untriggered && { reason: noTriageTrigger }),
                     })
                   : undefined;
           // The run comment keeps the continuation until the work resumes. A

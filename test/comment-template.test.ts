@@ -203,6 +203,16 @@ test("the default action comment names its occasion's label in one line linking 
     }),
     "The factory run failed: its branch changes paths the factory can't push. A person with permission to push `a.yml`, `b.yml` must deliver the change. Remove `broken` to run it again. See [the run comment](https://platform.test/c/9).",
   );
+  // A failed triage run's trigger is consumed, so it names the triage state.
+  assert.equal(
+    renderComment("action", undefined, {
+      failed: "broken",
+      reason: "the run left no run result",
+      triage: "state:triage",
+      link,
+    }),
+    "The factory run failed: the run left no run result. Remove `broken` and apply `state:triage` again, removing it first if the issue carries it, to run it again. See [the run comment](https://platform.test/c/9).",
+  );
   assert.equal(
     renderComment("action", undefined, { stopped: "state:owner", link }),
     "The factory waits in `state:owner` for an answer. See [the run comment](https://platform.test/c/9).",
@@ -264,6 +274,18 @@ test("every default stop comment names the states that answer it", () => {
   assert.equal(
     stop("state:grill", { triage: true }),
     "The factory waits in `state:grill` for an answer. Once the grill settles the request, a person applies `state:triage` to triage it again, `state:ready` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+  );
+  // A triage-state stop no trusted trigger answers names its re-application.
+  assert.equal(
+    stop("state:triage", {
+      triage: true,
+      reason: "no new trusted triage trigger",
+    }),
+    "The factory waits in `state:triage` for an answer. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again. An edit or a comment alone starts nothing. See [the run comment](https://platform.test/c/9).",
+  );
+  assert.equal(
+    stop("state:triage", { triage: true }),
+    "The factory waits in `state:triage` for an answer. See [the run comment](https://platform.test/c/9).",
   );
   assert.equal(
     stop("state:grill", { triage: false }),

@@ -30,7 +30,12 @@ import type { Model, Registry } from "./providers.ts";
 import type { ReportedWindow } from "./providers/usage.ts";
 import type { ReadResult } from "./run-result.ts";
 import type { MergeRelaunch, InputResume } from "./platform.ts";
-import { triageTrigger, reviewTrigger, type Trigger } from "./triggers.ts";
+import {
+  noTriageTrigger,
+  triageTrigger,
+  reviewTrigger,
+  type Trigger,
+} from "./triggers.ts";
 import {
   closes,
   readinessExclusion,
@@ -1103,7 +1108,7 @@ function continuationExclusions(
       (triageTrigger(issue, labels, policy(repository))
         ? null
         : (triageRefusal(issue, policy(repository), labels.triage!)?.reason ??
-          "no new trusted triage trigger"));
+          noTriageTrigger));
     if (reason) return skipped(next, reason);
   } else {
     // A carried issue reports its disposition even without readiness.

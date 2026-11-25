@@ -190,7 +190,9 @@ export type RunUpdate = {
 // An occasion a person must act on: its key, unique within its pass, the
 // label that names it, for a stop the labels of its asked and answering
 // roles under their role names and the work readiness resumes, and for a
-// failure why and which paths a person with permission must push.
+// failure why, which paths a person with permission must push and, for a
+// triage run, the triage label that triggers it again. A triage-state stop
+// no trusted trigger answers yet gives why as its reason.
 export type Action = {
   key: string;
   failed?: string;
@@ -209,7 +211,11 @@ export function stopAction(
   key: string,
   stopped: string,
   labels: Labels,
-  { triage, resume }: { triage: boolean; resume?: "implement" | "review" },
+  {
+    triage,
+    resume,
+    reason,
+  }: { triage: boolean; resume?: "implement" | "review"; reason?: string },
 ): Action {
   return {
     key,
@@ -228,6 +234,7 @@ export function stopAction(
       }),
     ),
     ...(resume && { resume }),
+    ...(reason && { reason }),
   };
 }
 

@@ -55,6 +55,9 @@ export function trustedFinding(
   );
 }
 
+// Why triage does not start again by itself.
+export const noTriageTrigger = "no new trusted triage trigger";
+
 // Consumed triggers stay consumed across settlement and host restarts. Only
 // a new label application or a new author reply can start another triage.
 export function triageTrigger(
