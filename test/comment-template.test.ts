@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { renderComment } from "../src/comment-template.ts";
 import type { Labels } from "../src/label-roles.ts";
@@ -104,64 +105,83 @@ test("an object's section renders once with its facts in scope, and inserts noth
   );
 });
 
-test("the default run comment shows each phase's line and the latest result in a details block", () => {
+// The published default, as the docs list it.
+const publishedRun = JSON.parse(
+  /\nRun:\n\n```json\n(".*")\n```/.exec(
+    readFileSync(
+      new URL("../docs/usage/factory-configuration.md", import.meta.url),
+      "utf8",
+    ),
+  )![1],
+);
+
+test("the default run comment is the published one: lead line, pipeline line, outcome lines and footer", () => {
+  const values = {
+    icon: "🔄",
+    status: "Implementing",
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    effort: "high",
+    attempt: 1,
+    updated: "13:19Z",
+    triage: {
+      icon: "✅",
+      outcome: "Ready. Point the installed rules at the two issue forms",
+      link: "https://platform.test/c/1",
+    },
+    implement: { icon: "🔄" },
+    review: { icon: "⬜" },
+    merge: { icon: "⬜" },
+    result: "The brief.",
+  };
+  const rendered = [
+    "### 🔄 Implementing",
+    "",
+    "✅ Triage → 🔄 Implement → ⬜ Review → ⬜ Merge",
+    "",
+    "**Triage:** Ready. Point the installed rules at the two issue forms · [result](https://platform.test/c/1)",
+    "",
+    "<sub>Factory run, edited in place · `codex/gpt-6.1-sol@high`, attempt 1 · updated 13:19Z</sub>",
+  ].join("\n");
+  assert.equal(renderComment("run", undefined, values), rendered);
+  assert.equal(renderComment("run", publishedRun, values), rendered);
+  // A paused pass gives its pause; a failure adds a caution alert.
   assert.equal(
     renderComment("run", undefined, {
-      status: "paused",
-      triage: {
-        check: "x",
-        state: "done",
-        provider: "codex",
-        model: "gpt-5.5",
-        effort: "high",
-        attempt: 1,
-        link: "https://platform.test/c/1",
-      },
-      implement: {
-        check: " ",
-        state: "paused",
-        reason: "usage limit",
-        reset: "15:00 UTC",
-        provider: "claude-code",
-        model: "claude-opus-5-5",
-        effort: "high",
-        attempt: 2,
-        round: 2,
-      },
-      merge: {
-        check: " ",
-        state: "failed",
-        reason: "unpushable paths",
-        unpushable: ["a.yml", "b.yml"],
-      },
-      result: "The brief.",
+      icon: "❌",
+      status: "Failed",
+      failure: "unpushable paths",
+      unpushable: ["a.yml", "b.yml"],
+      updated: "13:19Z",
+      implement: { icon: "❌", outcome: "unpushable paths" },
+      merge: { icon: "⬜" },
     }),
     [
-      "**Factory run: paused**",
+      "### ❌ Failed",
       "",
-      "- [x] Triage: done · `codex/gpt-5.5@high`, attempt 1 · [result](https://platform.test/c/1)",
-      "- [ ] Implement: paused (usage limit, resets 15:00 UTC) · `claude-code/claude-opus-5-5@high`, attempt 2, round 2",
-      "- [ ] Merge: failed (unpushable paths)",
-      "  - Unpushable: `a.yml`",
-      "  - Unpushable: `b.yml`",
+      "> [!CAUTION]",
+      "> unpushable paths",
+      "> - Unpushable: `a.yml`",
+      "> - Unpushable: `b.yml`",
       "",
-      "<details>",
-      "<summary>Latest run result</summary>",
+      "❌ Implement → ⬜ Merge",
       "",
-      "The brief.",
+      "**Implement:** unpushable paths",
       "",
-      "</details>",
-      "",
+      "<sub>Factory run, edited in place · updated 13:19Z</sub>",
     ].join("\n"),
   );
-  assert.equal(
-    renderComment("run", undefined, {
-      status: "in progress",
-      implement: { check: " " },
-      merge: { check: " " },
-    }),
-    "**Factory run: in progress**\n\n- [ ] Implement\n- [ ] Merge\n",
-  );
+  for (const pause of ["usage limit, resumes at 18:00Z", "pause threshold"])
+    assert.equal(
+      renderComment("run", publishedRun, {
+        icon: "⏸️",
+        status: "Paused",
+        pause,
+        implement: { icon: "⏸️" },
+        merge: { icon: "⬜" },
+      }).split("\n")[0],
+      `### ⏸️ Paused: ${pause}`,
+    );
 });
 
 test("the default action comment names its occasion's label in one line linking the run comment", () => {

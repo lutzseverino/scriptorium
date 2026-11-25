@@ -94,7 +94,7 @@ const reasonLimit = 300;
 
 // Model text cannot open an HTML comment, so no marker it writes is read as
 // the factory's or the validator's.
-const contain = (text: string) => text.replaceAll("<!--", "&lt;!--");
+export const contain = (text: string) => text.replaceAll("<!--", "&lt;!--");
 
 // The label families the configuration lists for the kind's results: a
 // requested label must start with one of them.

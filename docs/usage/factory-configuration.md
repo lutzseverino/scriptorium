@@ -645,14 +645,32 @@ phase inserted directly inserts nothing; use a section to supply per-item or
 per-phase formatting. Inserted values are text, never parsed as more template
 syntax. These are the only names for each comment:
 
-| Comment  | Names                                                                                                                                                                                         |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`    | `status`, `triage`, `implement`, `review`, `merge`, `result`, and within a phase `check`, `state`, `reason`, `reset`, `provider`, `model`, `effort`, `attempt`, `round`, `link`, `unpushable` |
-| `action` | `failed`, `stopped`, `owner`, `reporter`, `grill`, `ready`, `resume`, `triage`, `carried`, `gate`, `reason`, `unpushable`, `link`                                                             |
-| `close`  | `tickets`                                                                                                                                                                                     |
+| Comment  | Names                                                                                                                                                                                                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`    | `status`, `icon`, `failure`, `updated`, `pause`, `triage`, `implement`, `review`, `merge`, `result`, and within a phase `icon`, `check`, `state`, `reason`, `reset`, `provider`, `model`, `effort`, `standIn`, `attempt`, `round`, `link`, `summary`, `outcome`, `unpushable` |
+| `action` | `failed`, `stopped`, `owner`, `reporter`, `grill`, `ready`, `resume`, `triage`, `carried`, `gate`, `reason`, `unpushable`, `link`                                                                                                                                             |
+| `close`  | `tickets`                                                                                                                                                                                                                                                                     |
 
-For `run`, `status` is the pass's state: `in progress`, `paused`,
-`waiting for an answer`, `carried`, `awaiting merge`, `merged` or `failed`.
+For `run`, `status` is the pass's state, as the latest written phase leaves
+it: `Triaging`, `Implementing`, `Reviewing` or `Merging` while that phase
+runs, `Merging` for a merge relaunch; `Triaged`, `Implemented` or `Reviewed`
+once it is done and the next phase hasn't started; `Paused`; `Waiting for an
+answer` for a stop whose state asks a person, `Waiting for triage` for a stop
+in the triage state, which asks nobody, and `Carried` for a carried stop;
+`Awaiting merge`, including after a merge relaunch is done; `Merged`; or
+`Failed`. `icon` is the pass's status marker and each phase's `icon` that
+phase's, from the
+[Status markers](https://github.com/lutzseverino/scriptorium/blob/main/.repo-standards/rules/comments.md#status-markers) in
+the installed comment rules, by their recorded meanings. A stop waiting for
+triage asks nobody, so it shows the not-started marker; a carried stop shows
+the filed-elsewhere marker; and a review whose round returned the pull request
+to implement shows as handed back. `failure` is the failure, present
+only when the pass failed; `updated` is the time of the comment's latest
+change, such as `13:19Z`, in UTC, which a write that changes nothing keeps;
+and `pause` is a paused pass's cause, followed by `, resumes at <reset>` when
+it has a reset, such as `usage limit, resumes at 18:00Z` or `pause
+threshold`, present only while the pass is paused.
+
 Each phase, `triage`, `implement`, `review` and `merge`, is present while it
 shows: implement and merge always, review once the repository turns it on,
 and triage once it ran in the pass. Within a phase, `check` is `x` once it is
@@ -662,11 +680,18 @@ starts; `reason` is the pause's cause, the failure, why the run ended while
 its pull request awaits merge, or the state label a stop waits in; and `reset`
 is the pause's reset. `provider`, `model`, `effort`, `attempt` and `round` are the
 facts of the phase's latest run, `round` only for review and its hand-backs;
-`link` is its run result's comment; and `unpushable` lists the paths the
-factory cannot push. A merge phase has run facts only for a merge relaunch.
-`result` is the latest run result's body, contained as the result's own
-comment contains it, between two marker lines the factory reads back on its
-next edit; it is empty before any run left one, and is best inserted once.
+`standIn` names the chosen model and why a [stand-in](host.md#stand-ins) ran
+instead; `link` is its run result's comment; `summary` is the lead line of
+its latest run result, the first line with text once a heading's markers are
+removed, cut to 100 characters with an ellipsis; `outcome` is its summary and
+reason, joined by `·`, present when it has either; and `unpushable` lists
+the paths the factory cannot push. A merge phase has run facts only for a
+merge relaunch. Outside a phase, these names hold the facts of the latest
+written phase, except `icon`, and within a phase a name it lacks is empty
+rather than the written phase's. `result` is the latest run result's body,
+contained as the result's own comment contains it, between two marker lines
+the factory reads back on its next edit; it is empty before any run left one,
+is best inserted once, and the default no longer inserts it.
 `cause`, `failure` and the other reasons remain factory-written English
 phrases.
 
@@ -697,12 +722,12 @@ and agent-written comments are separate interfaces.
 
 These are the complete default strings in JSON form, with `\n` denoting each
 newline. Defaults and overrides go through the same renderer. The run
-comment's four phase sections differ only in their names and titles.
+comment's four outcome-line sections differ only in their names and titles.
 
 Run:
 
 ```json
-"**Factory run: {status}**\n\n{#triage}- [{check}] Triage{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/triage}{#implement}- [{check}] Implement{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/implement}{#review}- [{check}] Review{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/review}{#merge}- [{check}] Merge{#state}: {state}{/state}{#reason} ({reason}{#reset}, resets {reset}{/reset}){/reason}{#provider} · `{provider}/{model}@{effort}`, attempt {attempt}{#round}, round {round}{/round}{/provider}{#link} · [result]({link}){/link}\n{#unpushable}  - Unpushable: `{unpushable}`\n{/unpushable}{/merge}{#result}\n<details>\n<summary>Latest run result</summary>\n\n{result}\n\n</details>\n{/result}"
+"### {icon} {status}{#pause}: {pause}{/pause}\n{#failure}\n> [!CAUTION]\n> {failure}\n{#unpushable}> - Unpushable: `{unpushable}`\n{/unpushable}{/failure}\n{#triage}{icon} Triage → {/triage}{#implement}{icon} Implement{/implement}{#review} → {icon} Review{/review} → {#merge}{icon} Merge{/merge}\n{#triage}{#outcome}\n**Triage:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/triage}{#implement}{#outcome}\n**Implement:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/implement}{#review}{#outcome}\n**Review:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/review}{#merge}{#outcome}\n**Merge:** {outcome}{#link} · [result]({link}){/link}\n{/outcome}{/merge}\n<sub>Factory run, edited in place{#provider} · `{provider}/{model}@{effort}`{#standIn}, {standIn}{/standIn}, attempt {attempt}{#round}, round {round}{/round}{/provider} · updated {updated}</sub>"
 ```
 
 Action:
