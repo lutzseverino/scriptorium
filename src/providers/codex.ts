@@ -1,7 +1,13 @@
 // Codex: its credential is the host's copy of a Codex login (`auth.json`),
 // which the host keeps renewing.
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync,
+} from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,22 +51,27 @@ export function codexAdapter(
         [{ hostPath: credential, sandboxPath: sandboxLogin, readonly: true }],
         (event) => {
           if (event.type !== "raw") return;
-          let error;
+          let parsed;
           try {
-            error = JSON.parse(event.line);
+            parsed = JSON.parse(event.line);
           } catch {
             return;
           }
           const message =
-            error?.type === "error"
-              ? error.message
-              : error?.type === "turn.failed"
-                ? error.error?.message
+            parsed?.type === "error"
+              ? parsed.message
+              : parsed?.type === "turn.failed"
+                ? parsed.error?.message
                 : undefined;
-          // Keep only provider errors, synchronously and in arrival order.
-          // The existing run-log follower redacts them before publication.
+          // Keep only provider errors, synchronously and in arrival order,
+          // each on its own line: Sandcastle leaves an agent message's last
+          // line open. The existing run-log follower redacts them before
+          // publication.
           if (typeof message === "string")
-            appendFileSync(request.log, `${message}\n`);
+            appendFileSync(
+              request.log,
+              `${endsMidLine(request.log) ? "\n" : ""}${message}\n`,
+            );
         },
       );
     },
@@ -68,6 +79,20 @@ export function codexAdapter(
     loginExpiry: () => codexLoginExpiry(credential),
     usageLimit: (log) => limitError(log, codexLimitErrors),
   };
+}
+
+// Whether the file's last byte is not a newline.
+function endsMidLine(path: string): boolean {
+  const fd = openSync(path, "r");
+  try {
+    const { size } = fstatSync(fd);
+    if (size === 0) return false;
+    const last = Buffer.alloc(1);
+    readSync(fd, last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // The `exp` claim, in Unix seconds, of the login's access token, a JWT.

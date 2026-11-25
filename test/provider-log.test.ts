@@ -3,6 +3,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { run, type BindMountSandboxHandle } from "@ai-hero/sandcastle";
 import { createRegistry } from "../src/providers.ts";
 import { createRedactor } from "../src/redaction.ts";
@@ -11,11 +12,16 @@ import { directory, fakePorts, request } from "./fakes.ts";
 
 // Real Sandcastle parsing and file logging over a sandbox that emits scripted
 // agent stdout and stderr. No Docker daemon or provider login is involved.
+// A gap between lines outlasts Sandcastle's 50 ms text debounce and lets its
+// unawaited log writes land, as between real agent events.
+const settled = 100;
+
 async function launchLog(
   t: TestContext,
   events: unknown[],
   provider = "codex",
   exitCode = 1,
+  gap = 0,
 ) {
   const root = directory(t);
   execFileSync("git", ["init", "--quiet", "--initial-branch=main", root]);
@@ -64,7 +70,10 @@ async function launchLog(
           const lines = events.map((event) =>
             typeof event === "string" ? event : JSON.stringify(event),
           );
-          for (const line of lines) options?.onLine?.(line);
+          for (const line of lines) {
+            options?.onLine?.(line);
+            if (gap) await sleep(gap);
+          }
           return {
             stdout: lines.join("\n"),
             stderr: "Reading prompt from stdin...\n",
@@ -198,6 +207,7 @@ test("a successful Codex log retains messages and commands, adding only error me
     ],
     "codex",
     0,
+    settled,
   );
   assert.equal(
     published.slice(
@@ -212,6 +222,30 @@ test("a successful Codex log retains messages and commands, adding only error me
   );
 });
 
+test("a Codex error after an unterminated agent message starts its own line", async (t) => {
+  const { published } = await launchLog(
+    t,
+    [
+      {
+        type: "item.completed",
+        item: { type: "agent_message", text: "Reading the issue first." },
+      },
+      { type: "error", message: "reconnecting" },
+      {
+        type: "item.started",
+        item: { type: "command_execution", command: "gh issue view 311" },
+      },
+    ],
+    "codex",
+    0,
+    settled,
+  );
+  assert.match(
+    published,
+    /Agent started\nReading the issue first\.\nreconnecting\n\n?Bash\(gh issue view 311\)\n/,
+  );
+});
+
 test("Claude Code logging retains its messages and commands without capturing raw errors or output", async (t) => {
   const { published } = await launchLog(
     t,
@@ -221,8 +255,13 @@ test("Claude Code logging retains its messages and commands without capturing ra
       {
         type: "assistant",
         message: {
+          content: [{ type: "text", text: "Reading the issue first.\n" }],
+        },
+      },
+      {
+        type: "assistant",
+        message: {
           content: [
-            { type: "text", text: "Reading the issue first.\n" },
             {
               type: "tool_use",
               name: "Bash",
@@ -240,6 +279,7 @@ test("Claude Code logging retains its messages and commands without capturing ra
     ],
     "claude-code",
     0,
+    settled,
   );
   assert.equal(
     published.slice(
