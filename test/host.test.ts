@@ -73,6 +73,7 @@ type TimelineEvent = { at: string } & (
 
 type IssueSpec = {
   number: number;
+  title?: string;
   author?: string;
   body?: string;
   isPullRequest?: boolean;
@@ -168,41 +169,42 @@ function fakePlatform(
   capabilities: IssueTrackerCapabilities,
   events: string[],
 ) {
+  const seed = (spec: IssueSpec) => {
+    const issue = {
+      state: "OPEN",
+      createdAt: `2026-10-0${spec.number}T00:00:00Z`,
+      labels: ["ready-for-agent"],
+      subIssues: [],
+      blockedBy: [],
+      pullRequests: [],
+      branchPullRequests: [],
+      comments: [] as string[],
+      discussion: [] as Comment[] | Error,
+      latestDeletion: null as string | null | Error,
+      validator: true,
+      ...spec,
+    };
+    return {
+      ...issue,
+      discussion:
+        issue.discussion instanceof Error
+          ? issue.discussion
+          : structuredClone(issue.discussion),
+      timeline: [
+        ...issue.labels.map((label): TimelineEvent => ({
+          event: "labeled",
+          label,
+          actor: "owner",
+          at: issue.createdAt,
+        })),
+        ...(spec.timeline ?? []),
+      ],
+    };
+  };
   const state = Object.fromEntries(
     Object.entries(repositories).map(([name, issues]) => [
       name,
-      issues.map((spec) => {
-        const issue = {
-          state: "OPEN",
-          createdAt: `2026-10-0${spec.number}T00:00:00Z`,
-          labels: ["ready-for-agent"],
-          subIssues: [],
-          blockedBy: [],
-          pullRequests: [],
-          branchPullRequests: [],
-          comments: [] as string[],
-          discussion: [] as Comment[] | Error,
-          latestDeletion: null as string | null | Error,
-          validator: true,
-          ...spec,
-        };
-        return {
-          ...issue,
-          discussion:
-            issue.discussion instanceof Error
-              ? issue.discussion
-              : structuredClone(issue.discussion),
-          timeline: [
-            ...issue.labels.map((label): TimelineEvent => ({
-              event: "labeled",
-              label,
-              actor: "owner",
-              at: issue.createdAt,
-            })),
-            ...(spec.timeline ?? []),
-          ],
-        };
-      }),
+      issues.map(seed),
     ]),
   );
   const find = (repository: string, number: number | string) => {
@@ -365,7 +367,7 @@ function fakePlatform(
       nodeId: null,
       url: `https://platform.test/${repository}/issues/${issue.number}`,
       state: lower(issue.state),
-      title: `Issue ${issue.number}`,
+      title: issue.title ?? `Issue ${issue.number}`,
       body: issue.body ?? "### Parent\n\n#99\n\n### Blocked by\n\n#98\n",
       author: account(issue.author ?? "owner"),
       labels: [...issue.labels],
@@ -610,7 +612,24 @@ function fakePlatform(
       },
       access: {
         capabilities: {},
-        requestPages: unused,
+        // The issues a lost finding create may have left.
+        async requestPages(options) {
+          assert.equal(options.path, `/repos/${repository}/issues`);
+          await request("listIssues", options.query);
+          return [
+            {
+              status: 200,
+              headers: {},
+              data: state[repository].map((issue) => ({
+                number: issue.number,
+                title: issue.title ?? `Issue ${issue.number}`,
+                body: issue.body ?? null,
+                html_url: `https://platform.test/${repository}/issues/${issue.number}`,
+                ...(issue.isPullRequest && { pull_request: {} }),
+              })),
+            },
+          ];
+        },
         async role(login) {
           await request("role", login);
           const role = roles[login] ?? null;
@@ -662,6 +681,67 @@ function fakePlatform(
             )
           )
             throw new PlatformError("notFound", "No cutoff configuration");
+          const read = new RegExp(`^/repos/${repository}/issues/(\\d+)$`).exec(
+            options.path,
+          );
+          if (read && (options.method ?? "GET") === "GET") {
+            await request("readIssue", Number(read[1]));
+            const issue = state[repository].find(
+              (candidate) => candidate.number === Number(read[1]),
+            );
+            if (!issue) throw new PlatformError("notFound", "Not Found");
+            return {
+              status: 200,
+              headers: {},
+              data: {
+                number: issue.number,
+                ...(issue.isPullRequest && { pull_request: {} }),
+              },
+            };
+          }
+          // A finding the factory files: a bot's issue labelled at creation.
+          if (
+            options.method === "POST" &&
+            options.path === `/repos/${repository}/issues`
+          ) {
+            const filed = options.body as {
+              title: string;
+              body: string;
+              labels: string[];
+            };
+            await request("createIssue", filed.title, filed.labels);
+            const number =
+              Math.max(0, ...state[repository].map((issue) => issue.number)) +
+              1;
+            state[repository].push(
+              seed({
+                number,
+                title: filed.title,
+                body: filed.body,
+                author: "factory[bot]",
+                labels: [],
+                createdAt: "2026-10-09T12:00:00Z",
+              }),
+            );
+            const issue = find(repository, number);
+            issue.labels.push(...filed.labels);
+            issue.timeline.push(
+              ...filed.labels.map((label): TimelineEvent => ({
+                event: "labeled",
+                label,
+                actor: "factory[bot]",
+                at: issue.createdAt,
+              })),
+            );
+            return {
+              status: 201,
+              headers: {},
+              data: {
+                number,
+                html_url: `https://platform.test/${repository}/issues/${number}`,
+              },
+            };
+          }
           assert.equal(options.path, "/graphql");
           const body = options.body as {
             query: string;
@@ -3662,8 +3742,7 @@ test("review policy files do not add policy to prompts through retries and recov
     const guidance = (text: string) =>
       text
         .split("\n\nUnattended execution:\n")[1]
-        .split("\nRecovery state:")[0]
-        .split("\nFactory filing run:")[0];
+        .split("\nRecovery state:")[0];
     assert.equal(guidance(withPolicy), guidance(withoutPolicy));
     if (offset > 0) {
       assert.match(withPolicy, /First attempt failure:/);
@@ -10163,7 +10242,8 @@ test("trusted author openings are consumed durably and outsider text never launc
   assert.equal(invocation(run.launched[0].options.prompt), "/triage #4");
   const first = recordOf(run.state, 4, 1);
   assert.equal(first.provenance.trusted, true);
-  assert.match(
+  // Only the host cites the filing run, in the findings it files.
+  assert.doesNotMatch(
     run.launched[0].options.prompt!,
     new RegExp(first.provenance.id),
   );
@@ -10665,6 +10745,203 @@ test("a stop in the triage state of a repository that runs no triage posts no ac
     /\*\*Implement:\*\* (?:.* · )?waits in `state:triage`/,
   );
   assert.equal(actions(issue).length, 0);
+});
+
+test("the host files a run's findings with its own token and lists each in the run-result comment", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, labels: ["state:ready"] },
+        { number: 7, labels: ["state:owner"] },
+      ],
+      "acme/gadgets": [],
+    },
+    remotes: {
+      "acme/widgets": remote(t, kindsFiles),
+      "acme/gadgets": remote(t, kindsFiles),
+    },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(invocation(run.launched[0].options.prompt), "/implement #4");
+  // The run cites nothing itself: the host adds the citation.
+  assert.doesNotMatch(
+    run.launched[0].options.prompt!,
+    /filing-run|Factory filing run/,
+  );
+  assert.match(run.launched[0].options.prompt!, /"findings" lists, at most 10/);
+  const provenance = recordOf(run.state, 4, 1).provenance;
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "👤 **Owner decides the retry limit**",
+    findings: [
+      {
+        repository: "acme/gadgets",
+        title: "Retries ignore the limit",
+        body: "### Steps to reproduce\n\nRetry twice.\n\n<sub>Generated by AI</sub>",
+        observed: true,
+      },
+      {
+        repository: "acme/widgets",
+        issue: 7,
+        comment: "Seen again on #4.\n\n<sub>Generated by AI</sub>",
+      },
+      {
+        repository: "acme/elsewhere",
+        title: "A broken link",
+        body: "Read in the docs.",
+        observed: false,
+      },
+      { repository: "acme/widgets", title: "No body", observed: true },
+    ],
+  });
+  await run.drain();
+  await run.tick();
+  // One filed issue in the target's triage state, citing the filing run.
+  const filed = run.github.find("acme/gadgets", 1);
+  assert.equal(filed.title, "Retries ignore the limit");
+  assert.equal(
+    filed.body,
+    `### Steps to reproduce\n\nRetry twice.\n\n<sub>Generated by AI</sub>\n\n<!-- scriptorium:filing-run {"run":"${provenance.id}"} -->`,
+  );
+  assert.equal(filed.author, "factory[bot]");
+  assert.equal(filed.labels[0], "state:triage");
+  // One recurrence comment, posted unchanged with the target's own token.
+  assert.deepEqual(run.github.find("acme/widgets", 7).comments, [
+    "Seen again on #4.\n\n<sub>Generated by AI</sub>",
+  ]);
+  assert.deepEqual(
+    run.github.calls
+      .filter(([, operation]) =>
+        ["createIssue", "createComment"].includes(operation as string),
+      )
+      // The factory's own run, action and result comments carry markers.
+      .filter(([, , , text]) => !String(text).includes("<!-- scriptorium:")),
+    [
+      [
+        "acme/gadgets",
+        "createIssue",
+        "Retries ignore the limit",
+        ["state:triage"],
+      ],
+      [
+        "acme/widgets",
+        "createComment",
+        7,
+        "Seen again on #4.\n\n<sub>Generated by AI</sub>",
+      ],
+    ],
+  );
+  // The run-result comment lists every finding after the body.
+  const issue = run.github.find("acme/widgets", 4);
+  const posted = issue.comments.find((comment) =>
+    comment.includes("scriptorium:run-result"),
+  )!;
+  assert.equal(
+    posted.split("\n\n<sub>")[0],
+    [
+      "👤 **Owner decides the retry limit**",
+      "",
+      "| Finding | Filing |",
+      "| --- | --- |",
+      "| acme/gadgets#1: Retries ignore the limit | ↗️ Filed, observed |",
+      "| acme/widgets#7 | ↗️ Linked by [a recurrence comment](https://platform.test/comment) |",
+      "| A broken link | ⏭️ Not filed in acme/elsewhere: the host does not serve acme/elsewhere |",
+      "| Finding 4 | ❌ Invalid: it has no body |",
+    ].join("\n"),
+  );
+  assert.ok(issue.labels.includes("state:owner"));
+  // The filed finding triggers triage in its own repository through the
+  // filing run's provenance, in the same pass.
+  assert.deepEqual(
+    run.launched.map(({ options }) => options.name),
+    ["acme/widgets#4", "acme/gadgets#1"],
+  );
+  assert.equal(invocation(run.launched[1].options.prompt), "/triage #1");
+  await run.tick();
+  // Nothing is filed again.
+  assert.equal(run.github.find("acme/widgets", 7).comments.length, 1);
+  assert.equal(
+    run.github.calls.filter(([, operation]) => operation === "createIssue")
+      .length,
+    1,
+  );
+});
+
+test("a finding write that fails transiently holds the result comment until a later pass files it once", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: ["state:ready"] }],
+    },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  await run.tick();
+  const finding = {
+    repository: "acme/widgets",
+    title: "Retries ignore the limit",
+    body: "Retry twice.",
+    observed: false,
+  };
+  run.github.failedRequests.set(
+    "acme/widgets createIssue",
+    new PlatformError("unavailable", "The platform did not answer"),
+  );
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "👤 **Owner decides**",
+    findings: [finding],
+  });
+  await run.drain();
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  assert.ok(
+    !issue.comments.some((comment) =>
+      comment.includes("scriptorium:run-result"),
+    ),
+  );
+  assert.ok(
+    run.reports.some((line) =>
+      /acme\/widgets#4 findings are not all filed; a later pass retries them: .*The platform did not answer/.test(
+        line,
+      ),
+    ),
+    run.reports.join("\n"),
+  );
+  assert.deepEqual(recordOf(run.state, 4, 1).findingRecords, [
+    { state: "attempted", at: "2026-10-09T12:00:00.000Z" },
+  ]);
+  // The retry first looks for the issue the lost write may have created.
+  run.github.failedRequests.delete("acme/widgets createIssue");
+  await run.tick();
+  const listed = run.github.calls.filter(
+    ([, operation]) => operation === "listIssues",
+  );
+  assert.deepEqual(listed, [
+    [
+      "acme/widgets",
+      "listIssues",
+      { state: "all", since: "2026-10-09T11:00:00.000Z", per_page: 100 },
+    ],
+  ]);
+  const filed = run.github.find("acme/widgets", 5);
+  assert.equal(filed.title, finding.title);
+  assert.match(
+    issue.comments.find((comment) =>
+      comment.includes("scriptorium:run-result"),
+    )!,
+    /\| acme\/widgets#5: Retries ignore the limit \| ↗️ Filed, only read \|/,
+  );
+  assert.ok(issue.labels.includes("state:owner"));
+  await run.tick();
+  assert.equal(
+    run.github.calls.filter(([, operation]) => operation === "createIssue")
+      .length,
+    2,
+  );
+  assert.equal(run.github.find("acme/widgets", 5), filed);
+  assert.throws(() => run.github.find("acme/widgets", 6));
 });
 
 test("factory findings require a host-recorded run citation and its filing identity across restart", async (t) => {

@@ -17,6 +17,11 @@ export type Provenance = {
   trigger?: Trigger;
 };
 
+// The citation line the host adds to each finding it files for a run.
+export function filingCitation(run: string): string {
+  return `<!-- scriptorium:filing-run ${JSON.stringify({ run })} -->`;
+}
+
 export function filingRun(issue: Pick<PlatformIssue, "body">): string | null {
   const lines = [
     ...issue.body.matchAll(

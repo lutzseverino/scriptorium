@@ -9,6 +9,14 @@ import {
   ContractPublicationStop,
 } from "./contract-protocol.ts";
 import {
+  fileFindings,
+  findingTarget,
+  withFindings,
+  type FindingRecord,
+  type FindingTarget,
+} from "./findings.ts";
+import {
+  filingCitation,
   noTriageTrigger,
   trustedFinding,
   triageTrigger,
@@ -213,6 +221,8 @@ type HostRun = Run & {
   resultLink?: string;
   // Its run result and report are published completely.
   resultPosted?: true;
+  // What became of each of its run result's findings, in order.
+  findingRecords?: (FindingRecord | undefined)[];
   // The quota pause's label and cached run notice were written successfully.
   quotaNotified?: true;
   publication?: Publication;
@@ -847,6 +857,9 @@ export function createHost(
           record(run);
         }
       const provenance = readProvenance(name);
+      // The host files a run's findings in any repository it serves, so a
+      // citation names a run of any of them.
+      let filings: Provenance[] | undefined;
       for (const issue of issues) {
         const history = provenance.filter(
           (record) => record.issue === issue.number,
@@ -865,10 +878,13 @@ export function createHost(
             ? [record.trigger.id.slice(6)]
             : [],
         );
-        issue.filedByTrustedRun = trustedFinding(issue, provenance, {
-          ready: pass.configuration.labels.ready,
-          ...served.authorization,
-        });
+        issue.filedByTrustedRun =
+          !!issue.filingRun &&
+          trustedFinding(
+            issue,
+            (filings ??= configuration.repositories.flatMap(readProvenance)),
+            { ready: pass.configuration.labels.ready, ...served.authorization },
+          );
       }
       const reads: EndingReads = {
         platform,
@@ -908,8 +924,30 @@ export function createHost(
           // Publication is an unsettled run's own progress. A protocol hold
           // must not invalidate the repository observation or sibling endings.
           run.ended = null;
+          // Findings are filed before the comment that lists them.
+          const { findings } = run.result;
+          if (findings) {
+            run.findingRecords ??= [];
+            try {
+              await fileFindings(findings, run.findingRecords, {
+                targets: findingTargets,
+                citation: run.provenance
+                  ? filingCitation(run.provenance.id)
+                  : null,
+                now: ports.now,
+                save: () => record(run),
+              });
+            } catch (error) {
+              record(run);
+              report(
+                `${name}#${run.issue} findings are not all filed; a later pass retries them: ${error}`,
+              );
+              continue;
+            }
+          }
+          const result = withFindings(run.result, run.findingRecords ?? []);
           const post = resultPost(
-            run.result,
+            result,
             {
               ...run,
               id: terminalIdentity(run),
@@ -981,7 +1019,7 @@ export function createHost(
                 link: link ?? run.publication?.evidence?.url,
               },
               result: {
-                ...run.result,
+                ...result,
                 terminal: {
                   run: terminalIdentity(run),
                   outcome: run.result.outcome,
@@ -1053,6 +1091,45 @@ export function createHost(
     }
     if (pass.read) recent.set(name, pass);
     return pass;
+  }
+
+  // A served repository's finding writes, made with its own token and
+  // labelled with its configuration's triage state, or why the host files
+  // nothing there. A held quota rejects, so a later pass files there.
+  async function findingTargets(
+    repository: string,
+  ): Promise<FindingTarget | { unfiled: string }> {
+    const name = configuration.repositories.find(
+      (served) => served.toLowerCase() === repository.toLowerCase(),
+    );
+    if (!name) return { unfiled: `the host does not serve ${repository}` };
+    const target = conventions.get(name);
+    if (!target?.labels.triage)
+      return {
+        unfiled: `${name}'s factory configuration names no triage state`,
+      };
+    const held = quota.hold(name);
+    if (held)
+      throw new Error(
+        `GitHub rate limit; ${name}'s quota is held until ${held.until}`,
+      );
+    try {
+      await tokens.get(name);
+    } catch {
+      return {
+        unfiled: `the host's token command minted no token for ${name}`,
+      };
+    }
+    const served = connect(name);
+    if ("refused" in served) return { unfiled: served.refused };
+    if (served.connection.repository.platform !== "github")
+      return {
+        unfiled: `${name} is not on GitHub, where the host files findings`,
+      };
+    return findingTarget(
+      quota.observe(name, served.connection),
+      target.labels.triage,
+    );
   }
 
   // The repository's platform connection and readiness policy, from the
@@ -1646,7 +1723,6 @@ export function createHost(
             kind === "review"
               ? (continuation.target ?? continuation.mergeRelaunch)?.number
               : undefined,
-          filingRun: provenance.id,
           models: kind === "triage" ? registry.modelFacts : undefined,
           credentialLimits: upload
             ? "Use only the supplied credentials for their documented purposes; never discover or switch to other identities. FACTORY_ATTACHMENT_UPLOAD_TOKEN_FILE names the read-only file containing the supplied attachment-upload credential. Use it only for GitHub attachment uploads; keep the installation token for every other GitHub operation. Never put the upload token in the environment, logs or run result."

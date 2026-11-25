@@ -34,7 +34,28 @@ export type RunResult = {
   // triage result accepts instead of carrying a brief; its body is the
   // review's notes.
   revision?: string;
+  // An implement or review run's findings, for the host to file.
+  findings?: Finding[];
 };
+
+// A finding the run asks the host to file as a new issue in `repository`,
+// saying whether the run observed the defect itself or only read of it.
+export type NewFinding = {
+  repository: string;
+  title: string;
+  body: string;
+  observed: boolean;
+};
+
+// New evidence the run asks the host to post on an existing issue.
+export type Recurrence = {
+  repository: string;
+  issue: number;
+  comment: string;
+};
+
+// An entry the reader refused is reported, never filed.
+export type Finding = NewFinding | Recurrence | { invalid: string };
 
 // Stable identity and outcome of a published, accepted run result.
 export type TerminalResult = {
@@ -91,10 +112,106 @@ export function resultCommentTerminal(
 // GitHub keeps a comment's body within 65,536 characters, frame included.
 const bodyLimit = 60_000;
 const reasonLimit = 300;
+// The run-result comment lists every finding within that limit, and GitHub
+// keeps an issue title within 256 characters.
+export const findingLimit = 10;
+const titleLimit = 256;
 
 // Model text cannot open an HTML comment, so no marker it writes is read as
 // the factory's or the validator's.
 export const contain = (text: string) => text.replaceAll("<!--", "&lt;!--");
+
+// Model text with its filing citation lines removed, then contained. Only the
+// host cites a filing run, so whole citation lines go before containment,
+// preserving all other text and line endings.
+function cleaned(text: string): string {
+  return contain(
+    text
+      .split(/(?<=\n)|(?<=\r)(?!\n)/)
+      .filter((line) => {
+        // A citation line is one comment: its first closer ends the line.
+        const trimmed = line.trim();
+        return !(
+          trimmed.startsWith("<!-- scriptorium:filing-run ") &&
+          trimmed.indexOf("-->") === trimmed.length - 3
+        );
+      })
+      .join(""),
+  );
+}
+
+// Whether the kind's results list findings: implement and review in version
+// 3, whose sandbox tokens cannot write issues. Version 2's runs still file
+// their own.
+function findingKind(
+  configuration: FactoryConfiguration,
+  kind: RunKindName,
+): boolean {
+  return configuration.version === 3 && kind !== "triage";
+}
+
+// One findings entry, or why it is refused. A new finding repeating an
+// earlier one's repository and title is refused, so each filed issue is
+// found again by its title and citation after an interrupted write.
+function parseFinding(value: unknown, earlier: Finding[]): Finding {
+  const refused = (problem: string) => ({ invalid: problem });
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return refused("it is not a JSON object");
+  const fields = Object.hasOwn(value, "issue")
+    ? ["repository", "issue", "comment"]
+    : ["repository", "title", "body", "observed"];
+  if (Object.keys(value).some((name) => !fields.includes(name)))
+    return refused("it has a field the findings interface does not name");
+  const entry = value as Record<string, unknown>;
+  const { repository } = entry;
+  if (
+    typeof repository !== "string" ||
+    !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository)
+  )
+    return refused("it names no <owner>/<name> repository");
+  const text = (name: string) => {
+    const given = entry[name];
+    if (typeof given !== "string") return `it has no ${name}`;
+    const kept = cleaned(given);
+    if (kept.trim() === "") return `it has no ${name}`;
+    if (kept.length > bodyLimit)
+      return `it has a ${name} over ${bodyLimit} characters`;
+    return { kept };
+  };
+  if (fields.includes("issue")) {
+    const { issue } = entry;
+    if (!Number.isSafeInteger(issue) || (issue as number) < 1)
+      return refused("it names no issue number");
+    const comment = text("comment");
+    if (typeof comment === "string") return refused(comment);
+    return { repository, issue: issue as number, comment: comment.kept };
+  }
+  const { title, observed } = entry;
+  if (
+    typeof title !== "string" ||
+    title.trim() === "" ||
+    title.trim() !== title ||
+    /[\r\n]/.test(title) ||
+    title.length > titleLimit
+  )
+    return refused(
+      `it has no trimmed one-line title of at most ${titleLimit} characters`,
+    );
+  const body = text("body");
+  if (typeof body === "string") return refused(body);
+  if (typeof observed !== "boolean")
+    return refused("it does not say whether the run observed it");
+  if (
+    earlier.some(
+      (finding) =>
+        "title" in finding &&
+        finding.repository.toLowerCase() === repository.toLowerCase() &&
+        finding.title === title,
+    )
+  )
+    return refused("it repeats an earlier finding's repository and title");
+  return { repository, title, body: body.kept, observed };
+}
 
 // The label families the configuration lists for the kind's results: a
 // requested label must start with one of them.
@@ -163,31 +280,31 @@ export function parseRunResult(
   if (
     Object.keys(value).some(
       (name) =>
-        !["outcome", "state", "labels", "body", "reason", "revision"].includes(
-          name,
-        ),
+        ![
+          "outcome",
+          "state",
+          "labels",
+          "body",
+          "reason",
+          "revision",
+          "findings",
+        ].includes(name),
     )
   )
     return invalid("has a field the run-result interface does not name");
-  const { outcome, state, labels = [], body, reason, revision } = value;
+  const {
+    outcome,
+    state,
+    labels = [],
+    body,
+    reason,
+    revision,
+    findings,
+  } = value;
   if (!isOutcome(outcome))
     return invalid("has no outcome of done, stop or failed");
   if (typeof body !== "string") return invalid("has no body");
-  // Filing citations belong to finding issue bodies. Remove whole citation
-  // lines before containment, preserving all other text and line endings.
-  const cleanedBody = contain(
-    body
-      .split(/(?<=\n)|(?<=\r)(?!\n)/)
-      .filter((line) => {
-        // A citation line is one comment: its first closer ends the line.
-        const trimmed = line.trim();
-        return !(
-          trimmed.startsWith("<!-- scriptorium:filing-run ") &&
-          trimmed.indexOf("-->") === trimmed.length - 3
-        );
-      })
-      .join(""),
-  );
+  const cleanedBody = cleaned(body);
   if (cleanedBody.trim() === "") return invalid("has no body");
   if (cleanedBody.length > bodyLimit)
     return invalid(`has a body over ${bodyLimit} characters`);
@@ -219,6 +336,20 @@ export function parseRunResult(
         "accepts a revision, but the repository's installed issue-contract module has no review attestation",
       );
   }
+  if (findings !== undefined) {
+    if (!findingKind(configuration, kind))
+      return invalid(
+        `lists findings, which a ${configuration.version === 2 ? "version 2" : kind} result has none of`,
+      );
+    if (!Array.isArray(findings))
+      return invalid("has findings that are not a list");
+    if (findings.length > findingLimit)
+      return invalid(`lists more than ${findingLimit} findings`);
+  }
+  const parsedFindings = ((findings ?? []) as unknown[]).reduce<Finding[]>(
+    (parsed, entry) => [...parsed, parseFinding(entry, parsed)],
+    [],
+  );
   const states =
     outcome === "stop"
       ? stopStates(configuration, kind)
@@ -270,6 +401,7 @@ export function parseRunResult(
       reason: contain(keptReason.replace(/\.+$/, "")),
     }),
     ...(revision !== undefined && { revision }),
+    ...(parsedFindings.length && { findings: parsedFindings }),
     // Reader metadata for the process log only, never an agent-written field.
     ...(reason !== undefined &&
       (/[\r\n]/.test(reason) || reason.length > reasonLimit) && {
@@ -442,6 +574,13 @@ export function resultGuidance(
       : `Ask for no other labels.`,
     `"body" is the Markdown the factory posts on the issue in its frame, without a disclaimer: ${kind === "triage" ? "the complete Agent Brief with its seven required fields, applicable Seams and triage notes, the review's notes of an accepted revision, or the question that stops it. Do not include Original request: the host preserves the authenticated original separately" : "what the run delivered, or the question or stop note"}.`,
     `"reason" is one line of at most ${reasonLimit} characters on why the run ended, required when it failed.`,
+    ...(!findingKind(configuration, kind)
+      ? []
+      : [
+          `"findings" lists, at most ${findingLimit}, each finding the repository's rules have you file as an issue or as new evidence on an existing one. The factory files them: never create or comment on issues yourself. Before listing a new finding, search its target repository's open issues, and list a recurrence instead when one already tracks it.`,
+          `A new finding is {"repository": "<owner>/<name>", "title": "<one line>", "body": "<Markdown in the target repository's issue form shape>", "observed": <true when you saw the defect yourself, false when you only read of it>}. A recurrence is {"repository": "<owner>/<name>", "issue": <number>, "comment": "<Markdown>"}.`,
+          "Write each title, body and comment in final form: the factory files each new finding in its repository's triage state with this run's filing citation, posts each comment, edits neither, and lists every finding, filed, linked or not filed, in its comment on the issue.",
+        ]),
     "The factory posts the body and applies those labels; do not post that comment or apply those labels yourself. Comments on pull requests and review-thread replies stay yours to post.",
   ].join(" ");
 }

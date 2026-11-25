@@ -200,16 +200,17 @@ checks:
   do not. Openings, label applications and replies are consumed durably at
   launch, so settlement and restarts do not repeat them. A later trusted label
   or author reply can trigger another run.
-- **Factory findings** may cite their filing run with the exact line the host
-  supplies in that run's prompt, for example:
+- **Factory findings** the host [files from a run's result](host.md#findings)
+  cite their filing run with one line at the end of the issue body:
 
   ```html
   <!-- scriptorium:filing-run {"run":"<host-issued run ID>"} -->
   ```
 
   The host accepts exactly one such line. It verifies the run against its own
-  durable launch provenance, checks that the run was trusted and predates the
-  issue, and matches the issue author to the filing credential's account.
+  durable launch provenance in any repository it serves, checks that the run
+  was trusted and predates the issue, and matches the issue author to the
+  filing credential's account.
   A forged, unknown or untrusted citation grants no trust. Unreadable identity
   and provenance reads never authorize a finding. A person may still apply
   the trusted triage label. Preserve the repository's `runs/provenance/` records
@@ -298,6 +299,10 @@ its kind and outcome. Its other labels come from the families its kind's
 none. A label that a role gives factory mechanics, such as running, failed,
 paused, a stop, a gate, readiness or a hold, is refused whatever the family;
 the `skip` and priority roles may be requested.
+
+Implement and review results may also list
+[findings](host.md#findings), which the host files in the repositories it
+serves, labelled with each one's triage state.
 
 ```json
 "triage": {

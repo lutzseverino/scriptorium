@@ -40,7 +40,8 @@ _Avoid_: Notification comment, ping
 
 **Run result**:
 The file a run's agent leaves for the host at exit, holding its outcome, the
-labels it asks for and the text the host posts in the factory's frame.
+labels it asks for, the text the host posts in the factory's frame and the
+findings the host files.
 _Avoid_: Agent comment, completion signal
 
 **Run kind**:
