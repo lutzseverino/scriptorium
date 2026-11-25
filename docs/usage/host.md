@@ -1146,9 +1146,10 @@ Before it posts the result's comment, the host files each entry in order:
 - It posts each recurrence as one comment, unchanged, on the existing issue.
   A number that names a pull request or no issue leaves it unlinked.
 - It edits nothing it posts. A refusal the platform would repeat leaves the
-  entry not filed, with the refusal. Any other failure, or a target whose
-  [GitHub quota is held](#github-quota-holds), leaves the result's comment
-  unposted, and a later pass continues from the entry that failed.
+  entry not filed, with the refusal. Any other failure, a target whose
+  [GitHub quota is held](#github-quota-holds), or one whose configuration no
+  pass has read since the host started leaves the result's comment unposted,
+  and a later pass continues from the entry that failed.
 
 The host records each write before and after it makes it, so a restart never
 files twice: a retried create first looks for the issue the lost write may

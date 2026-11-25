@@ -185,9 +185,8 @@ validator in process over that world. One case runs the check container and an
 image build under Docker and skips without it.
 `test/run-result.test.ts` covers the run-result interface, its containment and its
 frame. `test/findings.test.ts` files a run's findings over fake targets that
-record each create and comment, including interrupted writes and refusals;
-the platform tests drive the finding target through Postern's GitHub adapter,
-and the host tests file findings into served repositories, list them in the
+record each create and comment, including interrupted writes and refusals,
+and drives the finding target through Postern's GitHub adapter; the host tests file findings into served repositories, list them in the
 run-result comment and start triage on a filed finding. `test/run-comment.test.ts` drives the one writer of the run, action and
 close comments over a fake tracker: passes, final-write retries, actions told
 once and continuations. `test/label-roles.test.ts`

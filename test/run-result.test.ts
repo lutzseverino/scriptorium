@@ -670,6 +670,31 @@ test("implement and review results list findings, reporting each invalid entry w
         ],
       },
     );
+  // Names beyond GitHub's owner and repository limits name no repository.
+  const longest = `${"a".repeat(39)}/${"w".repeat(100)}`;
+  assert.deepEqual(
+    parse(
+      {
+        outcome: "done",
+        body: "Delivered.",
+        findings: [
+          { ...filed, repository: longest },
+          { ...filed, repository: `${"a".repeat(40)}/widgets` },
+          { ...filed, repository: `acme/${"w".repeat(101)}` },
+        ],
+      },
+      "implement",
+    ),
+    {
+      outcome: "done",
+      body: "Delivered.",
+      findings: [
+        { ...filed, repository: longest, body: "Steps.\n&lt;!-- marker -->" },
+        { invalid: "it names no <owner>/<name> repository" },
+        { invalid: "it names no <owner>/<name> repository" },
+      ],
+    },
+  );
   // The result still names only the interface's fields.
   assert.equal(
     invalid({ outcome: "done", body: "Done.", finding: [] }, "implement"),

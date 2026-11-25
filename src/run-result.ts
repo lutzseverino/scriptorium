@@ -166,7 +166,7 @@ function parseFinding(value: unknown, earlier: Finding[]): Finding {
   const { repository } = entry;
   if (
     typeof repository !== "string" ||
-    !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository)
+    !/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(repository)
   )
     return refused("it names no <owner>/<name> repository");
   const text = (name: string) => {

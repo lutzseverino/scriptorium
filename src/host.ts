@@ -297,6 +297,8 @@ export function createHost(
   const unobserved = new WeakSet<HostRun>();
   // A bad edit pauses pickup, but runs still settle with the last valid conventions.
   const conventions = new Map<string, FactoryConfiguration>();
+  // Repositories a pass has read since the host started.
+  const visited = new Set<string>();
   // Every token the command prints and every provider credential value a
   // launch delivers stays out of the logs and the status file.
   const redactor = createRedactor();
@@ -622,6 +624,7 @@ export function createHost(
       modelPolicyFile: { state: "not-read" },
       ownerWaits: null,
     };
+    visited.add(name);
     const { clone } = directory(name);
     // The last pause wins, with who acts on it.
     const pause = (reason: string, cause: PauseCause) =>
@@ -1104,6 +1107,9 @@ export function createHost(
     );
     if (!name) return { unfiled: `the host does not serve ${repository}` };
     const target = conventions.get(name);
+    // A later pass reads a configuration this one has not reached yet.
+    if (!target && !visited.has(name))
+      throw new Error(`${name}'s factory configuration is not read yet`);
     if (!target?.labels.triage)
       return {
         unfiled: `${name}'s factory configuration names no triage state`,

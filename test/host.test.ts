@@ -10944,6 +10944,46 @@ test("a finding write that fails transiently holds the result comment until a la
   assert.throws(() => run.github.find("acme/widgets", 6));
 });
 
+test("a finding into a served repository the host has not read since restart waits for its configuration", async (t) => {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [{ number: 4, labels: ["state:ready"] }],
+      "acme/gadgets": [],
+    },
+    remotes: {
+      "acme/widgets": remote(t, kindsFiles),
+      "acme/gadgets": remote(t, kindsFiles),
+    },
+  });
+  await run.tick();
+  run.launched[0].finish(undefined, undefined, {
+    outcome: "stop",
+    state: "state:owner",
+    body: "👤 **Owner decides**",
+    findings: [
+      {
+        repository: "acme/gadgets",
+        title: "Retries ignore the limit",
+        body: "Retry twice.",
+        observed: true,
+      },
+    ],
+  });
+  await run.drain();
+  run.interrupt();
+  // acme/widgets is read, and publishes its run, before acme/gadgets.
+  const restarted = run.restart();
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(run.github.find("acme/gadgets", 1).labels[0], "state:triage");
+  assert.match(
+    run.github
+      .find("acme/widgets", 4)
+      .comments.find((comment) => comment.includes("scriptorium:run-result"))!,
+    /\| acme\/gadgets#1: Retries ignore the limit \| ↗️ Filed, observed \|/,
+  );
+});
+
 test("factory findings require a host-recorded run citation and its filing identity across restart", async (t) => {
   const run = host(t, {
     repositories: {
