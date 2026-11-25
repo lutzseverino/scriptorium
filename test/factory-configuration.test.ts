@@ -35,6 +35,22 @@ test("a repository's factory configuration is read without convention defaults",
   });
 });
 
+for (const name of ["valid", "version-3"])
+  test(`${name} takes an optional trimmed check command for a runner host`, (t) => {
+    const configuration = readFactoryConfiguration(fixture(name));
+    assert.equal(configuration.checkCommand, undefined);
+    const path = join(directory(t), "config.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ ...configuration, checkCommand: "pnpm validate" }),
+    );
+    assert.equal(readFactoryConfiguration(path).checkCommand, "pnpm validate");
+    for (const checkCommand of [null, 3, [], "", " pnpm validate"]) {
+      writeFileSync(path, JSON.stringify({ ...configuration, checkCommand }));
+      assert.throws(() => readFactoryConfiguration(path), /checkCommand:/);
+    }
+  });
+
 test("the canonical configuration path is .scriptorium/config.json", () => {
   assert.equal(factoryConfigurationPath, ".scriptorium/config.json");
 });

@@ -23,6 +23,9 @@ type Common = {
   // marker of its state line and the account it posts as.
   contractResult: { marker: string; author: string };
   modelLabelPrefix: string;
+  // The repository's one check command, which the host runs on each pull
+  // request head when it is the repository's runner.
+  checkCommand?: string;
   comments?: {
     run?: string;
     action?: string;
@@ -187,7 +190,12 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
       ...(version === 3 ? ["runKinds"] : ["skill", "arguments"]),
     ],
     "",
-    ["$schema", "comments", ...(version === 3 ? ["triageResult"] : [])],
+    [
+      "$schema",
+      "comments",
+      "checkCommand",
+      ...(version === 3 ? ["triageResult"] : []),
+    ],
   );
   if (root) {
     if (Object.hasOwn(root, "$schema")) text(root.$schema, "$schema");
@@ -221,6 +229,8 @@ export function readFactoryConfiguration(path: string): FactoryConfiguration {
     pair(root, "contractResult");
     if (Object.hasOwn(root, "modelLabelPrefix"))
       text(root.modelLabelPrefix, "modelLabelPrefix");
+    if (Object.hasOwn(root, "checkCommand"))
+      text(root.checkCommand, "checkCommand");
     if (version === 2) {
       if (Object.hasOwn(root, "skill")) text(root.skill, "skill");
       if (

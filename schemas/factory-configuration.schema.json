@@ -115,6 +115,10 @@
         "modelLabelPrefix": {
           "$ref": "#/definitions/text"
         },
+        "checkCommand": {
+          "$ref": "#/definitions/text",
+          "description": "The repository's one check command, which a runner host runs on each pull request head inside the repository's sandbox image."
+        },
         "comments": {
           "$ref": "#/definitions/comments"
         },
@@ -206,6 +210,10 @@
         },
         "modelLabelPrefix": {
           "$ref": "#/definitions/text"
+        },
+        "checkCommand": {
+          "$ref": "#/definitions/text",
+          "description": "The repository's one check command, which a runner host runs on each pull request head inside the repository's sandbox image."
         },
         "comments": {
           "$ref": "#/definitions/comments"

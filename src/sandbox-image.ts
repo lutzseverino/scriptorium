@@ -253,6 +253,20 @@ export function stopSandboxes(): void {
   }
 }
 
+// Removes the container of exactly this name, running or not, if there is
+// one.
+export async function removeContainer(
+  run: DockerRun,
+  name: string,
+): Promise<void> {
+  const containers = (
+    await run(["ps", "--all", "--quiet", "--filter", `name=^${name}$`])
+  )
+    .split("\n")
+    .filter(Boolean);
+  if (containers.length) await run(["rm", "--force", ...containers]);
+}
+
 // Runs the Docker CLI and resolves its standard output.
 export function docker(
   args: string[],

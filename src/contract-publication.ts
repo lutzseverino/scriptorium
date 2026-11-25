@@ -66,6 +66,9 @@ export type PublicationProgress = {
   state?: Publication;
   // Only independently authenticated issue-filing provenance may supply this.
   writerProof?: WriterProof;
+  // Requests the validator's evaluation of the issue where the host is the
+  // repository's runner, instead of dispatching its workflow.
+  evaluate?(issue: number): void;
   now?(): Date;
   save(state: Publication): void;
 };
@@ -290,14 +293,7 @@ export async function publishContract(
     !state.published &&
     !(await currentBodyDecision(connection, configuration, number, mode, true))
   ) {
-    await request(connection, {
-      method: "POST",
-      path: `${base}/dispatches`,
-      body: {
-        event_type: "repo-canon-issue-contract",
-        client_payload: { issue: number },
-      },
-    });
+    await evaluate(connection, number, progress);
     return null;
   }
   if (!state.original) {
@@ -459,16 +455,10 @@ export async function publishContract(
     !same(record!.publication?.attestation, publication.attestation)
   )
     await persist({ ...record!, migrated: true, retired: true, publication });
-  // Dispatch on retries too: persistence may have succeeded after the evidence
-  // comment's workflow already ran. No polling delay or synthetic approval.
-  await request(connection, {
-    method: "POST",
-    path: `${base}/dispatches`,
-    body: {
-      event_type: "repo-canon-issue-contract",
-      client_payload: { issue: number },
-    },
-  });
+  // Request evaluation on retries too: persistence may have succeeded after
+  // the validator already evaluated the evidence comment, through its
+  // workflow or runner delivery. No polling delay or synthetic approval.
+  await evaluate(connection, number, progress);
   const proofNotice = await decide();
   const association = proofNotice?.result.factoryTriage;
   if (
@@ -691,6 +681,25 @@ async function acceptContract(
     if ((await tracker.issue(number)).labels.includes(label))
       await tracker.removeLabel(number, label);
   return state.evidence!.url;
+}
+
+// Asks for the validator's evaluation of the issue: through the runner's
+// serialized delivery where the host is the repository's runner, otherwise by
+// dispatching the installed workflow.
+async function evaluate(
+  connection: ConnectionWithLinkAdditions,
+  number: number,
+  progress: PublicationProgress,
+): Promise<void> {
+  if (progress.evaluate) return progress.evaluate(number);
+  await request(connection, {
+    method: "POST",
+    path: `/repos/${connection.repository.path}/dispatches`,
+    body: {
+      event_type: "repo-canon-issue-contract",
+      client_payload: { issue: number },
+    },
+  });
 }
 
 // Canon rejects same-second notice/acceptance. A later host pass retries.

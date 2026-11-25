@@ -221,3 +221,11 @@ permission a run kind declares; unknown when any of those facts cannot be
 established; healthy otherwise. It is built from facts only, never a
 credential.
 _Avoid_: Credential status, token health
+
+**Runner delivery**:
+The factory's delivery of a repository's issue, comment and pull request events
+to the entry points Repo Canon installs, when the host is that repository's
+named runner: polled each pass from a durable cursor, run under the runner
+account's token from a pinned default-branch commit, with no history on its
+first pass beyond one catch-up.
+_Avoid_: Webhook delivery, runner checks, event forwarding

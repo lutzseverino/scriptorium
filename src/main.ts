@@ -19,7 +19,13 @@ import { pruneSandboxCache, retainSandboxImages } from "./image-retention.ts";
 import { resume, resumeUsage } from "./resume.ts";
 import { status, statusUsage } from "./status-command.ts";
 import { terminalResults, terminalResultsUsage } from "./terminal-results.ts";
-import { buildSandboxImage, docker, stopSandboxes } from "./sandbox-image.ts";
+import {
+  buildSandboxImage,
+  docker,
+  removeContainer,
+  stopSandboxes,
+} from "./sandbox-image.ts";
+import { runEntryPoint } from "./runner.ts";
 
 // Comments may arrive later or exceed a pipe buffer, and exiting drops
 // unwritten pipe output, so read all input and flush the observation first.
@@ -175,6 +181,11 @@ const host = createHost(configuration, registry, {
   launch: (provider, request) =>
     registry.providers.get(provider)!.launch(request),
   stopSandboxes,
+  ...(configuration.runner && {
+    runnerToken: tokenCommand(configuration.runner.tokenCommand),
+  }),
+  runEntryPoint,
+  removeContainer: (name) => removeContainer((args) => docker(args), name),
   now: () => new Date(),
   report: log,
 });
