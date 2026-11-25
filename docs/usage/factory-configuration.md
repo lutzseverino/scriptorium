@@ -268,7 +268,14 @@ answer it.
 - **Triage**: a person's `labels.triage` starts a triage run through the
   label trigger above, after any stop, including a grill's once the grill has
   settled the request. A grill that revises the contract returns it instead
-  through readiness at the revised contract's accepted revision.
+  through readiness at the revised contract's accepted revision. A triage run
+  consumes its trigger at launch, so after it fails, removing `labels.failed`
+  alone starts nothing, and an issue left in the triage state with no new
+  trusted triage trigger, such as after a bot applied it, waits there. Editing
+  its body starts nothing either: a person removes and re-applies
+  `labels.triage`. The failed run's action comment, and the stop's, say so; a
+  person who applied the triage state after the last triage launch already
+  started triage, and that stop posts no action comment.
 - **Reporter replies**: a reporter stop keeps its reply trigger; a person may
   instead apply the triage state.
 - **Carried or closed**: applying `labels.carried`, or closing the issue,
@@ -699,12 +706,17 @@ For `action`, exactly one of `failed`, `stopped` and `gate` is present, the
 occasion's label: the failed label, the stop state that waits on a person, or
 the gate labels review stopped at. A stop also names who it waits on and the
 states that [answer](#answers) it: exactly one of `owner`, `reporter` and
-`grill` repeats the stop state; `ready` is the ready label; `resume` is
+`grill` repeats the stop state, except in a stop in the triage state alone,
+which asks no role; `ready` is the ready label; `resume` is
 `implement` or `review`, the stopped work that readiness resumes, absent after
 a triage run; `triage` is the triage label when the repository runs triage;
-and `carried` is the carried label when configured. `reason` is the failure,
-and `unpushable` the code-formatted unpushable paths of a failure, joined with
-commas, present only when at least one exists. `link` is the run comment's
+and `carried` is the carried label when configured. `reason` is present for a
+stop only in the triage state alone, where the repository runs triage and no
+new trusted triage trigger answers it: `no new trusted triage trigger`. For a
+failure, `reason` is the failure, `triage` is the triage label
+only when a triage run failed in a repository that runs triage, and
+`unpushable` the code-formatted unpushable paths, joined with commas, present
+only when at least one exists. `link` is the run comment's
 URL. `tickets` contains closed-ticket references such as `#4` or
 `owner/repo#4`.
 
@@ -733,7 +745,7 @@ Run:
 Action:
 
 ```json
-"{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}` to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
+"{#failed}The factory run failed: {reason}.{#unpushable} A person with permission to push {unpushable} must deliver the change.{/unpushable} Remove `{failed}`{#triage} and apply `{triage}` again, removing it first if the issue carries it,{/triage} to run it again.{/failed}{#stopped}The factory waits in `{stopped}` for an answer.{#reason} With {reason}, a person must remove and re-apply `{triage}` to triage it again. An edit or a comment alone starts nothing.{/reason}{#owner} To answer, apply {#resume}`{ready}` at the unchanged approved contract to resume the stopped {resume} run, {/resume}{#triage}`{triage}` to triage it again, {/triage}{#carried}`{carried}` to hold the request, {/carried}or close the issue. A comment alone starts nothing.{/owner}{#reporter} The reporter answers by replying here. A person may instead {#triage}apply `{triage}` to triage it again, or {/triage}close the issue.{/reporter}{#grill} Once the grill settles the request, a person applies {#triage}`{triage}` to triage it again, {/triage}`{ready}` at a revised ticket's accepted revision, or closes the issue. A comment alone starts nothing.{/grill}{/stopped}{#gate}Review stopped at a gate ({gate}); remove it from the issue and its pull request to merge.{/gate} See [the run comment]({link})."
 ```
 
 Parent close:

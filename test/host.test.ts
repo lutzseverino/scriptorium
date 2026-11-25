@@ -10304,6 +10304,190 @@ test("only a new reporter author reply starts triage after a restart", async (t)
   assert.equal(run.launched.length, 2);
 });
 
+test("a failed triage run asks for the triage state again, and only its new application starts triage", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:triage"] }] },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  // Each attempt fails until the issue carries the failed label.
+  for (let attempt = 0; !issue.labels.includes("factory:failed"); attempt++) {
+    assert.ok(attempt < 3, "the triage run fails");
+    assert.match(
+      invocation(run.launched.at(-1)!.options.prompt) ?? "",
+      /^[/$]triage #4/,
+    );
+    run.launched.at(-1)!.finish(undefined, undefined, {
+      outcome: "failed",
+      reason: "the sandbox had no network",
+      body: "I could not read the issue.",
+    });
+    await run.drain();
+    await run.tick();
+  }
+  const launches = run.launched.length;
+  assert.deepEqual(issue.labels, ["factory:failed"]);
+  assert.deepEqual(
+    actions(issue).map((comment) => comment.split("\n")[0]),
+    [
+      "The factory run failed: the sandbox had no network. Remove `factory:failed` and apply `state:triage` again, removing it first if the issue carries it, to run it again. See [the run comment](https://platform.test/comment).",
+    ],
+  );
+  // Removing the failed label alone finds the trigger consumed.
+  issue.labels = issue.labels.filter((label) => label !== "factory:failed");
+  await run.tick();
+  await run.restart().tick();
+  assert.equal(run.launched.length, launches);
+  // A person applies the triage state again.
+  run.clock.now = new Date("2026-10-09T13:00:00Z");
+  issue.labels.push("state:triage");
+  issue.timeline.push({
+    event: "labeled",
+    label: "state:triage",
+    actor: "owner",
+    at: "2026-10-09T12:59:00Z",
+  });
+  const restarted = run.restart();
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(run.launched.length, launches + 1);
+  assert.equal(invocation(run.launched.at(-1)!.options.prompt), "/triage #4");
+});
+
+test("a failed implement run in a repository that runs triage still asks only for the failed label's removal", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4, labels: ["state:ready"] }] },
+    remotes: { "acme/widgets": remote(t, kindsFiles) },
+  });
+  await run.tick();
+  const issue = run.github.find("acme/widgets", 4);
+  for (let attempt = 0; !issue.labels.includes("factory:failed"); attempt++) {
+    assert.ok(attempt < 3, "the implement run fails");
+    assert.match(
+      invocation(run.launched.at(-1)!.options.prompt) ?? "",
+      /^[/$]implement #4/,
+    );
+    run.launched.at(-1)!.finish(undefined, undefined, {
+      outcome: "failed",
+      reason: "the tests need a database the sandbox lacks",
+      body: "I could not run the tests.",
+    });
+    await run.drain();
+    await run.tick();
+  }
+  assert.deepEqual(
+    actions(issue).map((comment) => comment.split("\n")[0]),
+    [
+      "The factory run failed: the tests need a database the sandbox lacks. Remove `factory:failed` to run it again. See [the run comment](https://platform.test/comment).",
+    ],
+  );
+});
+
+// An implement run ending once a bot moved its issue to the triage state, as
+// the validator's fallback does, which no trusted triage trigger answers.
+async function stoppedInTriage(
+  t: TestContext,
+  files: Record<string, string> = kindsFiles,
+) {
+  const run = host(t, {
+    repositories: {
+      "acme/widgets": [
+        { number: 4, author: "outsider", labels: ["state:ready"] },
+      ],
+    },
+    remotes: { "acme/widgets": remote(t, files) },
+  });
+  await run.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(invocation(run.launched[0].options.prompt), "/implement #4");
+  const issue = run.github.find("acme/widgets", 4);
+  issue.labels = ["state:triage", "factory:running"];
+  issue.timeline.push({
+    event: "labeled",
+    label: "state:triage",
+    actor: "github-actions[bot]",
+    at: "2026-10-09T12:00:30Z",
+  });
+  return { run, issue };
+}
+
+test("a stop in the triage state that no trusted trigger answers asks once for its new application", async (t) => {
+  const { run, issue } = await stoppedInTriage(t);
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(issue.labels, ["state:triage"]);
+  assert.match(
+    runComment(issue),
+    /\*\*Implement:\*\* (?:.* · )?waits in `state:triage`/,
+  );
+  assert.deepEqual(
+    actions(issue).map((comment) => comment.split("\n")[0]),
+    [
+      "The factory waits in `state:triage` for an answer. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again. An edit or a comment alone starts nothing. See [the run comment](https://platform.test/comment).",
+    ],
+  );
+  // A body edit starts nothing, and neither a later pass nor a restart asks
+  // again.
+  run.clock.now = new Date("2026-10-09T13:00:00Z");
+  issue.timeline.push({ event: "edited", at: "2026-10-09T12:59:00Z" });
+  await run.tick();
+  const restarted = run.restart();
+  await restarted.tick();
+  assert.equal(run.launched.length, 1);
+  assert.equal(actions(issue).length, 1);
+  // A person's new application starts one triage run.
+  issue.timeline.push({
+    event: "labeled",
+    label: "state:triage",
+    actor: "owner",
+    at: "2026-10-09T12:59:30Z",
+  });
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(invocation(run.launched[1].options.prompt), "/triage #4");
+  assert.equal(actions(issue).length, 1);
+});
+
+test("a stop in the triage state a person applied after the last launch triages by itself without an action", async (t) => {
+  const { run, issue } = await stoppedInTriage(t);
+  issue.timeline.push({
+    event: "labeled",
+    label: "state:triage",
+    actor: "owner",
+    at: "2026-10-09T12:00:40Z",
+  });
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  await run.tick();
+  assert.equal(actions(issue).length, 0);
+  assert.equal(run.launched.length, 2);
+  assert.equal(invocation(run.launched[1].options.prompt), "/triage #4");
+});
+
+test("a stop in the triage state of a repository that runs no triage posts no action", async (t) => {
+  const { triage: _, ...runKinds } = kindsConventions.runKinds;
+  const { run, issue } = await stoppedInTriage(t, {
+    ...factoryFiles,
+    ".scriptorium/config.json": JSON.stringify({
+      ...kindsConventions,
+      runKinds,
+    }),
+  });
+  run.launched[0].finish();
+  await run.drain();
+  await run.tick();
+  assert.deepEqual(issue.labels, ["state:triage"]);
+  assert.match(
+    runComment(issue),
+    /\*\*Implement:\*\* (?:.* · )?waits in `state:triage`/,
+  );
+  assert.equal(actions(issue).length, 0);
+});
+
 test("factory findings require a host-recorded run citation and its filing identity across restart", async (t) => {
   const run = host(t, {
     repositories: {
@@ -12620,9 +12804,10 @@ for (const status of [
       c.body.includes("<!-- scriptorium:action "),
     );
     assert.equal(actions.length, 1);
+    // Its consumed trigger leaves the triage state to a person.
     assert.match(
       actions[0].body,
-      /The factory waits in `state:triage` for an answer\./,
+      /The factory waits in `state:triage` for an answer\. With no new trusted triage trigger, a person must remove and re-apply `state:triage` to triage it again\./,
     );
     assert.match(
       publicationComment(protocol),

@@ -1021,10 +1021,13 @@ report write succeeds.
 
 An action comment is posted fresh, once per occasion, only when a person must
 act: when a run's stop leaves the issue in the reporter, grill or owner state,
-when review stops at a gate, and when the run fails. It is one line naming the
+or in the triage state alone with no new trusted triage trigger, when review
+stops at a gate, and when the run fails. It is one line naming the
 label to act on, with a link to the run comment, and mentions nobody. A stop's
 action also names the states that
-[answer](factory-configuration.md#answers) it. Its
+[answer](factory-configuration.md#answers) it. A failed triage run's action,
+and a triage-state stop's, names the triage label's new application, since
+the run consumed its trigger. Its
 marker line names the run comment and the occasion, which makes a retried or
 re-observed occasion find it. A version 2 stop under the needs-input label
 gets no action comment: its agent asked on the issue itself. A pause, a
