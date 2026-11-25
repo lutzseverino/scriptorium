@@ -140,14 +140,30 @@ function look(
 }
 
 // A run result comment's body without the factory's frame: its footer, or
-// before footers its leading disclaimer and closing `Run:` line.
+// before footers its leading disclaimer and closing `Run:` line. Either
+// disclaimer may span lines, and marker lines, such as an accepted triage
+// result's review attestation, follow the frame.
 function resultBody(comment: string): string | undefined {
   const lines = comment.split(/\r\n?|\n/);
-  if (!lines.at(-1)?.startsWith("<!-- ") || lines.at(-3) !== "")
-    return undefined;
-  if (lines.at(-2)!.startsWith("<sub>")) return lines.slice(0, -3).join("\n");
-  if (lines.at(-2)!.startsWith("Run: ") && lines[1] === "")
-    return lines.slice(2, -3).join("\n");
+  let end = lines.length;
+  while (end > 0 && /^<!-- .* -->$/.test(lines[end - 1]!)) end--;
+  if (end === lines.length || end === 0) return undefined;
+  if (lines[end - 1]!.endsWith("</sub>")) {
+    const footer = lines.findLastIndex(
+      (line, index) => index < end && line.startsWith("<sub>"),
+    );
+    return footer > 0 && lines[footer - 1] === ""
+      ? lines.slice(0, footer - 1).join("\n")
+      : undefined;
+  }
+  const disclaimer = lines.indexOf("");
+  if (
+    lines[end - 1]!.startsWith("Run: ") &&
+    lines[end - 2] === "" &&
+    disclaimer > 0 &&
+    disclaimer < end - 2
+  )
+    return lines.slice(disclaimer + 1, end - 2).join("\n");
   return undefined;
 }
 
