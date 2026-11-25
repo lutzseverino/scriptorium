@@ -24,7 +24,8 @@ A present unreadable or unsupported result holds before publication writes.
 In body mode, the read-only agent supplies a complete Agent Brief,
 including applicable Seams and notes, without a disclaimer or Original request.
 The host preserves original intake bytes and author independently in Canon's
-ledger, appends that original once at the body's end, and publishes the body.
+ledger, appends that original once at the body's end, after the brief's
+[run-facts footer](host.md#run-results), and publishes the body.
 A possible previously replaced intake without authenticated original history
 holds publication; recover the trusted ledger instead of copying a report.
 
