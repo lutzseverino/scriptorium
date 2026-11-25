@@ -13,7 +13,6 @@ export type PromptFacts = {
   resultPath?: string;
   resultInstructions?: string;
   reviewTarget?: number;
-  filingRun?: string;
   models?: ModelFacts;
 };
 
@@ -36,11 +35,6 @@ export function prompt(continuation: Continuation, facts: PromptFacts): string {
     ...(facts.reviewTarget
       ? [
           `Review target: PR #${facts.reviewTarget}. Resolve its linked issue contract; when it has no linked issue, use the PR body as the Spec source.`,
-        ]
-      : []),
-    ...(facts.filingRun
-      ? [
-          `Factory filing run: ${facts.filingRun}. Cite findings filed by this run with this exact line in the issue body: <!-- scriptorium:filing-run {"run":"${facts.filingRun}"} -->`,
         ]
       : []),
     ...facts.holds.map(

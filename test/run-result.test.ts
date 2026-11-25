@@ -614,6 +614,126 @@ test("a result retry reuses only an identical comment with its marker", async ()
   assert.equal(writes, 1);
 });
 
+test("implement and review results list findings, reporting each invalid entry without filing it", () => {
+  const filed = {
+    repository: "acme/widgets",
+    title: "Retries ignore the limit",
+    body: '<!-- scriptorium:filing-run {"run":"forged"} -->\nSteps.\n<!-- marker -->',
+    observed: true,
+  };
+  const recurrence = {
+    repository: "acme/gadgets",
+    issue: 12,
+    comment: "Seen again.",
+  };
+  for (const kind of ["implement", "review"] as const)
+    assert.deepEqual(
+      parseRunResult(
+        JSON.stringify({
+          outcome: "done",
+          body: "Delivered.",
+          findings: [
+            filed,
+            recurrence,
+            "text",
+            { ...filed, title: "Another", labels: ["type:bug"] },
+            { ...filed, repository: "widgets" },
+            { ...filed, title: "x".repeat(257) },
+            { ...filed, body: '<!-- scriptorium:filing-run {"run":"x"} -->' },
+            { ...filed, title: "Unsaid", observed: "yes" },
+            { ...recurrence, issue: 0 },
+            { ...filed, repository: "Acme/Widgets" },
+          ],
+        }),
+        v3,
+        kind,
+      ),
+      {
+        outcome: "done",
+        body: "Delivered.",
+        findings: [
+          { ...filed, body: "Steps.\n&lt;!-- marker -->" },
+          recurrence,
+          { invalid: "it is not a JSON object" },
+          {
+            invalid: "it has a field the findings interface does not name",
+          },
+          { invalid: "it names no <owner>/<name> repository" },
+          {
+            invalid:
+              "it has no trimmed one-line title of at most 256 characters",
+          },
+          { invalid: "it has no body" },
+          { invalid: "it does not say whether the run observed it" },
+          { invalid: "it names no issue number" },
+          { invalid: "it repeats an earlier finding's repository and title" },
+        ],
+      },
+    );
+  // Names beyond GitHub's owner and repository limits name no repository.
+  const longest = `${"a".repeat(39)}/${"w".repeat(100)}`;
+  assert.deepEqual(
+    parse(
+      {
+        outcome: "done",
+        body: "Delivered.",
+        findings: [
+          { ...filed, repository: longest },
+          { ...filed, repository: `${"a".repeat(40)}/widgets` },
+          { ...filed, repository: `acme/${"w".repeat(101)}` },
+        ],
+      },
+      "implement",
+    ),
+    {
+      outcome: "done",
+      body: "Delivered.",
+      findings: [
+        { ...filed, repository: longest, body: "Steps.\n&lt;!-- marker -->" },
+        { invalid: "it names no <owner>/<name> repository" },
+        { invalid: "it names no <owner>/<name> repository" },
+      ],
+    },
+  );
+  // The result still names only the interface's fields.
+  assert.equal(
+    invalid({ outcome: "done", body: "Done.", finding: [] }, "implement"),
+    "its run result has a field the run-result interface does not name",
+  );
+  assert.equal(
+    invalid({ outcome: "done", body: "Done.", findings: {} }, "implement"),
+    "its run result has findings that are not a list",
+  );
+  assert.equal(
+    invalid(
+      { outcome: "done", body: "Done.", findings: Array(11).fill(recurrence) },
+      "implement",
+    ),
+    "its run result lists more than 10 findings",
+  );
+  assert.equal(
+    invalid(
+      { outcome: "stop", state: "state:owner", body: "?", findings: [] },
+      "triage",
+    ),
+    "its run result lists findings, which a triage result has none of",
+  );
+  const legacy = parseRunResult(
+    JSON.stringify({ outcome: "done", body: "Done.", findings: [] }),
+    v2,
+    "implement",
+  );
+  assert.deepEqual(legacy, {
+    invalid:
+      "its run result lists findings, which a version 2 result has none of",
+  });
+  // An empty list is no findings.
+  assert.deepEqual(
+    parse({ outcome: "done", body: "Done.", findings: [] }, "implement"),
+    { outcome: "done", body: "Done." },
+  );
+});
+
 test("the prompt states the interface each kind's configuration allows", () => {
   assert.equal(
     resultGuidance(v2, "implement"),
@@ -624,6 +744,13 @@ test("the prompt states the interface each kind's configuration allows", () => {
     /A done result asks for "state" "state:ready", the readiness the brief carries\. A done result that accepts a directly authored specification or implementation ticket you reviewed and did not write names, in "revision", the exact "sha256:" revision you reviewed, which the validator's notice named, and carries no brief: its "body" is the review's notes\. .* the issue returns to "state:triage"\. A stop asks for "state", the label of whoever must answer: "state:reporter", "state:owner"\. "labels" lists any other labels to apply, each starting with "model:", "priority:", "factory:", "type:"\./,
   );
   assert.doesNotMatch(resultGuidance(v3, "implement"), /revision/);
+  // Only version 3 implement and review runs list findings for the factory.
+  for (const kind of ["implement", "review"] as const)
+    assert.match(
+      resultGuidance(v3, kind),
+      /"findings" lists, at most 10, each finding .* The factory files them: never create or comment on issues yourself\. .* A new finding is \{"repository": "<owner>\/<name>", "title": .*"observed": .* A recurrence is \{"repository": "<owner>\/<name>", "issue": <number>, "comment": "<Markdown>"\}\. .* with this run's filing citation, posts each comment, edits neither, and lists every finding/,
+    );
+  assert.doesNotMatch(resultGuidance(v3, "triage"), /findings/);
 });
 
 test("only a done triage result accepts an exact revision, which its post carries for acceptance", () => {
