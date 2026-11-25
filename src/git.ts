@@ -47,7 +47,7 @@ export function hostGitEnvironment(
 
 // The environment for a host Git call that reads a local repository the host
 // owns, never a run clone: it allows the `file` transport alone.
-// Seam (deferred): host Git transport carve-outs; consumers: prepareRunClone (1); extract at 3.
+// Seam (deferred): host Git transport carve-outs; consumers: prepareRunClone, runner checkouts (2); extract at 3.
 export function localGitEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {

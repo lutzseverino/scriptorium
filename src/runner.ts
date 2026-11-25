@@ -40,8 +40,8 @@ const overlapMs = 5 * 60_000;
 // Where the check command's container mounts the head checkout.
 const checkWorkdir = "/home/agent/workspace";
 
-// An entry point runs this much longer than the check command's container,
-// so the container's own stop lets it post the command's failure.
+// An entry point runs this much longer than the check command, so once the
+// command's `docker` client stops at its limit it can still post the failure.
 const graceMs = 2 * 60_000;
 
 // An account the platform no longer knows, as GitHub names it.
@@ -620,13 +620,12 @@ export function createRunner(ports: RunnerPorts) {
       using.set(temporary, 1);
       try {
         const git = ports.git(repository);
-        await git(parent, [
-          "clone",
-          "--quiet",
-          "--no-checkout",
-          pin.clone,
-          temporary,
-        ]);
+        // The shared clone is a local repository the host owns.
+        await git(
+          parent,
+          ["clone", "--quiet", "--no-checkout", pin.clone, temporary],
+          { local: true },
+        );
         await git(temporary, ["checkout", "--quiet", "--detach", pin.commit]);
         // Another lane may have pinned the same commit meanwhile.
         if (existsSync(path)) rmSync(temporary, { recursive: true });
@@ -658,14 +657,18 @@ export function createRunner(ports: RunnerPorts) {
     const path = await mkdtemp(join(parent, `pull-${delivery.pullRequest}-`));
     const git = ports.git(repository);
     try {
-      await git(parent, [
-        "clone",
-        "--quiet",
-        "--no-checkout",
-        "--no-hardlinks",
-        pin.clone,
-        path,
-      ]);
+      await git(
+        parent,
+        [
+          "clone",
+          "--quiet",
+          "--no-checkout",
+          "--no-hardlinks",
+          pin.clone,
+          path,
+        ],
+        { local: true },
+      );
       const missing = [];
       for (const commit of [delivery.head, delivery.base])
         try {

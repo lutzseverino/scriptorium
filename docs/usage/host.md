@@ -950,8 +950,9 @@ factory builds from the default branch's `.scriptorium/Dockerfile`, through
 `docker run` with the head checkout as its only mount and no token, host
 configuration or credential in its environment. The image build is Docker's
 context-free `docker build -`, so its steps see no host file or variable.
-Each entry point may run for `timeLimitMinutes`, and the check command's
-`docker` client stops at that limit. Its container is named for the delivery
+The check command's `docker` client stops at `timeLimitMinutes`, and each
+entry point may run 2 minutes longer, so it can still post a timed-out
+command's failure. Its container is named for the delivery
 and removed once the entry point ends, even when the command ignores the
 stop.
 
@@ -1515,8 +1516,9 @@ maintenance never starts, since its `gc` would run a clone's
 repoints, gives a `vcs` helper or rewrites with `insteadOf` therefore cannot
 run an upload-pack command or remote helper on the host, whatever protocol
 policy the clone configures. The host still reaches GitHub over HTTPS; only
-its copy of the shared clone into a new run clone allows the local `file`
-transport. Sandboxes receive none of these settings.
+its copies of the shared clone, into a new run clone or a
+[runner](#runner-event-delivery) checkout, allow the local `file` transport.
+Sandboxes receive none of these settings.
 
 Committed work remains on `factory/issue-<n>`. The host reuses the same run
 clone on retries, paused and interrupted relaunches, and review handoffs,

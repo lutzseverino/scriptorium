@@ -23,18 +23,23 @@ import {
   type EntryPointRequest,
   type EntryPointResult,
 } from "../src/runner.ts";
+import { hostGitEnvironment, localGitEnvironment } from "../src/git.ts";
 import { githubRunnerReads } from "../src/runner-github.ts";
 import { directTicket } from "./contract-fixture.ts";
 import { runnerWorld } from "./runner-world.ts";
 
 const repository = "acme/widgets";
 
-function git(cwd: string, args: string[]): string {
+function git(
+  cwd: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...environment,
       GIT_AUTHOR_NAME: "Test",
       GIT_AUTHOR_EMAIL: "test@example.test",
       GIT_COMMITTER_NAME: "Test",
@@ -119,7 +124,19 @@ function setup(
     createRunner({
       stateDirectory: join(root, "state"),
       repositories,
-      git: () => async (cwd, args) => git(cwd, args),
+      // Git as the host runs it. The fixture's local remote stands in for
+      // GitHub's HTTPS remote, so a fetch from it alone runs without the
+      // host's transport limit.
+      git: () => async (cwd, args, options) =>
+        git(
+          cwd,
+          args,
+          options?.local
+            ? localGitEnvironment(hostGitEnvironment(process.env))
+            : args.includes(remote)
+              ? process.env
+              : hostGitEnvironment(process.env),
+        ),
       remoteUrl: () => remote,
       token: () => state.token(),
       async run(request) {
