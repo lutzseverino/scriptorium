@@ -4,7 +4,7 @@ This directory explains how to develop and release the factory package.
 
 ## Setup and validation
 
-Use stable Node.js 24 or 26 with pnpm 11.28.8, Git, and Docker for the sandbox image
+Use stable Node.js 24 or 26 with pnpm 11.28.8, Git 2.31 or later, and Docker for the sandbox image
 tests. Node.js 24 remains the default toolchain.
 Follow the [contribution guidelines](../../CONTRIBUTING.md) for delivery.
 Install GitHub CLI and authenticate it with your existing GitHub login before

@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { connect, detectPlatform } from "@lutzseverino/postern";
+import { hostGitEnvironment, localGitEnvironment } from "./git.ts";
 import { tokenCommand } from "./github-token.ts";
 import { createHost } from "./host.ts";
 import { readHostConfiguration } from "./host-configuration.ts";
@@ -84,8 +85,9 @@ try {
   process.exit(1);
 }
 
-// Git never prompts, including the fetches Sandcastle makes in the clones.
-process.env.GIT_TERMINAL_PROMPT = "0";
+// Every Git the process starts, including Sandcastle's own calls in the run
+// clones, never prompts and treats its Git directory as untrusted.
+Object.assign(process.env, hostGitEnvironment(process.env));
 
 const run = promisify(execFile);
 const maxBuffer = 64 * 1024 * 1024;
@@ -120,7 +122,7 @@ const storage = createImageStorage(configuration.imageStorage, {
 
 const host = createHost(configuration, registry, {
   connect,
-  async git(token, cwd, args) {
+  async git(token, cwd, args, options) {
     const { stdout } = await run(
       "git",
       [
@@ -130,7 +132,14 @@ const host = createHost(configuration, registry, {
         `credential.https://github.com.helper=${credentialHelper}`,
         ...args,
       ],
-      { cwd, env: { ...process.env, FACTORY_GITHUB_TOKEN: token }, maxBuffer },
+      {
+        cwd,
+        env: {
+          ...(options?.local ? localGitEnvironment(process.env) : process.env),
+          FACTORY_GITHUB_TOKEN: token,
+        },
+        maxBuffer,
+      },
     );
     return stdout;
   },
