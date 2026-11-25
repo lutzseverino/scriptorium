@@ -1180,8 +1180,14 @@ and no checkboxes:
   `✅ Triage → 🔄 Implement → ⬜ Review → ⬜ Merge`;
 - an outcome line for each phase with a run result or a reason, such as
   `**Triage:** <summary> · [result](<link>)`, with the lead line of its
-  latest result and a link to it, rather than a copy; a phase whose result
-  was linked before the comment kept lead lines reads it from that result's
+  latest result and a link to it, rather than a copy. The summary removes
+  heading markers and bold, italic and strikethrough delimiters outside code
+  spans, preserving escaped delimiters and intraword underscores. It is cut
+  to 100 characters with an ellipsis only when needed; a code span, link or
+  image that the cut would split is dropped whole, with the ellipsis right
+  after the preceding text. Saved summaries follow this rule on the next
+  write too, dropping any partial code span from an earlier cut. A phase whose
+  result was linked before the comment kept lead lines reads it from that result's
   comment;
 - a `<sub>` footer with the latest written phase's run facts: its provider,
   model and effort, the chosen model and reason when it ran as a stand-in,

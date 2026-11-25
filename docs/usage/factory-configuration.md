@@ -727,8 +727,14 @@ facts of the phase's latest run, `round` only for review and its hand-backs;
 `standIn` names the chosen model and why a [stand-in](host.md#stand-ins) ran
 instead; `link` is its run result's comment; `summary` is the lead line of
 its latest run result, the first line with text once a heading's markers are
-removed, cut to 100 characters with an ellipsis; `outcome` is its summary and
-reason, joined by `·`, present when it has either; and `unpushable` lists
+removed. Outside code spans, bold, italic and strikethrough delimiters are
+removed, keeping their text; escaped delimiters and intraword underscores
+stay as written. The summary is then cut to 100 characters with an ellipsis
+only when needed. If the cut would split a code span, link or image, that
+whole span is dropped and the ellipsis follows the preceding text. Saved
+summaries from earlier versions follow the same rule on the next write,
+including dropping a partial code span left by an earlier cut. `outcome` is
+its summary and reason, joined by `·`, present when it has either; and `unpushable` lists
 the paths the factory cannot push. A merge phase has run facts only for a
 merge relaunch. Outside a phase, these names hold the facts of the latest
 written phase, except `icon`, and within a phase a name it lacks is empty

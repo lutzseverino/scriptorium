@@ -5,6 +5,7 @@ import {
   isFactoryComment,
   issueComments,
   passContinuation,
+  summaryLine,
   type RunUpdate,
 } from "../src/run-comment.ts";
 import { parseRunResult } from "../src/run-result.ts";
@@ -84,6 +85,145 @@ const outcomes = (body: string) =>
   body.split("\n").filter((line) => /^\*\*\w+:\*\* /.test(line));
 const footer = (body: string) =>
   body.split("\n").find((line) => line.startsWith("<sub>"));
+
+test("summaries remove emphasis outside code and preserve escaped and intraword delimiters", () => {
+  for (const marked of ["*a*", "_a_", "**a**", "__a__", "***a***", "~~a~~"])
+    assert.equal(summaryLine(marked), "a");
+  assert.equal(summaryLine("**a _nested_ ~~sentence~~**"), "a nested sentence");
+  const literal = "`*a* _a_ **a** __a__ ***a*** ~~a~~` \\*a\\* snake_case";
+  assert.equal(summaryLine(literal), literal);
+  assert.equal(summaryLine(`**${"x".repeat(100)}**`), "x".repeat(100));
+  assert.equal(summaryLine(`**${"😀".repeat(101)}**`), `${"😀".repeat(99)}…`);
+});
+
+test("a summary drops a whole code span, link or image when its cut would split it", () => {
+  for (const span of [
+    "`code *and* _delimiters_`",
+    "``code with ` inside``",
+    "[label](https://example.test/a_(b))",
+    '[label](https://example.test/a "title (with parentheses)")',
+    "[label][reference]",
+    "[label with `]` code](https://example.test/a)",
+    "<https://example.test/a_b>",
+    "![image](https://example.test/picture.png)",
+    "![image][reference]",
+  ]) {
+    // Exercise cuts in the label, destination, title and closing delimiters.
+    for (let inside = 1; inside < [...span].length; inside++) {
+      const before = `${"x".repeat(98 - inside)} `;
+      assert.equal(
+        summaryLine(`${before}${span} trailing text`),
+        `${before}…`,
+        span,
+      );
+    }
+    assert.equal(summaryLine(`Before ${span}`), `Before ${span}`, span);
+  }
+  assert.equal(
+    summaryLine(`${"x".repeat(95)} \`a\`more`),
+    `${"x".repeat(95)} \`a\`…`,
+  );
+  assert.equal(
+    summaryLine("[**bold** and `*code*`](https://example.test/a_b)"),
+    "[bold and `*code*`](https://example.test/a_b)",
+  );
+  assert.equal(summaryLine(`before \`unclosed`), "before …");
+});
+
+// Repo Canon #1251's result lead line, as posted on 2026-11-25.
+const rejectedRevision =
+  "`sha256:f30c61050bdd1f48530b6298a8f7e20e147646a7d70a56982d91ffb0b9616c20`";
+const rejectedLead = `**Not accepted: revision ${rejectedRevision} leaves three owner-intent questions open, so it waits on a grill.**`;
+
+test("the reported lead line stays well formed in default run and action comments", async () => {
+  const summary = `Not accepted: revision ${rejectedRevision} le…`;
+  assert.equal(summaryLine(rejectedLead), summary);
+  assert.equal([...summary].length, 100);
+  assert.doesNotMatch(summary, /\*/);
+  const fake = tracker();
+  await issueComments(fake.tracker, {
+    ...configuration,
+    comments: { mention: ["owner"] },
+  }).write(
+    4,
+    {
+      phase: "triage",
+      facts: { state: "stopped", reason: "waits in `owner`" },
+      result: { body: rejectedLead },
+      mention: "maintainers",
+    },
+    { key: "stop:a", stopped: "owner" },
+  );
+  const runBody = fake.comments.find(run)!.body;
+  assert.deepEqual(outcomes(runBody), [
+    `**Triage:** ${summary} · waits in \`owner\``,
+  ]);
+  assert.ok(runBody.includes(`> [!IMPORTANT]\n> @owner: ${summary}\n`));
+  const actionBody = fake.comments.find(action)!.body;
+  assert.equal(actionBody.match(/\*\*/g)?.length, 2);
+  assert.ok(actionBody.startsWith(`👤 **@owner, ${summary}** `));
+});
+
+test("the next write normalizes every saved summary, including older partial code spans", async () => {
+  for (const [stored, expected] of [
+    [
+      `**Not accepted: revision ${rejectedRevision} …`,
+      `Not accepted: revision ${rejectedRevision} …`,
+    ],
+    [
+      "**Not accepted: revision `sha256:f30c61050bdd1f48530b6298a8f7e20e147646a7d70a56982d91ffb0b9616c…",
+      "Not accepted: revision …",
+    ],
+  ]) {
+    const fake = tracker([
+      {
+        id: 1,
+        nodeId: "IC_1",
+        url: "https://platform.test/c/1",
+        author: { login: "factory[bot]", bot: true },
+        body: `Old run\n<!-- scriptorium:run ${JSON.stringify({
+          phases: {
+            triage: { state: "stopped", summary: stored },
+            review: { state: "done", summary: "**Earlier review**" },
+          },
+        })} -->`,
+        createdAt: "2026-11-08T00:00:00Z",
+        updatedAt: "2026-11-08T00:00:00Z",
+      },
+    ]);
+    const { write } = issueComments(fake.tracker, {
+      ...configuration,
+      comments: { mention: ["owner"] },
+    });
+    await write(
+      4,
+      { phase: "triage", facts: { state: "stopped" }, mention: "maintainers" },
+      { key: "stop:migrated", stopped: "owner" },
+    );
+    const body = fake.comments.find(run)!.body;
+    assert.deepEqual(outcomes(body), [
+      `**Triage:** ${expected}`,
+      "**Review:** Earlier review",
+    ]);
+    assert.ok(body.includes(`> @owner: ${expected}\n`));
+    assert.ok(
+      fake.comments
+        .find(action)!
+        .body.startsWith(`👤 **@owner, ${expected}** `),
+    );
+    const state = JSON.parse(
+      body.split("\n").at(-1)!.slice("<!-- scriptorium:run ".length, -4),
+    );
+    assert.equal(state.phases.triage.summary, expected);
+    assert.equal(state.phases.review.summary, "Earlier review");
+    await write(4, {
+      phase: "triage",
+      facts: { state: "stopped" },
+      mention: "maintainers",
+    });
+    assert.equal(fake.comments.find(run)!.body, body);
+  }
+});
 
 test("a stand-in launch names the chosen model, actual model and reason in the run comment", async () => {
   const fake = tracker();
@@ -510,7 +650,7 @@ test("a phase linked to its result before summaries were kept reads its summary 
   // A link to no result comment on the issue gives no summary to show.
   assert.deepEqual(outcomes(body), [
     "**Triage:** Accepted · [result](https://platform.test/c/1)",
-    "**Implement:** ✅ **Draft PR #7** · checks green · [result](https://platform.test/c/2)",
+    "**Implement:** ✅ Draft PR #7 · checks green · [result](https://platform.test/c/2)",
   ]);
   assert.match(body, /"summary":"Accepted"/);
 });
@@ -558,7 +698,7 @@ test("an earlier phase's result comment keeps its frame with a review attestatio
     facts: { state: "awaiting merge" },
   });
   assert.deepEqual(outcomes(fake.comments[3].body), [
-    "**Triage:** ✅ **Accepted** · [result](https://platform.test/c/1)",
+    "**Triage:** ✅ Accepted · [result](https://platform.test/c/1)",
     "**Implement:** Draft PR #7 · [result](https://platform.test/c/2)",
     "**Review:** Reviewed · [result](https://platform.test/c/3)",
   ]);

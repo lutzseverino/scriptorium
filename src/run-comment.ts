@@ -74,8 +74,164 @@ function standInText(facts: PhaseFacts): string | undefined {
   return `stand-in for \`${chosen}\`: ${standInReason(reason)}`;
 }
 
+function codeEnd(characters: string[], start: number): number | undefined {
+  let end = start + 1;
+  while (characters[end] === "`") end++;
+  const count = end - start;
+  for (let index = end; index < characters.length;) {
+    if (characters[index] !== "`") {
+      index++;
+      continue;
+    }
+    let after = index + 1;
+    while (characters[after] === "`") after++;
+    if (after - index === count) return after;
+    index = after;
+  }
+  return undefined;
+}
+
+// Find a balanced label, destination or reference, respecting escapes and
+// quoted link titles. Destinations can contain balanced parentheses.
+function bracketEnd(characters: string[], start: number): number | undefined {
+  const opening = characters[start];
+  const closing = opening === "[" ? "]" : ")";
+  let depth = 1;
+  let quote: string | undefined;
+  for (let index = start + 1; index < characters.length; index++) {
+    const character = characters[index];
+    if (character === "\\") {
+      index++;
+      continue;
+    }
+    if (opening === "[" && character === "`") {
+      const end = codeEnd(characters, index);
+      if (end !== undefined) {
+        index = end - 1;
+        continue;
+      }
+    }
+    if (quote) {
+      if (character === quote) quote = undefined;
+    } else if (
+      opening === "(" &&
+      (character === '"' || character === "'") &&
+      /\s/u.test(characters[index - 1]!)
+    ) {
+      quote = character;
+    } else if (character === opening) {
+      depth++;
+    } else if (character === closing && --depth === 0) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+// Inline parts keep code, links, images and escapes whole while emphasis
+// delimiters outside code disappear. Unclosed code can come from an older
+// summary's plain cut.
+function summaryParts(line: string): { parts: string[]; incomplete: boolean } {
+  const parts: string[] = [];
+  const characters = [...line];
+  for (let index = 0; index < characters.length;) {
+    const character = characters[index]!;
+    if (character === "\\" && characters[index + 1] !== undefined) {
+      parts.push(characters.slice(index, index + 2).join(""));
+      index += 2;
+      continue;
+    }
+    if (character === "<") {
+      const autolink =
+        /^<(?:[a-z][a-z\d+.-]*:[^<>\s]*|[^<>\s@]+@[^<>\s@]+)>/iu.exec(
+          characters.slice(index).join(""),
+        );
+      if (autolink) {
+        parts.push(autolink[0]);
+        index += [...autolink[0]].length;
+        continue;
+      }
+    }
+    const labelStart =
+      character === "["
+        ? index
+        : character === "!" && characters[index + 1] === "["
+          ? index + 1
+          : undefined;
+    if (labelStart !== undefined) {
+      const labelEnd = bracketEnd(characters, labelStart);
+      if (labelEnd !== undefined) {
+        let end = labelEnd;
+        if (characters[end] === "(" || characters[end] === "[") {
+          const destinationEnd = bracketEnd(characters, end);
+          if (destinationEnd === undefined) return { parts, incomplete: true };
+          end = destinationEnd;
+        }
+        const label = summaryParts(
+          characters.slice(labelStart + 1, labelEnd - 1).join(""),
+        );
+        if (label.incomplete) return { parts, incomplete: true };
+        parts.push(
+          `${character === "!" ? "!" : ""}[${label.parts.join("")}]${characters.slice(labelEnd, end).join("")}`,
+        );
+        index = end;
+        continue;
+      }
+    }
+    if ("`*_~".includes(character)) {
+      let end = index + 1;
+      while (characters[end] === character) end++;
+      const count = end - index;
+      if (character === "`") {
+        const after = codeEnd(characters, index);
+        if (after === undefined) return { parts, incomplete: true };
+        parts.push(characters.slice(index, after).join(""));
+        index = after;
+        continue;
+      }
+      if (character !== "~" || count >= 2) {
+        const before = characters[index - 1] ?? " ";
+        const after = characters[end] ?? " ";
+        const punctuation = (value: string) => /[\p{P}\p{S}]/u.test(value);
+        const left =
+          !/\s/u.test(after) &&
+          (!punctuation(after) || /\s/u.test(before) || punctuation(before));
+        const right =
+          !/\s/u.test(before) &&
+          (!punctuation(before) || /\s/u.test(after) || punctuation(after));
+        const opens =
+          left && (character !== "_" || !right || punctuation(before));
+        const closes =
+          right && (character !== "_" || !left || punctuation(after));
+        if (opens || closes) {
+          index = end;
+          continue;
+        }
+      }
+    }
+    parts.push(character);
+    index++;
+  }
+  return { parts, incomplete: false };
+}
+
+function summaryText(line: string): string {
+  const { parts, incomplete } = summaryParts(line);
+  if (!incomplete && [...parts.join("")].length <= 100) return parts.join("");
+  let shortened = "";
+  let remaining = 99;
+  for (const part of parts) {
+    const length = [...part].length;
+    if (length > remaining) break;
+    shortened += part;
+    remaining -= length;
+  }
+  return `${shortened}…`;
+}
+
 // A run result's lead line: the first line with text once a heading's
-// markers, opening and closing, are removed, cut to 100 characters.
+// markers, opening and closing, are removed, normalized and cut to 100
+// characters without splitting a code span, link or image.
 export function summaryLine(body: string): string | undefined {
   const line = contain(body)
     .split(/\r\n?|\n/)
@@ -90,11 +246,7 @@ export function summaryLine(body: string): string | undefined {
         : trimmed;
     })
     .find((text) => text !== "");
-  if (line === undefined) return undefined;
-  const characters = [...line];
-  return characters.length > 100
-    ? `${characters.slice(0, 99).join("")}…`
-    : line;
+  return line === undefined ? undefined : summaryText(line);
 }
 
 // A phase's status marker and the pass's status word while that phase is
@@ -501,6 +653,12 @@ export function issueComments(
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };
+      // Normalize saved summaries too, including phases this write did not
+      // update, before either template or the persisted state sees them.
+      for (const facts of Object.values(state.phases)) {
+        if (facts.summary !== undefined)
+          facts.summary = summaryText(facts.summary);
+      }
       const addressed = await mention(issue, update.mention);
       if (addressed) state.mention = addressed;
       // A phase that starts, or a merge, finishes the earlier phases.
