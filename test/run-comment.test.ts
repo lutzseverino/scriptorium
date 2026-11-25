@@ -101,6 +101,7 @@ test("a summary drops a whole code span, link or image when its cut would split 
     "`code *and* _delimiters_`",
     "``code with ` inside``",
     "[label](https://example.test/a_(b))",
+    "[label](<https://example.test/a)b>)",
     '[label](https://example.test/a "title (with parentheses)")',
     "[label][reference]",
     "[label with `]` code](https://example.test/a)",

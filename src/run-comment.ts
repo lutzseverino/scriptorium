@@ -113,6 +113,8 @@ function bracketEnd(characters: string[], start: number): number | undefined {
     }
     if (quote) {
       if (character === quote) quote = undefined;
+    } else if (opening === "(" && character === "<") {
+      quote = ">";
     } else if (
       opening === "(" &&
       (character === '"' || character === "'") &&
