@@ -12,7 +12,11 @@ import {
 } from "@lutzseverino/postern";
 import type { PlatformConventions } from "./factory-configuration.ts";
 import { reconcileHolds, type HoldKey } from "./hold-comments.ts";
-import { postResultComment, type ResultPost } from "./run-result.ts";
+import {
+  postResultComment,
+  postResultLabels,
+  type ResultPost,
+} from "./run-result.ts";
 import type { Issue, IssueId } from "./factory.ts";
 import { filingRun } from "./triggers.ts";
 import type { Actor, ReadinessHold } from "./readiness.ts";
@@ -966,7 +970,7 @@ export function repositoryPlatform(
         if (published !== undefined) return published;
       }
       const link = await postResultComment(issueTracker, issue, post);
-      if (post.add.length) await issueTracker.addLabels(issue, post.add);
+      await postResultLabels(issueTracker, issue, post);
       for (const label of post.remove) await remove(issue, label);
       return link;
     },

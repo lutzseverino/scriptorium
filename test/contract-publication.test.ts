@@ -35,12 +35,15 @@ const run = {
   effort: "high",
   attempt: 1,
 };
-const post = (configuration = contractConfiguration) =>
+const post = (
+  configuration = contractConfiguration,
+  labels = ["type:enhancement", "model:gpt-6.1-sol"],
+) =>
   resultPost(
     {
       outcome: "done",
       state: "state:ready",
-      labels: ["type:enhancement", "model:gpt-6.1-sol"],
+      labels,
       body: `✅ **Brief ready**\n\n${brief}\n\n**Seams:** No trigger`,
     },
     run,
@@ -1077,12 +1080,12 @@ function direct() {
   s.fixture.issue.body = directTicket;
   s.fixture.evaluate();
   const reviewed: string = s.fixture.result!.revision;
-  const accept = (revision = reviewed) =>
+  const accept = (revision = reviewed, labels = ["model:claude-opus-5-5"]) =>
     resultPost(
       {
         outcome: "done",
         state: "state:ready",
-        labels: ["model:claude-opus-5-5"],
+        labels,
         body: "**Verdict:** holds.",
         revision,
       },
@@ -1287,4 +1290,145 @@ test("a runner host's evaluation requests replace the workflow dispatch, on retr
   assert.equal(s.fixture.writes.includes("dispatch"), false);
   assert.ok(requested.length >= 2);
   assert.ok(requested.every((issue) => issue === 4));
+});
+
+for (const route of ["plain", "prepared", "body", "acceptance"] as const) {
+  test(`${route} triage replaces stale model labels before readiness`, async () => {
+    const acceptance = route === "acceptance" ? direct() : undefined;
+    const s = acceptance ?? setup();
+    if (route === "prepared") s.fixture.controls.mode = "prepared";
+    s.fixture.issue.labels.push("priority:low", "model:old", "MODEL:another");
+    if (!acceptance) s.fixture.issue.labels.push("type:bug");
+    const requested = acceptance
+      ? acceptance.accept()
+      : post(contractConfiguration, ["type:bug", "model:gpt-6.1-sol"]);
+    if (route === "plain") delete requested.triage;
+    assert.ok(await s.platform().postResult(4, requested, s.resume()));
+    const chosen =
+      route === "acceptance" ? "model:claude-opus-5-5" : "model:gpt-6.1-sol";
+    assert.deepEqual(
+      s.fixture.issue.labels.filter((label) =>
+        label.toLowerCase().startsWith("model:"),
+      ),
+      [chosen],
+    );
+    assert.ok(s.fixture.issue.labels.includes("priority:low"));
+    if (!acceptance) assert.ok(s.fixture.issue.labels.includes("type:bug"));
+    const ready = s.fixture.writes.indexOf("label state:ready");
+    for (const stale of ["model:old", "MODEL:another"]) {
+      const removed = s.fixture.writes.indexOf(`remove ${stale}`);
+      assert.ok(removed >= 0 && removed < ready);
+    }
+  });
+}
+
+for (const route of ["plain", "prepared", "body", "acceptance"] as const) {
+  for (const matching of ["model:gpt-6.1-sol", "MODEL:GPT-6.1-SOL"]) {
+    test(`${route} triage preserves matching ${matching} without label writes for it`, async () => {
+      const acceptance = route === "acceptance" ? direct() : undefined;
+      const s = acceptance ?? setup();
+      if (route === "prepared") s.fixture.controls.mode = "prepared";
+      s.fixture.issue.labels.push(matching, "model:old");
+      const requested = acceptance
+        ? acceptance.accept(acceptance.reviewed, ["model:gpt-6.1-sol"])
+        : post();
+      if (route === "plain") delete requested.triage;
+      const additions: string[] = [];
+      const add = s.connection.issueTracker.addLabels;
+      s.connection.issueTracker.addLabels = async (number, labels) => {
+        additions.push(...labels);
+        return add(number, labels);
+      };
+      assert.ok(await s.platform().postResult(4, requested, s.resume()));
+      assert.deepEqual(
+        s.fixture.issue.labels.filter((label) =>
+          label.toLowerCase().startsWith("model:"),
+        ),
+        [matching],
+      );
+      assert.equal(additions.includes("model:gpt-6.1-sol"), false);
+      assert.equal(s.fixture.writes.includes(`remove ${matching}`), false);
+    });
+  }
+
+  test(`${route} triage without a requested model keeps existing model labels`, async () => {
+    const acceptance = route === "acceptance" ? direct() : undefined;
+    const s = acceptance ?? setup();
+    if (route === "prepared") s.fixture.controls.mode = "prepared";
+    s.fixture.issue.labels.push("model:old");
+    const requested = acceptance
+      ? acceptance.accept(acceptance.reviewed, [])
+      : post(contractConfiguration, ["type:enhancement"]);
+    if (route === "plain") delete requested.triage;
+    assert.ok(await s.platform().postResult(4, requested, s.resume()));
+    assert.ok(s.fixture.issue.labels.includes("model:old"));
+    assert.equal(s.fixture.writes.includes("remove model:old"), false);
+  });
+
+  test(`${route} triage retry removes labels still present after a partial model write`, async () => {
+    const acceptance = route === "acceptance" ? direct() : undefined;
+    const s = acceptance ?? setup();
+    if (route === "prepared") s.fixture.controls.mode = "prepared";
+    s.fixture.issue.labels.push("model:old", "model:another");
+    const requested = acceptance ? acceptance.accept() : post();
+    if (route === "plain") delete requested.triage;
+    const remove = s.connection.issueTracker.removeLabel;
+    let interrupted = false;
+    s.connection.issueTracker.removeLabel = async (number, label) => {
+      await remove(number, label);
+      if (!interrupted && label === "model:old") {
+        interrupted = true;
+        throw new Error("lost connection after first model removal");
+      }
+    };
+    await assert.rejects(
+      s.platform().postResult(4, requested, s.resume()),
+      /lost connection/,
+    );
+    assert.ok(s.fixture.issue.labels.includes("model:another"));
+    assert.ok(await s.platform().postResult(4, requested, s.resume()));
+    const chosen =
+      route === "acceptance" ? "model:claude-opus-5-5" : "model:gpt-6.1-sol";
+    assert.deepEqual(
+      s.fixture.issue.labels.filter((label) =>
+        label.toLowerCase().startsWith("model:"),
+      ),
+      [chosen],
+    );
+    assert.ok(
+      s.fixture.writes.indexOf("remove model:another") <
+        s.fixture.writes.indexOf("label state:ready"),
+    );
+  });
+}
+
+test("a triage stop replaces only the configured model label family", async () => {
+  const configuration = {
+    ...contractConfiguration,
+    modelLabelPrefix: "choice:",
+  };
+  const s = setup(configuration);
+  s.fixture.issue.labels.push(
+    "choice:old",
+    "CHOICE:another",
+    "model:keep",
+    "type:bug",
+  );
+  const requested = resultPost(
+    {
+      outcome: "stop",
+      state: "state:owner",
+      labels: ["CHOICE:gpt-6.1-sol"],
+      body: "Owner must decide.",
+    },
+    run,
+    configuration,
+  );
+  assert.ok(await s.platform().postResult(4, requested));
+  assert.deepEqual(s.fixture.issue.labels, [
+    "model:keep",
+    "type:bug",
+    "CHOICE:gpt-6.1-sol",
+    "state:owner",
+  ]);
 });
