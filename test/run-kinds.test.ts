@@ -2125,6 +2125,157 @@ test("diversity compares the provider of the attempt that produced the PR, and o
     );
 });
 
+for (const scenario of [
+  { name: "review handoff", review: true, continuation: {} },
+  {
+    name: "hand-back PR",
+    review: true,
+    continuation: { target: pr, handBacks: 1 },
+  },
+  {
+    name: "last hand-back PR",
+    review: true,
+    continuation: { target: pr, handBacks: 2 },
+  },
+  { name: "merge relaunch", review: false, continuation: {} },
+]) {
+  for (const [name, result, failure] of [
+    [
+      "missing result",
+      {
+        invalid:
+          "the run left no run result at /run/factory/result/result.json",
+      },
+      "the run left no run result at /run/factory/result/result.json",
+    ],
+    [
+      "failed result",
+      { outcome: "failed", body: "Failed", reason: "validation failed" },
+      "validation failed",
+    ],
+  ] as const) {
+    const previous = ended({
+      continuation: scenario.continuation,
+      result,
+      ended: {
+        timedOut: false,
+        pullRequest: "open",
+        openPullRequest: { ...pr, draft: true },
+        mergeCandidate: pr,
+      },
+    });
+    const input = {
+      issues: [issue(4, claimed)],
+      runs: [previous],
+      kinds: { review: scenario.review },
+    };
+
+    test(`${scenario.name}: ${name} retries before review or merge`, () => {
+      assert.deepEqual(decide(input), [
+        {
+          kind: "launch",
+          ...at,
+          provider: "provider-b",
+          model: "model-retry",
+          effort: "medium",
+          selection: "host-default",
+          continuation: {
+            attempt: 2,
+            retry: { failure, log: previous.log },
+            ...scenario.continuation,
+          },
+        },
+      ]);
+    });
+
+    test(`${scenario.name}: ${name} waits for retry capacity, usage and holds`, () => {
+      for (const [options, reason] of [
+        [
+          { settings: { caps: { "provider-a": 2, "provider-b": 0 } } },
+          "provider-b already runs its cap of 0 agents",
+        ],
+        [
+          { usage: { "provider-b": { used: 80, at: now } } },
+          "provider-b usage 80% is at or above the 80% drain threshold",
+        ],
+        [
+          { details: { factoryHold: [42] } },
+          "factory hold (#42 carries `factory:hold`); pickup and merging resume when the last labelled issue or PR closes or loses the label",
+        ],
+      ] satisfies [Parameters<typeof decide>[0], string][]) {
+        const decisions = decide({ ...input, ...options });
+        assert.equal(launchOf(decisions), undefined);
+        assert.ok(!decisions.some(({ kind }) => kind === "fail"));
+        assert.equal(skipOf(decisions)?.reason, `retry waits: ${reason}`);
+      }
+    });
+
+    test(`${scenario.name}: ${name} reports the actual retry exclusion`, () => {
+      for (const [candidate, reason] of [
+        [issue(4, [labels.running]), `it no longer carries ${labels.ready}`],
+        [
+          issue(4, claimed, { blockedBy: [{ number: 2, state: "open" }] }),
+          "blocked by #2",
+        ],
+        [
+          issue(4, [...claimed, labels.failed]),
+          "labelled factory:failed; remove the label to run it again",
+        ],
+        [
+          issue(4, claimed, { nativeParent: 3 }),
+          "sub-issue of #3, which is not ready; apply state:ready to #3 once its tickets are published",
+        ],
+      ] satisfies [Issue, string][]) {
+        const decisions = decide({
+          ...input,
+          issues: [
+            candidate,
+            issue(3, [], { subIssues: [{ number: 4, state: "open" }] }),
+          ],
+        });
+        assert.equal(launchOf(decisions), undefined);
+        assert.deepEqual(
+          decisions.filter(({ kind }) => kind === "fail"),
+          [
+            {
+              kind: "fail",
+              ...at,
+              failure: `${failure}, and its retry did not launch: ${reason}`,
+              log: previous.log,
+            },
+          ],
+        );
+      }
+    });
+
+    test(`${scenario.name}: ${name} on attempt 2 fails without review or merge`, () => {
+      assert.deepEqual(
+        decide({
+          ...input,
+          runs: [
+            {
+              ...previous,
+              continuation: { ...previous.continuation, attempt: 2 },
+            },
+          ],
+        }),
+        [{ kind: "fail", ...at, failure, log: previous.log }],
+      );
+    });
+  }
+}
+
+test("a valid implement result still hands its open PR to review", () => {
+  const decisions = decide({
+    issues: [issue(4, claimed)],
+    runs: [
+      ended({ result: { outcome: "done", body: "Draft PR delivered" } }, true),
+    ],
+  });
+  assert.equal(launchOf(decisions)?.continuation.runKind, "review");
+  assert.ok(!decisions.some(({ kind }) => kind === "fail"));
+});
+
 test("a hand-back's failed implement attempt retries on the same PR", () => {
   const launch = launchOf(
     decide({
