@@ -355,7 +355,7 @@ test(
     assert.match(output, /git version 2\.53\.0/);
     assert.match(output, /gh version 2\.102\.0/);
     assert.match(output, /2\.1\.287 \(Claude Code\)/);
-    assert.match(output, /codex-cli 0\.162\.1/);
+    assert.match(output, /codex-cli 0\.172\.0/);
     assertProcessCensus(image);
     await t.test(
       "production startup reaps repeated orphans on minimal Debian",
@@ -546,7 +546,7 @@ for (const major of [24, 26]) {
       assert.match(output, /git version 2\.53\.0/);
       assert.match(output, /gh version 2\.102\.0/);
       assert.match(output, /2\.1\.287 \(Claude Code\)/);
-      assert.match(output, /codex-cli 0\.162\.1/);
+      assert.match(output, /codex-cli 0\.172\.0/);
       assert.match(output, new RegExp(`^v${major}\\.`, "m"));
       assertProcessCensus(image);
       await t.test(

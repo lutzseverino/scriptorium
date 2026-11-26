@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import type { ImageStorage } from "./image-storage.ts";
 
-export const AGENT_LAYER_VERSION = "6";
+export const AGENT_LAYER_VERSION = "7";
 
 // The factory layer's label, which every sandbox container carries from its
 // image.

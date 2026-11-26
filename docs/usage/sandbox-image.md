@@ -78,7 +78,7 @@ checks use the base image's `sha256sum` and fetch no extra files or tools.
 | Git         | 2.53.0, Dugite release v2.53.0-4, build 4098283 | [GitHub Desktop's native Git release](https://github.com/desktop/dugite-native/releases/tag/v2.53.0-4)        |
 | GitHub CLI  | 2.102.0                                         | [GitHub CLI release](https://github.com/cli/cli/releases/tag/v2.102.0)                                        |
 | Claude Code | 2.1.287                                         | [Claude Code native release manifest](https://downloads.claude.ai/claude-code-releases/2.1.287/manifest.json) |
-| Codex       | 0.162.1, with `codex-code-mode-host`            | [Codex release](https://github.com/openai/codex/releases/tag/rust-v0.162.1)                                   |
+| Codex       | 0.172.0, with `codex-code-mode-host`            | [Codex release](https://github.com/openai/codex/releases/tag/rust-v0.172.0)                                   |
 
 Git's relocatable release keeps its helper executables under
 `/opt/factory/git/libexec/git-core`, selected by `GIT_EXEC_PATH`. Claude Code's
