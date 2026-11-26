@@ -96,6 +96,39 @@ test("summaries remove emphasis outside code and preserve escaped and intraword 
   assert.equal(summaryLine(`**${"😀".repeat(101)}**`), `${"😀".repeat(99)}…`);
 });
 
+test("summaries remove paired emphasis without deleting literal delimiters or URL paths", () => {
+  for (const literal of [
+    "Lint files matching *.ts only",
+    "Fixes *nix builds",
+    "src/*",
+    "5*3",
+    "a*b",
+    "a ** b ** c",
+    "foo_bar_",
+    "https://example.com/_foo_/bar",
+    "www.example.com/**foo**/bar",
+    "This will ~~~not~~~ strike",
+    "~mismatched~~",
+    "~~strikes~",
+  ])
+    assert.equal(summaryLine(literal), literal);
+  for (const [marked, expected] of [
+    ["~a~", "a"],
+    ["***foo** bar*", "foo bar"],
+    ["**foo* bar**", "foo bar*"],
+    ["foo***bar***baz", "foobarbaz"],
+    ["foo**bar*baz", "foo**bar*baz"],
+    ["*foo _bar* baz_", "foo _bar baz_"],
+    ["**foo **bar baz**", "**foo bar baz"],
+    ["**https://example.com/_foo_/bar**", "https://example.com/_foo_/bar"],
+    [
+      "[*a* and ~b~](https://example.com/_foo_/bar)",
+      "[a and b](https://example.com/_foo_/bar)",
+    ],
+  ])
+    assert.equal(summaryLine(marked), expected, marked);
+});
+
 test("a summary drops a whole code span, link or image when its cut would split it", () => {
   for (const span of [
     "`code *and* _delimiters_`",
@@ -128,7 +161,33 @@ test("a summary drops a whole code span, link or image when its cut would split 
     summaryLine("[**bold** and `*code*`](https://example.test/a_b)"),
     "[bold and `*code*`](https://example.test/a_b)",
   );
-  assert.equal(summaryLine(`before \`unclosed`), "before …");
+});
+
+test("short lead lines keep unmatched code and link syntax as literal text", async () => {
+  for (const literal of [
+    "Press the ` key to open the console",
+    "See [a](https://x.test and more",
+    "Use [`a](https://x.test) here",
+    "before `unclosed",
+    "before `unclosed…",
+    "See [a](https://x.test…",
+  ]) {
+    assert.equal(summaryLine(literal), literal);
+    const fake = tracker();
+    const { write } = issueComments(fake.tracker, configuration);
+    await write(4, {
+      phase: "triage",
+      facts: { state: "done" },
+      result: { body: literal },
+    });
+    assert.deepEqual(outcomes(fake.comments.find(run)!.body), [
+      `**Triage:** ${literal}`,
+    ]);
+    await write(4, { phase: "review", facts: { state: "running" } });
+    assert.deepEqual(outcomes(fake.comments.find(run)!.body), [
+      `**Triage:** ${literal}`,
+    ]);
+  }
 });
 
 // Repo Canon #1251's result lead line, as posted on 2026-11-25.
@@ -167,6 +226,10 @@ test("the reported lead line stays well formed in default run and action comment
 
 test("the next write normalizes every saved summary, including older partial code spans", async () => {
   for (const [stored, expected] of [
+    ["Press the ` key", "Press the ` key"],
+    ["See [a](https://x.test and more", "See [a](https://x.test and more"],
+    ["Lint *.ts and *nix", "Lint *.ts and *nix"],
+    ["*foo _bar* baz_", "foo _bar baz_"],
     [
       `**Not accepted: revision ${rejectedRevision} …`,
       `Not accepted: revision ${rejectedRevision} …`,

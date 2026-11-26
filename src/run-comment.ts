@@ -130,11 +130,104 @@ function bracketEnd(characters: string[], start: number): number | undefined {
   return undefined;
 }
 
-// Inline parts keep code, links, images and escapes whole while emphasis
-// delimiters outside code disappear. Unclosed code can come from an older
-// summary's plain cut.
-function summaryParts(line: string): { parts: string[]; incomplete: boolean } {
+type Delimiter = {
+  part: number;
+  marker: string;
+  count: number;
+  opens: boolean;
+  closes: boolean;
+};
+
+// Match CommonMark delimiter runs in parse order. Only the matched portion
+// disappears; leftover markers and crossing, unmatched runs remain literal.
+// https://spec.commonmark.org/0.31.2/#phase-2-inline-structure
+function removeEmphasis(parts: string[], delimiters: Delimiter[]) {
+  for (let current = 0; current < delimiters.length;) {
+    const closer = delimiters[current]!;
+    if (!closer.closes) {
+      current++;
+      continue;
+    }
+    let opening = current - 1;
+    for (; opening >= 0; opening--) {
+      const opener = delimiters[opening]!;
+      if (!opener.opens || opener.marker !== closer.marker) continue;
+      if (closer.marker === "~") {
+        if (opener.count === closer.count) break;
+      } else if (
+        !(opener.closes || closer.opens) ||
+        (opener.count + closer.count) % 3 !== 0 ||
+        (opener.count % 3 === 0 && closer.count % 3 === 0)
+      )
+        break;
+    }
+    if (opening < 0) {
+      if (closer.opens) current++;
+      else delimiters.splice(current, 1);
+      continue;
+    }
+    const opener = delimiters[opening]!;
+    const count =
+      closer.marker === "~"
+        ? closer.count
+        : opener.count >= 2 && closer.count >= 2
+          ? 2
+          : 1;
+    opener.count -= count;
+    closer.count -= count;
+    parts[opener.part] = opener.marker.repeat(opener.count);
+    parts[closer.part] = closer.marker.repeat(closer.count);
+    delimiters.splice(opening + 1, current - opening - 1);
+    current = opening + 1;
+    if (opener.count === 0) {
+      delimiters.splice(opening, 1);
+      current--;
+    }
+    if (closer.count === 0) delimiters.splice(current, 1);
+  }
+}
+
+// GFM's bare URL paths may contain emphasis characters. Keep those paths
+// opaque, excluding trailing punctuation that belongs to the surrounding text.
+function bareLink(text: string): string | undefined {
+  const match = /^(?:https?:\/\/|www\.)[\w-]+(?:\.[\w-]+)+(?:[^\s<]*)/iu.exec(
+    text,
+  );
+  if (!match) return undefined;
+  let link = match[0];
+  while (true) {
+    const trimmed = link.replace(/[?!.,:*_~]+$/, "");
+    if (trimmed !== link) {
+      link = trimmed;
+      continue;
+    }
+    if (
+      link.endsWith(")") &&
+      (link.match(/\)/g)?.length ?? 0) > (link.match(/\(/g)?.length ?? 0)
+    ) {
+      link = link.slice(0, -1);
+      continue;
+    }
+    return link;
+  }
+}
+
+// Inline parts keep code, links, images and escapes whole. Malformed syntax
+// is literal except when repairing a plain cut saved by an earlier version.
+function summaryParts(
+  line: string,
+  recoverCut = false,
+): { parts: string[]; incomplete: boolean } {
   const parts: string[] = [];
+  const delimiters: Delimiter[] = [];
+  const finish = (incomplete: boolean) => {
+    removeEmphasis(parts, delimiters);
+    // A legacy cut may have lost the closer of an opening emphasis run.
+    if (recoverCut)
+      for (const delimiter of delimiters)
+        if (delimiter.opens && !delimiter.closes) parts[delimiter.part] = "";
+    return { parts, incomplete };
+  };
   const characters = [...line];
   for (let index = 0; index < characters.length;) {
     const character = characters[index]!;
@@ -142,6 +235,14 @@ function summaryParts(line: string): { parts: string[]; incomplete: boolean } {
       parts.push(characters.slice(index, index + 2).join(""));
       index += 2;
       continue;
+    }
+    if (index === 0 || /[\s*_~(]/u.test(characters[index - 1]!)) {
+      const link = bareLink(characters.slice(index).join(""));
+      if (link) {
+        parts.push(link);
+        index += [...link].length;
+        continue;
+      }
     }
     if (character === "<") {
       const autolink =
@@ -166,13 +267,14 @@ function summaryParts(line: string): { parts: string[]; incomplete: boolean } {
         let end = labelEnd;
         if (characters[end] === "(" || characters[end] === "[") {
           const destinationEnd = bracketEnd(characters, end);
-          if (destinationEnd === undefined) return { parts, incomplete: true };
-          end = destinationEnd;
+          if (destinationEnd === undefined && recoverCut) return finish(true);
+          end = destinationEnd ?? end;
         }
         const label = summaryParts(
           characters.slice(labelStart + 1, labelEnd - 1).join(""),
+          recoverCut,
         );
-        if (label.incomplete) return { parts, incomplete: true };
+        if (label.incomplete) return finish(true);
         parts.push(
           `${character === "!" ? "!" : ""}[${label.parts.join("")}]${characters.slice(labelEnd, end).join("")}`,
         );
@@ -186,12 +288,12 @@ function summaryParts(line: string): { parts: string[]; incomplete: boolean } {
       const count = end - index;
       if (character === "`") {
         const after = codeEnd(characters, index);
-        if (after === undefined) return { parts, incomplete: true };
-        parts.push(characters.slice(index, after).join(""));
-        index = after;
+        if (after === undefined && recoverCut) return finish(true);
+        parts.push(characters.slice(index, after ?? end).join(""));
+        index = after ?? end;
         continue;
       }
-      if (character !== "~" || count >= 2) {
+      if (character !== "~" || count <= 2) {
         const before = characters[index - 1] ?? " ";
         const after = characters[end] ?? " ";
         const punctuation = (value: string) => /[\p{P}\p{S}]/u.test(value);
@@ -206,19 +308,34 @@ function summaryParts(line: string): { parts: string[]; incomplete: boolean } {
         const closes =
           right && (character !== "_" || !left || punctuation(after));
         if (opens || closes) {
+          delimiters.push({
+            part: parts.length,
+            marker: character,
+            count,
+            opens,
+            closes,
+          });
+          parts.push(character.repeat(count));
           index = end;
           continue;
         }
       }
     }
-    parts.push(character);
-    index++;
+    // Consume literal runs together so a later character cannot turn part
+    // of a non-flanking run into a delimiter.
+    let end = index + 1;
+    if ("*_~".includes(character)) while (characters[end] === character) end++;
+    parts.push(...characters.slice(index, end));
+    index = end;
   }
-  return { parts, incomplete: false };
+  return finish(false);
 }
 
-function summaryText(line: string): string {
-  const { parts, incomplete } = summaryParts(line);
+function summaryText(line: string, legacy = false): string {
+  const { parts, incomplete } = summaryParts(
+    line,
+    legacy && line.endsWith("…"),
+  );
   if (!incomplete && [...parts.join("")].length <= 100) return parts.join("");
   let shortened = "";
   let remaining = 99;
@@ -395,6 +512,8 @@ export function stopAction(
 }
 
 type State = {
+  // Only earlier plain cuts need repair of unmatched inline syntax.
+  summaryVersion?: 1;
   phases: Partial<Record<Phase, PhaseFacts>>;
   updated?: string;
   mention?: string;
@@ -625,8 +744,18 @@ export function issueComments(
       // summary from that result's comment.
       const phasesBefore = Object.fromEntries(
         Object.entries(pass?.state.phases ?? {}).map(([name, facts]) => {
-          if (facts.link === undefined || facts.summary !== undefined)
-            return [name, facts];
+          if (facts.summary !== undefined)
+            return [
+              name,
+              {
+                ...facts,
+                summary:
+                  pass?.state.summaryVersion === 1
+                    ? facts.summary
+                    : summaryText(facts.summary, true),
+              },
+            ];
+          if (facts.link === undefined) return [name, facts];
           const linked = comments.find((comment) => comment.url === facts.link);
           const body = linked && resultBody(linked.body);
           return [name, { ...facts, summary: body && summaryLine(body) }];
@@ -648,6 +777,7 @@ export function issueComments(
             ...update.facts,
           },
         },
+        summaryVersion: 1,
         ...(results.length && {
           results: results.filter((entry) => !withdrawn.has(entry.run)),
         }),
@@ -655,12 +785,6 @@ export function issueComments(
         ...(update.final && { final: true }),
         ...(update.resume && { resume: update.resume }),
       };
-      // Normalize saved summaries too, including phases this write did not
-      // update, before either template or the persisted state sees them.
-      for (const facts of Object.values(state.phases)) {
-        if (facts.summary !== undefined)
-          facts.summary = summaryText(facts.summary);
-      }
       const addressed = await mention(issue, update.mention);
       if (addressed) state.mention = addressed;
       // A phase that starts, or a merge, finishes the earlier phases.
