@@ -7,6 +7,7 @@ import {
   resultGuidance,
   resultPost,
   postResultComment,
+  postedLabels,
   type RunResult,
 } from "../src/run-result.ts";
 
@@ -812,4 +813,43 @@ test("only a done triage result accepts an exact revision, which its post carrie
     ],
   ] as const)
     assert.equal(invalid(value, kind), problem);
+});
+
+test("posted triage labels keep exactly the chosen model in the host's view", () => {
+  const run = {
+    id: "run-model",
+    kind: "triage" as const,
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    effort: "high",
+    attempt: 1,
+  };
+  for (const outcome of ["done", "stop"] as const) {
+    const post = resultPost(
+      { outcome, labels: ["model:gpt-6.1-sol"], body: "Result" },
+      run,
+      v3,
+    );
+    assert.deepEqual(
+      postedLabels(["type:bug", "state:triage", "model:old"], post),
+      ["type:bug", "model:gpt-6.1-sol"],
+    );
+    assert.deepEqual(
+      postedLabels(["type:bug", "MODEL:GPT-6.1-SOL", "model:old"], post),
+      ["type:bug", "MODEL:GPT-6.1-SOL"],
+    );
+  }
+  const post = resultPost({ outcome: "stop", body: "Result" }, run, v3);
+  assert.deepEqual(postedLabels(["model:old"], post), ["model:old"]);
+  for (const kind of ["implement", "review"] as const) {
+    const post = resultPost(
+      { outcome: "done", labels: ["model:gpt-6.1-sol"], body: "Result" },
+      { ...run, kind },
+      v3,
+    );
+    assert.deepEqual(postedLabels(["model:old"], post), [
+      "model:old",
+      "model:gpt-6.1-sol",
+    ]);
+  }
 });

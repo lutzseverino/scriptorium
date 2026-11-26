@@ -6,7 +6,11 @@ import type {
   LabelChange,
 } from "@lutzseverino/postern";
 import type { PlatformConventions } from "./factory-configuration.ts";
-import { postResultComment, type ResultPost } from "./run-result.ts";
+import {
+  postResultComment,
+  postResultLabels,
+  type ResultPost,
+} from "./run-result.ts";
 import { isRunComment } from "./run-comment.ts";
 import {
   attestationFormat,
@@ -113,7 +117,7 @@ export async function publishContract(
     requirePreparedProtocol(await tracker.comments(number), configuration);
     const ready = configuration.labels.ready;
     const ordinary = post.add.filter((label) => label !== ready);
-    if (ordinary.length) await tracker.addLabels(number, ordinary);
+    await postResultLabels(tracker, number, { ...post, add: ordinary });
     await evidenceComment(
       connection,
       number,
@@ -319,7 +323,7 @@ export async function publishContract(
       (label) =>
         label !== configuration.labels.ready && !issue.labels.includes(label),
     );
-    if (ordinary.length) await tracker.addLabels(number, ordinary);
+    await postResultLabels(tracker, number, { ...post, add: ordinary });
     if (issue.body === state.body && !same(edit, state.original.edit)) {
       await verifyBodyWrite(
         connection,
@@ -494,8 +498,10 @@ export async function publishContract(
     else {
       if (!afterNoticeSecond(progress, noticedAt)) return null;
       await unchanged();
-      const ordinary = post.add.filter((label) => label !== ready);
-      if (ordinary.length) await tracker.addLabels(number, ordinary);
+      await postResultLabels(tracker, number, {
+        ...post,
+        add: post.add.filter((label) => label !== ready),
+      });
       await tracker.addLabels(number, [ready]);
     }
     state.readyRequested = true;
@@ -670,8 +676,10 @@ async function acceptContract(
       );
     else {
       if (!afterNoticeSecond(progress, noticedAt)) return null;
-      const ordinary = post.add.filter((label) => label !== ready);
-      if (ordinary.length) await tracker.addLabels(number, ordinary);
+      await postResultLabels(tracker, number, {
+        ...post,
+        add: post.add.filter((label) => label !== ready),
+      });
       if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
     }
     state.readyRequested = true;
