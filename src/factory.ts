@@ -864,19 +864,19 @@ function continuation(
     reviewTrigger(issue, policy(repository));
   const state: ContinuationState = resumed
     ? { kind: "resume", run: resumed }
-    : (handoff ??
-      (externalReview
-        ? {
-            kind: "review",
-            target: issue.pullRequest!.target,
-            handBacks: 0,
-            claim: true,
-          }
-        : undefined) ??
-      (merge
-        ? { kind: "merge" }
-        : retry
-          ? { kind: "retry", retry }
+    : retry
+      ? { kind: "retry", retry }
+      : (handoff ??
+        (externalReview
+          ? {
+              kind: "review",
+              target: issue.pullRequest!.target,
+              handBacks: 0,
+              claim: true,
+            }
+          : undefined) ??
+        (merge
+          ? { kind: "merge" }
           : !issue.pullRequest &&
               runKind(configuration, "triage") &&
               labels.triage !== undefined &&
