@@ -548,8 +548,7 @@ export async function postResultLabels(
 ): Promise<void> {
   const labels = post.replaceModel ? (await tracker.issue(issue)).labels : [];
   const changes = resultLabelChanges(labels, { ...post, remove: [] });
-  for (const label of changes.remove)
-    if (labels.includes(label)) await tracker.removeLabel(issue, label);
+  for (const label of changes.remove) await tracker.removeLabel(issue, label);
   if (changes.add.length) await tracker.addLabels(issue, changes.add);
 }
 

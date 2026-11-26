@@ -117,11 +117,7 @@ export async function publishContract(
     requirePreparedProtocol(await tracker.comments(number), configuration);
     const ready = configuration.labels.ready;
     const ordinary = post.add.filter((label) => label !== ready);
-    await postResultLabels(tracker, number, {
-      ...post,
-      add: ordinary,
-      remove: [],
-    });
+    await postResultLabels(tracker, number, { ...post, add: ordinary });
     await evidenceComment(
       connection,
       number,
@@ -327,11 +323,7 @@ export async function publishContract(
       (label) =>
         label !== configuration.labels.ready && !issue.labels.includes(label),
     );
-    await postResultLabels(tracker, number, {
-      ...post,
-      add: ordinary,
-      remove: [],
-    });
+    await postResultLabels(tracker, number, { ...post, add: ordinary });
     if (issue.body === state.body && !same(edit, state.original.edit)) {
       await verifyBodyWrite(
         connection,
@@ -495,11 +487,6 @@ export async function publishContract(
   const ready = configuration.labels.ready;
   const changes = await tracker.labelChanges(number);
   const applied = changes.findLast((c) => c.label === ready);
-  await postResultLabels(tracker, number, {
-    ...post,
-    add: post.add.filter((label) => label !== ready),
-    remove: [],
-  });
   issue = await tracker.issue(number);
   if (!state.readyRequested) {
     const noticedAt = Math.max(
@@ -511,6 +498,10 @@ export async function publishContract(
     else {
       if (!afterNoticeSecond(progress, noticedAt)) return null;
       await unchanged();
+      await postResultLabels(tracker, number, {
+        ...post,
+        add: post.add.filter((label) => label !== ready),
+      });
       await tracker.addLabels(number, [ready]);
     }
     state.readyRequested = true;
@@ -670,11 +661,6 @@ async function acceptContract(
       `${link} refuses the review attestation: ${review.refusal}`,
     );
   const ready = configuration.labels.ready;
-  await postResultLabels(tracker, number, {
-    ...post,
-    add: post.add.filter((label) => label !== ready),
-    remove: [],
-  });
   if (!state.readyRequested) {
     // The first notice naming the attestation was published when its comment
     // was last written; later notices carry that time.
@@ -690,6 +676,10 @@ async function acceptContract(
       );
     else {
       if (!afterNoticeSecond(progress, noticedAt)) return null;
+      await postResultLabels(tracker, number, {
+        ...post,
+        add: post.add.filter((label) => label !== ready),
+      });
       if (post.add.includes(ready)) await tracker.addLabels(number, [ready]);
     }
     state.readyRequested = true;

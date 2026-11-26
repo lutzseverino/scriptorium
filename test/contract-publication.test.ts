@@ -1432,3 +1432,36 @@ test("a triage stop replaces only the configured model label family", async () =
     "state:owner",
   ]);
 });
+
+for (const route of ["body", "acceptance"] as const) {
+  test(`${route} triage writes model labels once, with its readiness request`, async () => {
+    const acceptance = route === "acceptance" ? direct() : undefined;
+    const s = acceptance ?? setup();
+    s.fixture.issue.labels.push("model:old");
+    const requested = acceptance ? acceptance.accept() : post();
+    const add = s.connection.issueTracker.addLabels;
+    let interrupted = false;
+    s.connection.issueTracker.addLabels = async (number, labels) => {
+      await add(number, labels);
+      if (!interrupted && labels.includes("state:ready")) {
+        interrupted = true;
+        throw new Error("lost connection after readiness");
+      }
+    };
+    await assert.rejects(
+      s.platform().postResult(4, requested, s.resume()),
+      /lost connection/,
+    );
+    const chosen =
+      route === "acceptance" ? "model:claude-opus-5-5" : "model:gpt-6.1-sol";
+    s.fixture.issue.labels = s.fixture.issue.labels
+      .filter((label) => label !== chosen)
+      .concat("model:person");
+    assert.ok(await s.platform().postResult(4, requested, s.resume()));
+    assert.deepEqual(
+      s.fixture.issue.labels.filter((label) => label.startsWith("model:")),
+      ["model:person"],
+    );
+    assert.equal(s.fixture.writes.includes("remove model:person"), false);
+  });
+}
