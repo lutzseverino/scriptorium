@@ -727,14 +727,18 @@ facts of the phase's latest run, `round` only for review and its hand-backs;
 `standIn` names the chosen model and why a [stand-in](host.md#stand-ins) ran
 instead; `link` is its run result's comment; `summary` is the lead line of
 its latest run result, the first line with text once a heading's markers are
-removed. Outside code spans, paired bold, italic and strikethrough delimiters
-are removed, keeping their text; escaped delimiters, unmatched markers,
-intraword underscores and bare URL paths stay as written. The summary is then
-cut to 100 characters with an ellipsis only when needed. If the cut would
-split a code span, link or image, that
-whole span is dropped and the ellipsis follows the preceding text. Saved
-summaries from earlier versions follow the same rule on the next write,
-including dropping a partial code span left by an earlier cut. `outcome` is
+removed. Outside code spans and URLs (link destinations and titles, autolinks
+and bare URLs), paired bold, italic and strikethrough delimiters are removed,
+keeping their text. Each remaining unescaped backtick, asterisk, underscore or
+tilde gets a backslash; a final backslash that escapes nothing is doubled.
+Existing escapes, code spans and URLs stay as written. After escaping, the
+summary is cut to 100 characters with an ellipsis only when needed. A code
+span, link, image, autolink, bare URL or escape sequence that the cut would
+split is dropped whole, and the ellipsis follows the preceding text. Saved
+summaries from earlier versions follow this rule on their next write. When a
+saved summary ends in `…`, repair also removes emphasis openers whose closers
+were cut off and drops any partial span at its end. Rewriting a normalized
+summary leaves it unchanged. `outcome` is
 its summary and reason, joined by `·`, present when it has either; and `unpushable` lists
 the paths the factory cannot push. A merge phase has run facts only for a
 merge relaunch. Outside a phase, these names hold the facts of the latest

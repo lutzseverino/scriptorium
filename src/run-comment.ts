@@ -220,25 +220,39 @@ function summaryParts(
 ): { parts: string[]; incomplete: boolean } {
   const parts: string[] = [];
   const delimiters: Delimiter[] = [];
+  const markerParts = new Set<number>();
   const finish = (incomplete: boolean) => {
     removeEmphasis(parts, delimiters);
     // A legacy cut may have lost the closer of an opening emphasis run.
     if (recoverCut)
       for (const delimiter of delimiters)
         if (delimiter.opens && !delimiter.closes) parts[delimiter.part] = "";
-    return { parts, incomplete };
+    return {
+      parts: parts.flatMap((part, index) =>
+        markerParts.has(index)
+          ? [...part].map((marker) => `\\${marker}`)
+          : [part],
+      ),
+      incomplete,
+    };
   };
   const characters = [...line];
   for (let index = 0; index < characters.length;) {
     const character = characters[index]!;
-    if (character === "\\" && characters[index + 1] !== undefined) {
-      parts.push(characters.slice(index, index + 2).join(""));
+    if (character === "\\") {
+      parts.push(`\\${characters[index + 1] ?? "\\"}`);
       index += 2;
       continue;
     }
     if (index === 0 || /[\s*_~(]/u.test(characters[index - 1]!)) {
       const link = bareLink(characters.slice(index).join(""));
       if (link) {
+        if (
+          recoverCut &&
+          link.endsWith("…") &&
+          index + [...link].length === characters.length
+        )
+          return finish(true);
         parts.push(link);
         index += [...link].length;
         continue;
@@ -254,6 +268,13 @@ function summaryParts(
         index += [...autolink[0]].length;
         continue;
       }
+      if (
+        recoverCut &&
+        /^<(?:[a-z][a-z\d+.-]*:|[^<>\s@]+@)/iu.test(
+          characters.slice(index).join(""),
+        )
+      )
+        return finish(true);
     }
     const labelStart =
       character === "["
@@ -263,6 +284,7 @@ function summaryParts(
           : undefined;
     if (labelStart !== undefined) {
       const labelEnd = bracketEnd(characters, labelStart);
+      if (labelEnd === undefined && recoverCut) return finish(true);
       if (labelEnd !== undefined) {
         let end = labelEnd;
         if (characters[end] === "(" || characters[end] === "[") {
@@ -289,7 +311,9 @@ function summaryParts(
       if (character === "`") {
         const after = codeEnd(characters, index);
         if (after === undefined && recoverCut) return finish(true);
-        parts.push(characters.slice(index, after ?? end).join(""));
+        if (after === undefined)
+          parts.push(...characters.slice(index, end).map(() => "\\`"));
+        else parts.push(characters.slice(index, after).join(""));
         index = after ?? end;
         continue;
       }
@@ -308,6 +332,7 @@ function summaryParts(
         const closes =
           right && (character !== "_" || !left || punctuation(after));
         if (opens || closes) {
+          markerParts.add(parts.length);
           delimiters.push({
             part: parts.length,
             marker: character,
@@ -325,7 +350,11 @@ function summaryParts(
     // of a non-flanking run into a delimiter.
     let end = index + 1;
     if ("*_~".includes(character)) while (characters[end] === character) end++;
-    parts.push(...characters.slice(index, end));
+    parts.push(
+      ...characters
+        .slice(index, end)
+        .map((literal) => ("*_~".includes(literal) ? `\\${literal}` : literal)),
+    );
     index = end;
   }
   return finish(false);
@@ -350,7 +379,7 @@ function summaryText(line: string, legacy = false): string {
 
 // A run result's lead line: the first line with text once a heading's
 // markers, opening and closing, are removed, normalized and cut to 100
-// characters without splitting a code span, link or image.
+// characters after escaping unmatched markers, without splitting inline units.
 export function summaryLine(body: string): string | undefined {
   const line = contain(body)
     .split(/\r\n?|\n/)
@@ -512,8 +541,8 @@ export function stopAction(
 }
 
 type State = {
-  // Only earlier plain cuts need repair of unmatched inline syntax.
-  summaryVersion?: 1;
+  // Version 2 escapes unmatched markers; keep normalized summaries stable.
+  summaryVersion?: 1 | 2;
   phases: Partial<Record<Phase, PhaseFacts>>;
   updated?: string;
   mention?: string;
@@ -750,7 +779,7 @@ export function issueComments(
               {
                 ...facts,
                 summary:
-                  pass?.state.summaryVersion === 1
+                  pass?.state.summaryVersion === 2
                     ? facts.summary
                     : summaryText(facts.summary, true),
               },
@@ -777,7 +806,7 @@ export function issueComments(
             ...update.facts,
           },
         },
-        summaryVersion: 1,
+        summaryVersion: 2,
         ...(results.length && {
           results: results.filter((entry) => !withdrawn.has(entry.run)),
         }),
