@@ -5,6 +5,7 @@ import {
   isFactoryComment,
   issueComments,
   passContinuation,
+  summaryLine,
   type RunUpdate,
 } from "../src/run-comment.ts";
 import { parseRunResult } from "../src/run-result.ts";
@@ -84,6 +85,302 @@ const outcomes = (body: string) =>
   body.split("\n").filter((line) => /^\*\*\w+:\*\* /.test(line));
 const footer = (body: string) =>
   body.split("\n").find((line) => line.startsWith("<sub>"));
+
+test("unmatched summary markers stay visible without opening markup in the frame", () => {
+  for (const [line, expected] of [
+    [
+      "Press the ` key to open the console",
+      "Press the \\` key to open the console",
+    ],
+    ["Lint files matching *.ts only", "Lint files matching \\*.ts only"],
+    ["snake_case", "snake\\_case"],
+    ["~5 min", "\\~5 min"],
+    ["a ** b ** c", "a \\*\\* b \\*\\* c"],
+    ["``", "\\`\\`"],
+    ["path C:\\", "path C:\\\\"],
+  ])
+    assert.equal(summaryLine(line), expected, line);
+});
+
+test("summaries remove emphasis outside code and preserve existing escapes", () => {
+  for (const marked of [
+    "*a*",
+    "_a_",
+    "**a**",
+    "__a__",
+    "***a***",
+    "~a~",
+    "~~a~~",
+  ])
+    assert.equal(summaryLine(marked), "a");
+  assert.equal(summaryLine("**a _nested_ ~~sentence~~**"), "a nested sentence");
+  const literal = "`*a* _a_ **a** __a__ ***a*** ~~a~~` \\*a\\* snake_case";
+  assert.equal(
+    summaryLine(literal),
+    literal.replace("snake_case", "snake\\_case"),
+  );
+  assert.equal(summaryLine(`**${"x".repeat(100)}**`), "x".repeat(100));
+  assert.equal(summaryLine(`**${"😀".repeat(101)}**`), `${"😀".repeat(99)}…`);
+});
+
+test("summaries remove paired emphasis without deleting literal delimiters or URL paths", () => {
+  for (const [literal, expected] of [
+    ["Lint files matching *.ts only", "Lint files matching \\*.ts only"],
+    ["Fixes *nix builds", "Fixes \\*nix builds"],
+    ["src/*", "src/\\*"],
+    ["5*3", "5\\*3"],
+    ["a*b", "a\\*b"],
+    ["a ** b ** c", "a \\*\\* b \\*\\* c"],
+    ["foo_bar_", "foo\\_bar\\_"],
+    ["https://example.com/_foo_/bar", "https://example.com/_foo_/bar"],
+    ["www.example.com/**foo**/bar", "www.example.com/**foo**/bar"],
+    ["This will ~~~not~~~ strike", "This will \\~\\~\\~not\\~\\~\\~ strike"],
+    ["~mismatched~~", "\\~mismatched\\~\\~"],
+    ["~~strikes~", "\\~\\~strikes\\~"],
+  ])
+    assert.equal(summaryLine(literal), expected);
+  for (const [marked, expected] of [
+    ["~a~", "a"],
+    ["***foo** bar*", "foo bar"],
+    ["**foo* bar**", "foo bar\\*"],
+    ["foo***bar***baz", "foobarbaz"],
+    ["foo**bar*baz", "foo\\*\\*bar\\*baz"],
+    ["*foo _bar* baz_", "foo \\_bar baz\\_"],
+    ["**foo **bar baz**", "\\*\\*foo bar baz"],
+    ["**https://example.com/_foo_/bar**", "https://example.com/_foo_/bar"],
+    [
+      "[*a* and ~b~](https://example.com/_foo_/bar)",
+      "[a and b](https://example.com/_foo_/bar)",
+    ],
+  ])
+    assert.equal(summaryLine(marked), expected, marked);
+});
+
+test("a summary drops a whole code span, link or image when its cut would split it", () => {
+  for (const span of [
+    "`code *and* _delimiters_`",
+    "``code with ` inside``",
+    "[label](https://example.test/a_(b))",
+    "[label](<https://example.test/a)b>)",
+    '[label](https://example.test/a "title (with parentheses)")',
+    "[label][reference]",
+    "[label with `]` code](https://example.test/a)",
+    "<https://example.test/a_b>",
+    "https://example.test/_a_/*b*/end",
+    "![image](https://example.test/picture.png)",
+    "![image][reference]",
+  ]) {
+    // Exercise cuts in the label, destination, title and closing delimiters.
+    for (let inside = 1; inside < [...span].length; inside++) {
+      const before = `${"x".repeat(98 - inside)} `;
+      assert.equal(
+        summaryLine(`${before}${span} trailing text`),
+        `${before}…`,
+        span,
+      );
+    }
+    assert.equal(summaryLine(`Before ${span}`), `Before ${span}`, span);
+  }
+  assert.equal(
+    summaryLine(`${"x".repeat(95)} \`a\`more`),
+    `${"x".repeat(95)} \`a\`…`,
+  );
+  assert.equal(
+    summaryLine("[**bold** and `*code*`](https://example.test/a_b)"),
+    "[bold and `*code*`](https://example.test/a_b)",
+  );
+});
+
+test("summary length includes escapes and its cut never divides an escape", () => {
+  assert.equal(summaryLine(`${"x".repeat(98)}*`), `${"x".repeat(98)}\\*`);
+  for (const [literal, escaped] of [
+    ["*", "\\*"],
+    ["_", "\\_"],
+    ["~", "\\~"],
+    ["`", "\\`"],
+    ["\\\\", "\\\\"],
+    ["\\*", "\\*"],
+  ]) {
+    assert.equal(
+      summaryLine(`${"x".repeat(98)}${literal} more`),
+      `${"x".repeat(98)}…`,
+    );
+    assert.equal(
+      summaryLine(`${"x".repeat(97)}${literal} more`),
+      `${"x".repeat(97)}${escaped}…`,
+    );
+  }
+  // A terminal backslash is doubled, even when that makes the cut necessary.
+  assert.equal(summaryLine(`${"x".repeat(99)}\\`), `${"x".repeat(99)}…`);
+});
+
+test("code, URL destinations and titles keep markers and existing escapes as written", () => {
+  for (const line of [
+    "`a*b` and \\* and \\_ and \\` and \\~",
+    '[label](https://example.test/_foo_/*bar* "a *title* with _markers_ and `ticks`")',
+    "<https://example.test/_foo_/*bar*/end>",
+    "https://example.test/_foo_/*bar*/end",
+  ])
+    assert.equal(summaryLine(line), line);
+  assert.equal(
+    summaryLine("[snake_case](https://example.test/_foo_/bar)"),
+    "[snake\\_case](https://example.test/_foo_/bar)",
+  );
+});
+
+test("short lead lines escape unmatched code markers and keep literal link syntax", async () => {
+  for (const [literal, expected] of [
+    [
+      "Press the ` key to open the console",
+      "Press the \\` key to open the console",
+    ],
+    ["See [a](https://x.test and more", "See [a](https://x.test and more"],
+    ["Use [`a](https://x.test) here", "Use [\\`a](https://x.test) here"],
+    ["before `unclosed", "before \\`unclosed"],
+    ["before `unclosed…", "before \\`unclosed…"],
+    ["See [a](https://x.test…", "See [a](https://x.test…"],
+  ]) {
+    assert.equal(summaryLine(literal), expected);
+    const fake = tracker();
+    const { write } = issueComments(fake.tracker, configuration);
+    await write(4, {
+      phase: "triage",
+      facts: { state: "done" },
+      result: { body: literal },
+    });
+    assert.deepEqual(outcomes(fake.comments.find(run)!.body), [
+      `**Triage:** ${expected}`,
+    ]);
+    await write(4, { phase: "review", facts: { state: "running" } });
+    assert.deepEqual(outcomes(fake.comments.find(run)!.body), [
+      `**Triage:** ${expected}`,
+    ]);
+  }
+});
+
+// Repo Canon #1251's result lead line, as posted on 2026-11-25.
+const rejectedRevision =
+  "`sha256:f30c61050bdd1f48530b6298a8f7e20e147646a7d70a56982d91ffb0b9616c20`";
+const rejectedLead = `**Not accepted: revision ${rejectedRevision} leaves three owner-intent questions open, so it waits on a grill.**`;
+
+test("quoted lead lines stay well formed in default run and action comments", async () => {
+  for (const [line, summary] of [
+    [rejectedLead, `Not accepted: revision ${rejectedRevision} le…`],
+    [
+      "Press the ` key to open the console",
+      "Press the \\` key to open the console",
+    ],
+    ["Lint files matching *.ts only", "Lint files matching \\*.ts only"],
+  ]) {
+    assert.equal(summaryLine(line), summary);
+    assert.ok([...summary].length <= 100);
+    assert.doesNotMatch(
+      summary.replace(/\\./gu, "").replace(/`[^`]*`/gu, ""),
+      /[`*_~]/u,
+    );
+    const fake = tracker();
+    await issueComments(fake.tracker, {
+      ...configuration,
+      comments: { mention: ["owner"] },
+    }).write(
+      4,
+      {
+        phase: "triage",
+        facts: { state: "stopped", reason: "waits in `owner`" },
+        result: { body: line },
+        mention: "maintainers",
+      },
+      { key: "stop:a", stopped: "owner" },
+    );
+    const runBody = fake.comments.find(run)!.body;
+    assert.deepEqual(outcomes(runBody), [
+      `**Triage:** ${summary} · waits in \`owner\``,
+    ]);
+    assert.ok(runBody.includes(`> [!IMPORTANT]\n> @owner: ${summary}\n`));
+    const actionBody = fake.comments.find(action)!.body;
+    assert.equal(actionBody.match(/\*\*/g)?.length, 2);
+    assert.ok(actionBody.startsWith(`👤 **@owner, ${summary}** `));
+  }
+});
+
+test("the next write normalizes every saved summary, including older partial code spans", async () => {
+  for (const summaryVersion of [undefined, 1]) {
+    for (const [stored, expected] of [
+      ["Press the ` key", "Press the \\` key"],
+      ["See [a](https://x.test and more", "See [a](https://x.test and more"],
+      ["Lint *.ts and *nix", "Lint \\*.ts and \\*nix"],
+      ["*foo _bar* baz_", "foo \\_bar baz\\_"],
+      ["Before [label…", "Before …"],
+      ["Before ![image…", "Before …"],
+      ["Before [label](https://example.test/a…", "Before …"],
+      ["Before <https://example.test/a…", "Before …"],
+      ["Before https://example.test/part…", "Before …"],
+      [
+        `**Not accepted: revision ${rejectedRevision} …`,
+        `Not accepted: revision ${rejectedRevision} …`,
+      ],
+      [
+        "**Not accepted: revision `sha256:f30c61050bdd1f48530b6298a8f7e20e147646a7d70a56982d91ffb0b9616c…",
+        "Not accepted: revision …",
+      ],
+    ]) {
+      const fake = tracker([
+        {
+          id: 1,
+          nodeId: "IC_1",
+          url: "https://platform.test/c/1",
+          author: { login: "factory[bot]", bot: true },
+          body: `Old run\n<!-- scriptorium:run ${JSON.stringify({
+            summaryVersion,
+            phases: {
+              triage: { state: "stopped", summary: stored },
+              review: { state: "done", summary: "**Earlier review**" },
+            },
+          })} -->`,
+          createdAt: "2026-11-08T00:00:00Z",
+          updatedAt: "2026-11-08T00:00:00Z",
+        },
+      ]);
+      const { write } = issueComments(fake.tracker, {
+        ...configuration,
+        comments: { mention: ["owner"] },
+      });
+      await write(
+        4,
+        {
+          phase: "triage",
+          facts: { state: "stopped" },
+          mention: "maintainers",
+        },
+        { key: "stop:migrated", stopped: "owner" },
+      );
+      const body = fake.comments.find(run)!.body;
+      assert.deepEqual(outcomes(body), [
+        `**Triage:** ${expected}`,
+        "**Review:** Earlier review",
+      ]);
+      assert.ok(body.includes(`> @owner: ${expected}\n`));
+      assert.ok(
+        fake.comments
+          .find(action)!
+          .body.startsWith(`👤 **@owner, ${expected}** `),
+      );
+      const state = JSON.parse(
+        body.split("\n").at(-1)!.slice("<!-- scriptorium:run ".length, -4),
+      );
+      assert.equal(state.phases.triage.summary, expected);
+      assert.equal(state.phases.review.summary, "Earlier review");
+      for (let repeat = 0; repeat < 3; repeat++) {
+        await write(4, {
+          phase: "triage",
+          facts: { state: "stopped" },
+          mention: "maintainers",
+        });
+        assert.equal(fake.comments.find(run)!.body, body);
+      }
+    }
+  }
+});
 
 test("a stand-in launch names the chosen model, actual model and reason in the run comment", async () => {
   const fake = tracker();
@@ -510,7 +807,7 @@ test("a phase linked to its result before summaries were kept reads its summary 
   // A link to no result comment on the issue gives no summary to show.
   assert.deepEqual(outcomes(body), [
     "**Triage:** Accepted · [result](https://platform.test/c/1)",
-    "**Implement:** ✅ **Draft PR #7** · checks green · [result](https://platform.test/c/2)",
+    "**Implement:** ✅ Draft PR #7 · checks green · [result](https://platform.test/c/2)",
   ]);
   assert.match(body, /"summary":"Accepted"/);
 });
@@ -558,7 +855,7 @@ test("an earlier phase's result comment keeps its frame with a review attestatio
     facts: { state: "awaiting merge" },
   });
   assert.deepEqual(outcomes(fake.comments[3].body), [
-    "**Triage:** ✅ **Accepted** · [result](https://platform.test/c/1)",
+    "**Triage:** ✅ Accepted · [result](https://platform.test/c/1)",
     "**Implement:** Draft PR #7 · [result](https://platform.test/c/2)",
     "**Review:** Reviewed · [result](https://platform.test/c/3)",
   ]);

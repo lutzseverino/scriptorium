@@ -1180,8 +1180,20 @@ and no checkboxes:
   `✅ Triage → 🔄 Implement → ⬜ Review → ⬜ Merge`;
 - an outcome line for each phase with a run result or a reason, such as
   `**Triage:** <summary> · [result](<link>)`, with the lead line of its
-  latest result and a link to it, rather than a copy; a phase whose result
-  was linked before the comment kept lead lines reads it from that result's
+  latest result and a link to it, rather than a copy. The summary removes
+  heading markers and paired bold, italic and strikethrough delimiters outside
+  code spans and URLs (link destinations and titles, autolinks and bare URLs).
+  Each remaining unescaped backtick, asterisk, underscore or tilde gets a
+  backslash; a final backslash that escapes nothing is doubled. Existing
+  escapes, code spans and URLs stay as written. After escaping, it is cut to
+  100 characters with an ellipsis only when needed. A code span, link, image,
+  autolink, bare URL or escape sequence that the cut would split is dropped
+  whole, with the ellipsis right after the preceding text. Saved summaries
+  follow this rule on their next write too. For a saved summary ending in `…`,
+  repair also removes emphasis openers whose closers were cut off and drops
+  any partial span at its end. Rewriting a normalized summary leaves it
+  unchanged. A phase whose
+  result was linked before the comment kept lead lines reads it from that result's
   comment;
 - a `<sub>` footer with the latest written phase's run facts: its provider,
   model and effort, the chosen model and reason when it ran as a stand-in,

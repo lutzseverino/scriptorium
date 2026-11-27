@@ -74,8 +74,312 @@ function standInText(facts: PhaseFacts): string | undefined {
   return `stand-in for \`${chosen}\`: ${standInReason(reason)}`;
 }
 
+function codeEnd(characters: string[], start: number): number | undefined {
+  let end = start + 1;
+  while (characters[end] === "`") end++;
+  const count = end - start;
+  for (let index = end; index < characters.length;) {
+    if (characters[index] !== "`") {
+      index++;
+      continue;
+    }
+    let after = index + 1;
+    while (characters[after] === "`") after++;
+    if (after - index === count) return after;
+    index = after;
+  }
+  return undefined;
+}
+
+// Find a balanced label, destination or reference, respecting escapes and
+// quoted link titles. Destinations can contain balanced parentheses.
+function bracketEnd(characters: string[], start: number): number | undefined {
+  const opening = characters[start];
+  const closing = opening === "[" ? "]" : ")";
+  let depth = 1;
+  let quote: string | undefined;
+  for (let index = start + 1; index < characters.length; index++) {
+    const character = characters[index];
+    if (character === "\\") {
+      index++;
+      continue;
+    }
+    if (opening === "[" && character === "`") {
+      const end = codeEnd(characters, index);
+      if (end !== undefined) {
+        index = end - 1;
+        continue;
+      }
+    }
+    if (quote) {
+      if (character === quote) quote = undefined;
+    } else if (opening === "(" && character === "<") {
+      quote = ">";
+    } else if (
+      opening === "(" &&
+      (character === '"' || character === "'") &&
+      /\s/u.test(characters[index - 1]!)
+    ) {
+      quote = character;
+    } else if (character === opening) {
+      depth++;
+    } else if (character === closing && --depth === 0) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+type Delimiter = {
+  part: number;
+  marker: string;
+  count: number;
+  opens: boolean;
+  closes: boolean;
+};
+
+// Match CommonMark delimiter runs in parse order. Only the matched portion
+// disappears; leftover markers and crossing, unmatched runs remain literal.
+// https://spec.commonmark.org/0.31.2/#phase-2-inline-structure
+function removeEmphasis(parts: string[], delimiters: Delimiter[]) {
+  for (let current = 0; current < delimiters.length;) {
+    const closer = delimiters[current]!;
+    if (!closer.closes) {
+      current++;
+      continue;
+    }
+    let opening = current - 1;
+    for (; opening >= 0; opening--) {
+      const opener = delimiters[opening]!;
+      if (!opener.opens || opener.marker !== closer.marker) continue;
+      if (closer.marker === "~") {
+        if (opener.count === closer.count) break;
+      } else if (
+        !(opener.closes || closer.opens) ||
+        (opener.count + closer.count) % 3 !== 0 ||
+        (opener.count % 3 === 0 && closer.count % 3 === 0)
+      )
+        break;
+    }
+    if (opening < 0) {
+      if (closer.opens) current++;
+      else delimiters.splice(current, 1);
+      continue;
+    }
+    const opener = delimiters[opening]!;
+    const count =
+      closer.marker === "~"
+        ? closer.count
+        : opener.count >= 2 && closer.count >= 2
+          ? 2
+          : 1;
+    opener.count -= count;
+    closer.count -= count;
+    parts[opener.part] = opener.marker.repeat(opener.count);
+    parts[closer.part] = closer.marker.repeat(closer.count);
+    delimiters.splice(opening + 1, current - opening - 1);
+    current = opening + 1;
+    if (opener.count === 0) {
+      delimiters.splice(opening, 1);
+      current--;
+    }
+    if (closer.count === 0) delimiters.splice(current, 1);
+  }
+}
+
+// GFM's bare URL paths may contain emphasis characters. Keep those paths
+// opaque, excluding trailing punctuation that belongs to the surrounding text.
+function bareLink(text: string): string | undefined {
+  const match = /^(?:https?:\/\/|www\.)[\w-]+(?:\.[\w-]+)+(?:[^\s<]*)/iu.exec(
+    text,
+  );
+  if (!match) return undefined;
+  let link = match[0];
+  while (true) {
+    const trimmed = link.replace(/[?!.,:*_~]+$/, "");
+    if (trimmed !== link) {
+      link = trimmed;
+      continue;
+    }
+    if (
+      link.endsWith(")") &&
+      (link.match(/\)/g)?.length ?? 0) > (link.match(/\(/g)?.length ?? 0)
+    ) {
+      link = link.slice(0, -1);
+      continue;
+    }
+    return link;
+  }
+}
+
+// Inline parts keep code, links, images and escapes whole. Malformed syntax
+// is literal except when repairing a plain cut saved by an earlier version.
+function summaryParts(
+  line: string,
+  recoverCut = false,
+): { parts: string[]; incomplete: boolean } {
+  const parts: string[] = [];
+  const delimiters: Delimiter[] = [];
+  const markerParts = new Set<number>();
+  const finish = (incomplete: boolean) => {
+    removeEmphasis(parts, delimiters);
+    // A legacy cut may have lost the closer of an opening emphasis run.
+    if (recoverCut)
+      for (const delimiter of delimiters)
+        if (delimiter.opens && !delimiter.closes) parts[delimiter.part] = "";
+    return {
+      parts: parts.flatMap((part, index) =>
+        markerParts.has(index)
+          ? [...part].map((marker) => `\\${marker}`)
+          : [part],
+      ),
+      incomplete,
+    };
+  };
+  const characters = [...line];
+  for (let index = 0; index < characters.length;) {
+    const character = characters[index]!;
+    if (character === "\\") {
+      parts.push(`\\${characters[index + 1] ?? "\\"}`);
+      index += 2;
+      continue;
+    }
+    if (index === 0 || /[\s*_~(]/u.test(characters[index - 1]!)) {
+      const link = bareLink(characters.slice(index).join(""));
+      if (link) {
+        if (
+          recoverCut &&
+          link.endsWith("…") &&
+          index + [...link].length === characters.length
+        )
+          return finish(true);
+        parts.push(link);
+        index += [...link].length;
+        continue;
+      }
+    }
+    if (character === "<") {
+      const autolink =
+        /^<(?:[a-z][a-z\d+.-]*:[^<>\s]*|[^<>\s@]+@[^<>\s@]+)>/iu.exec(
+          characters.slice(index).join(""),
+        );
+      if (autolink) {
+        parts.push(autolink[0]);
+        index += [...autolink[0]].length;
+        continue;
+      }
+      if (
+        recoverCut &&
+        /^<(?:[a-z][a-z\d+.-]*:|[^<>\s@]+@)/iu.test(
+          characters.slice(index).join(""),
+        )
+      )
+        return finish(true);
+    }
+    const labelStart =
+      character === "["
+        ? index
+        : character === "!" && characters[index + 1] === "["
+          ? index + 1
+          : undefined;
+    if (labelStart !== undefined) {
+      const labelEnd = bracketEnd(characters, labelStart);
+      if (labelEnd === undefined && recoverCut) return finish(true);
+      if (labelEnd !== undefined) {
+        let end = labelEnd;
+        if (characters[end] === "(" || characters[end] === "[") {
+          const destinationEnd = bracketEnd(characters, end);
+          if (destinationEnd === undefined && recoverCut) return finish(true);
+          end = destinationEnd ?? end;
+        }
+        const label = summaryParts(
+          characters.slice(labelStart + 1, labelEnd - 1).join(""),
+          recoverCut,
+        );
+        if (label.incomplete) return finish(true);
+        parts.push(
+          `${character === "!" ? "!" : ""}[${label.parts.join("")}]${characters.slice(labelEnd, end).join("")}`,
+        );
+        index = end;
+        continue;
+      }
+    }
+    if ("`*_~".includes(character)) {
+      let end = index + 1;
+      while (characters[end] === character) end++;
+      const count = end - index;
+      if (character === "`") {
+        const after = codeEnd(characters, index);
+        if (after === undefined && recoverCut) return finish(true);
+        if (after === undefined)
+          parts.push(...characters.slice(index, end).map(() => "\\`"));
+        else parts.push(characters.slice(index, after).join(""));
+        index = after ?? end;
+        continue;
+      }
+      if (character !== "~" || count <= 2) {
+        const before = characters[index - 1] ?? " ";
+        const after = characters[end] ?? " ";
+        const punctuation = (value: string) => /[\p{P}\p{S}]/u.test(value);
+        const left =
+          !/\s/u.test(after) &&
+          (!punctuation(after) || /\s/u.test(before) || punctuation(before));
+        const right =
+          !/\s/u.test(before) &&
+          (!punctuation(before) || /\s/u.test(after) || punctuation(after));
+        const opens =
+          left && (character !== "_" || !right || punctuation(before));
+        const closes =
+          right && (character !== "_" || !left || punctuation(after));
+        if (opens || closes) {
+          markerParts.add(parts.length);
+          delimiters.push({
+            part: parts.length,
+            marker: character,
+            count,
+            opens,
+            closes,
+          });
+          parts.push(character.repeat(count));
+          index = end;
+          continue;
+        }
+      }
+    }
+    // Consume literal runs together so a later character cannot turn part
+    // of a non-flanking run into a delimiter.
+    let end = index + 1;
+    if ("*_~".includes(character)) while (characters[end] === character) end++;
+    parts.push(
+      ...characters
+        .slice(index, end)
+        .map((literal) => ("*_~".includes(literal) ? `\\${literal}` : literal)),
+    );
+    index = end;
+  }
+  return finish(false);
+}
+
+function summaryText(line: string, legacy = false): string {
+  const { parts, incomplete } = summaryParts(
+    line,
+    legacy && line.endsWith("…"),
+  );
+  if (!incomplete && [...parts.join("")].length <= 100) return parts.join("");
+  let shortened = "";
+  let remaining = 99;
+  for (const part of parts) {
+    const length = [...part].length;
+    if (length > remaining) break;
+    shortened += part;
+    remaining -= length;
+  }
+  return `${shortened}…`;
+}
+
 // A run result's lead line: the first line with text once a heading's
-// markers, opening and closing, are removed, cut to 100 characters.
+// markers, opening and closing, are removed, normalized and cut to 100
+// characters after escaping unmatched markers, without splitting inline units.
 export function summaryLine(body: string): string | undefined {
   const line = contain(body)
     .split(/\r\n?|\n/)
@@ -90,11 +394,7 @@ export function summaryLine(body: string): string | undefined {
         : trimmed;
     })
     .find((text) => text !== "");
-  if (line === undefined) return undefined;
-  const characters = [...line];
-  return characters.length > 100
-    ? `${characters.slice(0, 99).join("")}…`
-    : line;
+  return line === undefined ? undefined : summaryText(line);
 }
 
 // A phase's status marker and the pass's status word while that phase is
@@ -241,6 +541,8 @@ export function stopAction(
 }
 
 type State = {
+  // Version 2 escapes unmatched markers; keep normalized summaries stable.
+  summaryVersion?: 1 | 2;
   phases: Partial<Record<Phase, PhaseFacts>>;
   updated?: string;
   mention?: string;
@@ -471,8 +773,18 @@ export function issueComments(
       // summary from that result's comment.
       const phasesBefore = Object.fromEntries(
         Object.entries(pass?.state.phases ?? {}).map(([name, facts]) => {
-          if (facts.link === undefined || facts.summary !== undefined)
-            return [name, facts];
+          if (facts.summary !== undefined)
+            return [
+              name,
+              {
+                ...facts,
+                summary:
+                  pass?.state.summaryVersion === 2
+                    ? facts.summary
+                    : summaryText(facts.summary, true),
+              },
+            ];
+          if (facts.link === undefined) return [name, facts];
           const linked = comments.find((comment) => comment.url === facts.link);
           const body = linked && resultBody(linked.body);
           return [name, { ...facts, summary: body && summaryLine(body) }];
@@ -494,6 +806,7 @@ export function issueComments(
             ...update.facts,
           },
         },
+        summaryVersion: 2,
         ...(results.length && {
           results: results.filter((entry) => !withdrawn.has(entry.run)),
         }),
