@@ -6,6 +6,7 @@ import type { repositoryHold } from "./repository-holds.ts";
 
 export type PromptFacts = {
   invocation: string;
+  runClone: string;
   credentialLimits: string;
   retryTail: string;
   holds: NonNullable<ReturnType<typeof repositoryHold>>[];
@@ -18,6 +19,10 @@ export type PromptFacts = {
 
 export function prompt(continuation: Continuation, facts: PromptFacts): string {
   const { retry, recovery, mergeRelaunch, inputResume } = continuation;
+  const inRunClone = recovery?.worktree === facts.runClone;
+  const renderedRecovery = inRunClone
+    ? { ...recovery, worktree: "." }
+    : recovery;
   const handBack =
     continuation.runKind === undefined && continuation.target
       ? { target: continuation.target, handBacks: continuation.handBacks ?? 1 }
@@ -59,7 +64,7 @@ export function prompt(continuation: Continuation, facts: PromptFacts): string {
       : []),
     ...(recovery
       ? [
-          `Recovery state: ${JSON.stringify(recovery)}. Continue from this preserved branch and worktree, including committed, staged, unstaged and untracked changes, applying the delivery and reconstruction instructions above. Revalidate recovered work before publication. Recovery itself must not push, open a PR, merge, close the issue or grant readiness.`,
+          `Recovery state: ${JSON.stringify(renderedRecovery)}.${inRunClone ? " The preserved worktree is your current working directory." : ""} Continue from this preserved branch and worktree, including committed, staged, unstaged and untracked changes, applying the delivery and reconstruction instructions above. Revalidate recovered work before publication. Recovery itself must not push, open a PR, merge, close the issue or grant readiness.`,
         ]
       : []),
   ].join("\n");

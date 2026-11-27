@@ -7,11 +7,37 @@ import { holdKeys } from "../src/hold-comments.ts";
 
 const facts: PromptFacts = {
   invocation: "/ship #4",
+  runClone: "/host/run-clones/issue-4",
   credentialLimits: "Supplied credential: contents read, pull requests read.",
   retryTail: "last line supplied by the host\n",
   holds: [],
   resultPath: "/run/factory/result/result.json",
 };
+
+test("prompt refers run-clone recovery to the run's working directory without changing the record", () => {
+  const continuation: Continuation = {
+    attempt: 2,
+    recovery: {
+      branch: "factory/issue-4",
+      head: "abc",
+      worktree: facts.runClone,
+    },
+  };
+  const original = structuredClone(continuation);
+  const rendered = prompt(continuation, facts);
+  assert.ok(!rendered.includes(facts.runClone));
+  assert.match(
+    rendered,
+    /Recovery state: {"branch":"factory\/issue-4","head":"abc","worktree":"\."}/,
+  );
+  assert.match(
+    rendered,
+    /The preserved worktree is your current working directory\./,
+  );
+  assert.match(rendered, /committed, staged, unstaged and untracked changes/);
+  assert.match(rendered, /Revalidate recovered work before publication/);
+  assert.deepEqual(continuation, original);
+});
 
 test("prompt renders identical explicit facts without reading a retry log or interpreting policy", () => {
   const continuation: Continuation = {
@@ -42,6 +68,21 @@ test("prompt renders identical explicit facts without reading a retry log or int
   assert.doesNotMatch(
     rendered,
     /babysit|repo-canon|internal reviews|before any merge|app-author review policy|not-a-readable-log/,
+  );
+});
+
+test("prompt keeps recovery without a worktree unchanged", () => {
+  const rendered = prompt(
+    { attempt: 2, recovery: { branch: "factory/issue-4", head: "abc" } },
+    facts,
+  );
+  assert.match(
+    rendered,
+    /Recovery state: {"branch":"factory\/issue-4","head":"abc"}\. Continue from this preserved branch and worktree/,
+  );
+  assert.doesNotMatch(
+    rendered,
+    /The preserved worktree is your current working directory/,
   );
 });
 
