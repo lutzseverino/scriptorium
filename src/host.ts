@@ -1703,6 +1703,7 @@ export function createHost(
         cwd: checkout,
         image: pass.image!,
         prompt: prompt(run.continuation, {
+          runClone: checkout,
           invocation: registry.providers
             .get(run.provider)!
             .renderInvocation(

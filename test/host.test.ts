@@ -3630,6 +3630,14 @@ test("an incomplete run records recovery identities and a retry revalidates pres
   await run.tick();
   const retry = run.launched[1].options.prompt!;
   assert.match(retry, /Recovery state:/);
+  assert.ok(!retry.includes(work));
+  assert.match(retry, /"branch":"factory\/issue-4"/);
+  assert.match(retry, /"worktree":"\."/);
+  assert.match(
+    retry,
+    /The preserved worktree is your current working directory/,
+  );
+  assert.equal(recordOf(run.state, 4, 2).continuation.recovery?.worktree, work);
   assert.ok(retry.includes(head));
   assert.match(retry, /Revalidate recovered work before publication/);
   assert.equal(git(work, ["status", "--porcelain"]), status);
@@ -3639,6 +3647,44 @@ test("an incomplete run records recovery identities and a retry revalidates pres
     "",
   );
   assert.deepEqual(run.github.find("acme/widgets", 4).pullRequests, []);
+});
+
+test("a recorded run-clone path prevents legacy recovery without the private-clone flag", async (t) => {
+  const run = host(t, {
+    repositories: { "acme/widgets": [{ number: 4 }] },
+    remotes: { "acme/widgets": remote(t, factoryFiles) },
+  });
+  await run.tick();
+  const checkout = run.runClone("acme/widgets", 4);
+  run.launched[0].finish();
+  await run.drain();
+  const recordPath = join(
+    run.state,
+    "repositories/acme/widgets/runs/issue-4-attempt-1.json",
+  );
+  const record = JSON.parse(readFileSync(recordPath, "utf8"));
+  assert.equal(record.continuation.recovery.worktree, checkout);
+  delete record.privateClone;
+  writeFileSync(recordPath, JSON.stringify(record));
+  const shared = run.clone("acme/widgets");
+  const legacy = join(shared, ".sandcastle/worktrees/factory-issue-4");
+  git(shared, ["worktree", "add", "--quiet", "-b", "factory/issue-4", legacy]);
+  write(legacy, { "legacy.txt": "must not import stale work\n" });
+  // A missing clone must start from upstream, rather than resurrecting the
+  // old shared-clone worktree based on an altered recovery record.
+  rmSync(checkout, { recursive: true });
+  await run.restart().tick();
+  assert.equal(run.launched.length, 2);
+  assert.equal(run.launched[1].options.cwd, checkout);
+  assert.equal(existsSync(join(checkout, "legacy.txt")), false);
+  assert.equal(
+    readFileSync(join(legacy, "legacy.txt"), "utf8"),
+    "must not import stale work\n",
+  );
+  assert.equal(
+    recordOf(run.state, 4, 2).continuation.recovery?.worktree,
+    checkout,
+  );
 });
 
 test("custom skill invocations and retries retain the unattended execution and completion contract", async (t) => {
@@ -3828,7 +3874,8 @@ test("an aborted launch retains dirty recovery state across restart without publ
     run.launched[1].options.prompt!,
     /uncertain.*conflict.*preserve.*hand off/,
   );
-  assert.ok(run.launched[1].options.prompt!.includes(work));
+  assert.ok(!run.launched[1].options.prompt!.includes(work));
+  assert.match(run.launched[1].options.prompt!, /"worktree":"\."/);
   assert.equal(readFileSync(join(work, "unfinished"), "utf8"), "retain me");
   assert.equal(
     git(clone, ["ls-remote", "--heads", "origin", "factory/issue-4"]),
@@ -8034,7 +8081,8 @@ test("a merge relaunch preserves the recorded retry, dirty work, PR history and 
     /no second push, credential discovery or identity switch/,
   );
   assert.match(prompt, /Never merge the default branch into the issue branch/);
-  assert.ok(prompt.includes(worktree));
+  assert.ok(!prompt.includes(worktree));
+  assert.match(prompt, /"worktree":"\."/);
   assert.equal(git(worktree, ["status", "--porcelain"]), dirty);
   run.interrupt();
   const restarted = run.restart();
