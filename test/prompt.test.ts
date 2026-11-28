@@ -56,6 +56,10 @@ test("prompt renders identical explicit facts without reading a retry log or int
     /First attempt log tail:\nlast line supplied by the host\n/,
   );
   assert.match(rendered, /Recovery state:.*"head":"abc".*"worktree":"\/work"/);
+  assert.doesNotMatch(
+    rendered,
+    /The preserved worktree is your current working directory/,
+  );
   assert.match(
     rendered,
     /Run result path: \/run\/factory\/result\/result.json/,
